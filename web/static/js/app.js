@@ -520,6 +520,8 @@ const App = (() => {
                   data-vm-console data-ns="${vm.namespace}" data-name="${vm.name}">${Icons.svg('console')}</button>
           <button class="btn-icon-action notes tip" data-tip="${i18n.t('vm.tooltip.notes')}"
                   data-vm-notes data-ns="${vm.namespace}" data-name="${vm.name}">${Icons.svg('notes')}</button>
+          <button class="btn-icon-action more tip" data-tip="${i18n.t('vma.moreTip')}" aria-haspopup="menu" aria-expanded="false"
+                  data-vm-more data-ns="${vm.namespace}" data-name="${vm.name}">${Icons.svg('more')}</button>
         </td>`;
 
       tr.querySelector('input[type="checkbox"]').addEventListener('change', (e) => {
@@ -549,6 +551,11 @@ const App = (() => {
       tr.querySelector('[data-vm-migrate]')?.addEventListener('click', () => {
         if (window.VMMigrate) window.VMMigrate.open(currentCluster, vm.namespace, vm.name);
       });
+      // v1.60.0 : le menu d'actions, comme celui de Harvester
+      tr.querySelector('[data-vm-more]')?.addEventListener('click', (e) => {
+        if (window.VMActions) VMActions.open(e.currentTarget, currentCluster, vm.namespace, vm.name,
+          { onDone: () => setTimeout(() => selectNamespace(currentNamespace), 800) });
+      });
       tbody.appendChild(tr);
     });
     updateBulkToolbar();
@@ -567,11 +574,17 @@ const App = (() => {
 
   async function changeRunStrategy(ns, name, target) {
     try {
-      await fetch(`/api/vm/${encodeURIComponent(currentCluster)}/${encodeURIComponent(ns)}/${encodeURIComponent(name)}/runStrategy`, {
+      // v1.60.0 : un refus du serveur n'est plus passé sous silence
+      const r = await fetch(`/api/vm/${encodeURIComponent(currentCluster)}/${encodeURIComponent(ns)}/${encodeURIComponent(name)}/runStrategy`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ runStrategy: target }),
       });
+      if (!r.ok) {
+        let d = {};
+        try { d = await r.json(); } catch { /* sans corps */ }
+        throw new Error(d.hint || d.error || `HTTP ${r.status}`);
+      }
       // Brief refresh
       setTimeout(() => selectNamespace(currentNamespace), 600);
     } catch (e) {
@@ -590,11 +603,17 @@ const App = (() => {
       line.textContent = `→ ${ns}/${name}: ${target}...`;
       log.appendChild(line);
       try {
-        await fetch(`/api/vm/${encodeURIComponent(currentCluster)}/${encodeURIComponent(ns)}/${encodeURIComponent(name)}/runStrategy`, {
+        const r = await fetch(`/api/vm/${encodeURIComponent(currentCluster)}/${encodeURIComponent(ns)}/${encodeURIComponent(name)}/runStrategy`, {
           method: 'PATCH',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ runStrategy: target }),
         });
+        // v1.60.0 : un refus (rôle, cluster) était affiché comme un succès
+        if (!r.ok) {
+          let d = {};
+          try { d = await r.json(); } catch { /* sans corps */ }
+          throw new Error(d.hint || d.error || `HTTP ${r.status}`);
+        }
         line.append(' ', Icons.el('ok', { cls: 'icon-ok' }));
       } catch (e) {
         line.append(' ', Icons.el('fail', { cls: 'icon-err' }), ' ' + e.message);
@@ -1888,6 +1907,13 @@ const App = (() => {
       });
     }
     $('#btn-bulk-stop')?.addEventListener('click',  () => bulkAction('Halted'));
+    // v1.60.0 : les actions groupées de Harvester (redémarrer, arrêt forcé, migrer)
+    document.querySelectorAll('[data-bulk-do]').forEach(b => b.addEventListener('click', () => {
+      if (window.VMActions && nsSelection.size) {
+        VMActions.bulk(currentCluster, [...nsSelection], b.dataset.bulkDo, $('#ns-action-log'))
+          .then(() => setTimeout(() => selectNamespace(currentNamespace), 1500));
+      }
+    }));
     $('#btn-bulk-start')?.addEventListener('click', () => bulkAction('Always'));
     $('#btn-bulk-strategy')?.addEventListener('click', () => {
       const target = $('#bulk-strategy-select').value;

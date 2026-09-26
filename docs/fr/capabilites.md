@@ -198,6 +198,66 @@ reste de cette page a été exercé pour de vrai. L'onglet
 La CLI expose le sous-ensemble start/stop via `harvester-status` /
 `-shutdown -N <ns>`.
 
+### Le menu d'actions d'une VM, comme dans Harvester (1.60.0)
+
+Chaque VM de la liste a un bouton **⋮**. Il ouvre un menu rangé comme celui
+de Harvester, construit d'après l'état réel de la VM (lu à l'ouverture) : un
+geste qui ne s'applique pas est grisé et dit pourquoi, au lieu d'échouer
+après le clic (redémarrage doux sans agent invité, migration sans autre nœud
+prêt).
+
+- **Alimentation** : Redémarrer (dans le délai de grâce), Redémarrage doux
+  (l'invité redémarre lui-même, par l'agent invité), Pause / Reprise, Arrêt
+  forcé (l'instance est coupée sans attendre l'invité).
+- **Protection** : Prendre une sauvegarde (vers la cible), Prendre un
+  instantané.
+- **Disques** : ajouter un volume pendant que la VM tourne (un volume
+  existant du même namespace qu'aucune VM n'utilise, en scsi, virtio ou
+  sata), détacher un volume branché ainsi, éjecter un CD-ROM (et supprimer
+  son volume une fois la VM arrêtée).
+- **Migration** : Migrer, vers un nœud choisi ou n'importe lequel ;
+  Abandonner la migration en cours.
+- **Copie** : Cloner, avec ou sans les données (avec, chaque volume est un
+  clone Longhorn de l'original ; sans, les volumes repartent de leur image,
+  ou vides) ; les adresses MAC et IP ne sont pas recopiées et le cloud-init
+  est copié dans un Secret à lui. Générer un template, ou une nouvelle
+  version d'un template existant, avec ou sans les données (avec, chaque
+  disque est d'abord exporté en image).
+- **YAML** : Modifier le YAML, Télécharger le YAML (ci-dessous).
+- **Supprimer** : choisir les volumes qui partent avec la VM (le disque
+  système est coché, comme dans Harvester) ; son Secret cloud-init part
+  aussi, sauf si une autre VM l'utilise.
+
+La liste propose aussi **Redémarrer**, **Arrêt forcé** et **Migrer** sur les
+VMs cochées. Chaque geste est une action suivie (dock, Activité), exécutée
+par `harvester-resources vm <action>`, utilisable seul.
+
+### Modifier et télécharger le YAML (1.60.0)
+
+Tout objet que Harvester permet de modifier en YAML le peut, depuis sa
+ligne : VMs, images, volumes, classes de stockage, clés SSH, secrets, réseaux
+de VMs, templates, add-ons, planifications, sauvegardes et instantanés. Le
+texte laisse de côté l'état et l'historique des champs ; **Vérifier** le fait
+juger par le cluster sans rien changer (les contrôles de Harvester
+répondent) ; **Enregistrer** remplace l'objet. Le texte garde la version de
+l'objet : si quelqu'un l'a changé depuis l'ouverture, le cluster refuse au
+lieu d'écraser son changement, et la fenêtre le dit. Les Secrets, les
+réglages et les configurations d'add-on ne se lisent en YAML qu'en
+administrateur, leur texte portant des valeurs. En ligne de commande :
+`harvester-resources yaml`.
+
+### Le cloud-init à la création d'une VM (corrigé en 1.60.0)
+
+La section Cloud-init de la fenêtre de création était perdue : la VM était
+créée sans. Le user-data et le network-data partent maintenant dans un
+Secret par VM, référencé par la VM comme le fait Harvester, avec deux champs
+du formulaire de Harvester : **Clés SSH** (leur clé publique est ajoutée à
+`ssh_authorized_keys`, et la VM les affiche) et **Installer l'agent invité**
+(coché par défaut). Dans les réglages d'une VM, enregistrer le cloud-init
+est une action suivie, et marche maintenant aussi sur une VM qui n'en a pas
+encore (un Secret est créé et branché) ou qui l'a en inline (rangé dans un
+Secret).
+
 ### Sauvegardes, instantanés et leurs planifications (1.58.0)
 
 Le bouton **Sauvegardes**, à droite du sélecteur d'espace de noms dans

@@ -455,8 +455,12 @@ const StorageMap = (() => {
     const grow = v.pvc_name && window.ObjectForms
       ? `<button type="button" class="btn btn-sm btn-secondary tip" data-sto-expand="${esc(k)}"
                  data-tip-i18n="of.t.expand">${window.Icons ? Icons.svg('arrowUp') : ''} ${esc(tr('of.expand', 'Expand'))}</button>` : '';
+    // v1.60.0 : « Edit YAML » de Harvester, sur le volume (PVC)
+    const yaml = v.pvc_name && window.YamlWindow
+      ? `<button type="button" class="btn btn-sm btn-secondary tip" data-sto-yaml="${esc(`${v.pvc_namespace}/${v.pvc_name}`)}"
+                 data-tip-i18n="yw.act.yamlTip">${window.Icons ? Icons.svg('code') : ''} ${esc(tr('yw.act.yaml', 'YAML'))}</button>` : '';
     side.innerHTML = `<h3>${esc(v.pvc_name || v.longhorn)}</h3>`
-      + (grow ? `<div class="sto-actions">${grow}</div>` : '')
+      + (grow || yaml ? `<div class="sto-actions">${grow}${yaml}</div>` : '')
       + healthBoxHtml(v)
       + (last ? `<p class="hint warn">${esc(tr('storage.lastUsed', 'Last used by'))} ${esc(last)}. ${esc(tr('storage.lastUsedNote', 'That workload may come back and expect its data.'))}</p>` : '')
       + `<dl class="kv">`
@@ -579,6 +583,12 @@ const StorageMap = (() => {
       if (e.target.closest('.fabric-refresh')) { refresh(true); return; }
       const del = e.target.closest('[data-sto-delete]');
       if (del) { deleteVol(del.dataset.stoDelete, del); return; }
+      const yml = e.target.closest('[data-sto-yaml]');
+      if (yml && window.YamlWindow) {
+        const [ns, name] = yml.dataset.stoYaml.split('/');
+        YamlWindow.open(cluster, 'volume', ns, name, { onDone: () => refresh(true) });
+        return;
+      }
       const grow = e.target.closest('[data-sto-expand]');
       if (grow) {
         const v = (lastData.volumes || []).find(x => volKey(x) === grow.dataset.stoExpand);

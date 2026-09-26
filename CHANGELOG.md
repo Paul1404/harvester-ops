@@ -4,6 +4,67 @@ All notable changes to this project will be documented here.
 Format inspired by [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 This file summarises each minor release; per-patch detail lives in `git log`.
 
+## [1.60.0] - 2026-09-27 - The actions of a VM, as in Harvester, and YAML everywhere
+
+### Added
+- **The actions menu of a VM** (the "more" button of each row), grouped as in
+  Harvester and built from the VM's actual state: an action that does not
+  apply is greyed out and says why. Restart, soft reboot (guest agent),
+  pause and unpause, force stop; take a backup or a snapshot; add a volume
+  while the VM runs and detach it, eject a CD-ROM (and delete its volume);
+  migrate to a chosen node, abort a migration; clone with or without the
+  data (Longhorn clone of each volume, new MAC, cloud-init copied); generate
+  a template or a new version of one, with or without the data (disks
+  exported to images); edit or download the YAML; delete, choosing which
+  volumes go with the VM.
+- Bulk **Restart**, **Force stop** and **Migrate** on the selected VMs.
+- **Edit YAML and Download YAML** on every object Harvester allows it for
+  (VMs, images, volumes, storage classes, SSH keys, secrets, VM networks,
+  templates, add-ons, schedules, backups, snapshots): check by the cluster
+  without changing anything, save with the object's version so that a
+  change made meanwhile is refused instead of overwritten. Secrets, settings
+  and add-on configurations are read by administrators only.
+- The Create window has **SSH keys** (added to the cloud-init, listed on the
+  VM) and **Install the guest agent** (checked by default), as in Harvester.
+- `harvester-resources vm <action>` and `harvester-resources yaml` on the
+  command line.
+- The parity table with Harvester's own interface, in the docs
+  (`docs/en/harvester-parity.md`, `docs/fr/parite-harvester.md`).
+
+### Fixed
+- **Deleting a VM failed**: the Cluster view called a route that did not
+  exist (405). It now opens the delete window.
+- **A VM created from the console lost its cloud-init**: the Create window's
+  Cloud-init section produced nothing. It now goes into a secret per VM,
+  referenced as Harvester does.
+- Saving a VM's cloud-init is now a tracked action, and works on a VM that
+  has none yet (a secret is created and attached) or an inline one; the
+  cloud-init reads looked for `userDataSecretRef` (the Go name) instead of
+  `secretRef`.
+- Bulk start and stop showed a success even when the cluster refused.
+- The button of a section ("New VM network", "New volume") sat under the
+  tab bar; it is now on the tabs' line, clear of the corner buttons.
+- An object whose name is longer than 63 characters (a Kubernetes name can
+  have 253, a system volume of harv1 has 110) could not be opened in YAML.
+
+### Tests
+- The VM library (clone, template, eject, delete plan, cloud-init merges),
+  the tool (sub-resource paths, refusals before acting, delete annotation
+  then volumes checked, a conflict said plainly), the routes (roles, checks,
+  tracked actions, cloud-init at creation); in Chromium, the menu following
+  the VM state, the clone and delete windows, bulk restart, the create
+  window sending the cloud-init, the section button on the tab bar.
+- Real, on harv1: pause and unpause, soft reboot (a new SoftRebooted event),
+  volume plugged and detached while running, clone with data (volumes cloned
+  from the original, new MAC, own cloud-init secret) then deleted with its
+  volumes and secret, template with its default version, force stop, CD-ROM
+  ejected with its volume, YAML saved and a stale text refused, a VM created
+  with cloud-init, an SSH key and the guest agent (the agent connected after
+  62 s), then deleted; nothing left behind.
+- Real, on harvlab (three nodes): migration to a chosen node through the
+  menu (21 s), a migration aborted while it ran, the VM put back with the
+  command line.
+
 ## [1.59.0] - 2026-09-26 - Create, change and delete in every section, as in Harvester
 
 ### Added

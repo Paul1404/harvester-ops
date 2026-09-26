@@ -161,6 +161,11 @@ MANIFEST = [
         "arrowRight": "arrow-right",
         "moveVertical": "move-vertical",
         "grip": "grip-vertical",
+        "more": "ellipsis-vertical",
+        "pause": "pause",
+        "clone": "copy-plus",
+        "eject": "disc-3",
+        "hotplug": "hard-drive-download",
     }),
 ]
 

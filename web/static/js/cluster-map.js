@@ -437,6 +437,9 @@ const ClusterMap = (() => {
             { runStrategy: action === 'vm-start' ? 'Always' : 'Halted' });
         } else if (action === 'vm-delete') {
           if (!unlocked) { out(tr('topology.lockedHint', 'Enable "Allow destructive actions" in the toolbar to use this command.')); return; }
+          // v1.60.0 : la fenêtre de suppression de Harvester (choix des volumes) ;
+          // l'appel direct visait une route qui n'existait pas (405)
+          if (window.VMActions) return VMActions.remove(cluster, ns, name);
           if (!window.confirm(fill(tr('topology.confirm.vm-delete', 'DELETE VM "{name}"? This is permanent.'), { name }))) return;
           await call('DELETE', base(ns, name));
         }

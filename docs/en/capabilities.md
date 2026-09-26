@@ -182,6 +182,63 @@ was exercised for real. The Cloud-init tab gains an
 
 CLI exposes the start/stop subset via `harvester-status`/`-shutdown -N <ns>`.
 
+### The actions menu of a VM, as in Harvester (1.60.0)
+
+Each VM row has a **⋮** button. It opens a menu grouped the way Harvester's
+is, built from the VM's actual state (read when the menu opens): an action
+that does not apply is greyed out and says why, instead of failing after the
+click (a soft reboot without a guest agent, a migration with no other ready
+node).
+
+- **Power**: Restart (within the grace period), Soft reboot (the guest
+  reboots itself, through the guest agent), Pause / Unpause, Force stop
+  (the instance is cut without waiting for the guest).
+- **Protection**: Take backup (to the backup target), Take snapshot.
+- **Disks**: Add a volume while the VM runs (an existing volume of the same
+  namespace that no VM uses, on scsi, virtio or sata), detach a volume that
+  was plugged that way, eject a CD-ROM (and delete its volume once the VM
+  is stopped).
+- **Migration**: Migrate, to a node you choose or any ready one; Abort the
+  migration in progress.
+- **Copy**: Clone, with or without the data (with the data, each volume is
+  a Longhorn clone of the original; without, volumes start again from
+  their image, or empty); the MAC and IP addresses are not copied and the
+  cloud-init is copied into a secret of its own. Generate a template, or a
+  new version of an existing one, with or without the data (with the data,
+  each disk is first exported to an image).
+- **YAML**: Edit YAML, Download YAML (below).
+- **Delete**: choose which volumes go with the VM (the system disk is
+  checked, as in Harvester); its cloud-init secret goes too unless another
+  VM uses it.
+
+The list also offers **Restart**, **Force stop** and **Migrate** on the
+selected VMs. Every action is a tracked action (dock, Activity), run by
+`harvester-resources vm <action>`, which can be used alone.
+
+### Edit YAML, Download YAML (1.60.0)
+
+Every object Harvester lets you edit as YAML can be, from its row: VMs,
+images, volumes, storage classes, SSH keys, secrets, VM networks, templates,
+add-ons, schedules, backups and snapshots. The text leaves out the status
+and the field history; **Check** lets the cluster judge it without changing
+anything (Harvester's own checks answer); **Save** replaces the object. The
+text keeps the object's version: if someone changed it since it was opened,
+the cluster refuses instead of overwriting their change, and the window says
+so. Secrets, settings and add-on configurations are read in YAML by
+administrators only, since their text carries values. Command line:
+`harvester-resources yaml`.
+
+### Cloud-init when creating a VM (fixed in 1.60.0)
+
+The Create window's Cloud-init section was lost: the VM was created without
+it. The user-data and network-data now go into a secret per VM, referenced
+by the VM as Harvester does, with two fields from Harvester's form: **SSH
+keys** (their public key is added to `ssh_authorized_keys`, and the VM lists
+them) and **Install the guest agent** (checked by default). In a VM's
+settings, saving the cloud-init is a tracked action, and it now also works on
+a VM that has none yet (a secret is created and attached) or an inline one
+(moved into a secret).
+
 ### Backups, snapshots and their schedules (1.58.0)
 
 The **Backups** button, right of the namespace selector in Virtual machines,

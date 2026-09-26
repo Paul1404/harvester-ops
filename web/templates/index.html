@@ -441,6 +441,9 @@
         <span class="bulk-count"><strong id="bulk-count-num">0</strong> <span data-i18n="namespaces.selected">selected</span></span>
         <button class="btn btn-sm btn-danger"  id="btn-bulk-stop"><span class="icon-red" data-icon="stop"></span> <span data-i18n="namespaces.bulkStop">Stop</span></button>
         <button class="btn btn-sm btn-primary" id="btn-bulk-start"><span class="icon-green" data-icon="play"></span> <span data-i18n="namespaces.bulkStart">Start</span></button>
+        <button class="btn btn-sm btn-secondary tip" data-bulk-do="restart" data-tip-i18n="vma.bulk.restartTip" data-tip="Restart the selected VMs"><span data-icon="restart"></span> <span data-i18n="vma.restart">Restart</span></button>
+        <button class="btn btn-sm btn-secondary tip" data-bulk-do="force-stop" data-tip-i18n="vma.bulk.forceStopTip" data-tip="Stop the selected VMs at once"><span data-icon="power"></span> <span data-i18n="vma.forceStop">Force stop</span></button>
+        <button class="btn btn-sm btn-secondary tip" data-bulk-do="migrate" data-tip-i18n="vma.bulk.migrateTip" data-tip="Live-migrate the selected VMs to another node"><span data-icon="migrate"></span> <span data-i18n="vma.migrate">Migrate</span></button>
         <div class="bulk-strategy">
           <span data-i18n="namespaces.bulkSetStrategy">Set strategy:</span>
           <select id="bulk-strategy-select">
@@ -967,6 +970,8 @@
 <script src="/static/js/sections.js"></script>
 <script src="/static/js/backups.js"></script>
 <script src="/static/js/object-forms.js"></script>
+<script src="/static/js/yaml-window.js"></script>
+<script src="/static/js/vm-actions.js"></script>
 <script src="/static/js/versions.js"></script>
 <script src="/static/js/console-accounts.js"></script>
 <script src="/static/js/user-menu.js"></script>

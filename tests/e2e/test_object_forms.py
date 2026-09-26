@@ -186,3 +186,20 @@ def test_every_form_control_has_a_tooltip(ui):
     missing = w.evaluate("""el => [...el.querySelectorAll('.of-form input, .of-form select, .of-form button[type=submit]')]
         .filter(x => !x.closest('.tip, [data-tip]') && !x.getAttribute('data-tip')).map(x => x.name || x.outerHTML.slice(0, 50))""")
     assert missing == []
+
+
+def test_a_section_button_sits_on_the_tab_bar(ui):
+    """v1.60.0 : « Nouveau réseau de VMs » se tenait sous la ligne des
+    onglets, collé à eux (remarqué par ju). Il est dans la bande des
+    onglets, centré dessus, et laisse libres les boutons ronds du coin."""
+    page, _, _ = ui
+    page.evaluate("Sections.open('network', 'vmnets')")
+    btn = page.locator('#tab-network [data-section-new="network"]')
+    expect(btn).to_be_visible()
+    box = lambda sel: page.locator(sel).bounding_box()            # noqa: E731
+    tabs, b, head = box("#tab-network .sub-tabs-inline"), btn.bounding_box(), box("#tab-network .shutdown-header")
+    assert tabs["y"] <= b["y"] and b["y"] + b["height"] <= tabs["y"] + tabs["height"]
+    mid_tabs, mid_btn = tabs["y"] + tabs["height"] / 2, b["y"] + b["height"] / 2
+    assert abs(mid_tabs - mid_btn) <= 6
+    assert b["x"] >= tabs["x"] + tabs["width"]                            # à droite des onglets
+    assert b["x"] + b["width"] <= head["x"] + head["width"] - 150          # hors des boutons du coin

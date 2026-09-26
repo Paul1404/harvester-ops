@@ -348,9 +348,19 @@ def _mark_console_activity():
         _last_request_ts = time.time()
 
 
+# v1.60.0 : le nom d'un objet quelconque (PVC, secret, ressource de Harvester)
+# est un sous-domaine DNS de 253 caractères au plus, pas une étiquette de 63 :
+# un PVC système de harv1 en compte 110. Les routes YAML le prennent sous
+# `oname`, contrôlé par cette règle.
+_K8S_SUBDOMAIN_RE = re.compile(r"^[a-z0-9]([-a-z0-9.]{0,251}[a-z0-9])?$")
+
+
 @app.before_request
 def _validate_k8s_path_params():
     args = request.view_args or {}
+    if "oname" in args and not _K8S_SUBDOMAIN_RE.match(args["oname"]):
+        return jsonify({"error": "invalid object name",
+                        "hint": "a Kubernetes object name: a-z, 0-9, '.', '-', 253 characters at most"}), 400
     for key in _VALIDATED_PATH_PARAMS:
         if key in args and not _valid_k8s_name(args[key]):
             return jsonify({
@@ -6932,7 +6942,7 @@ def _vm_manifest_for_instance(manifest, name, namespace, start):
 
 
 def _vm_create_runner(run, cluster, kc, namespace, names, start, manifest,
-                      dry_run):
+                      dry_run, cloudinit=None):
     """Crée les VMs une par une, en rendant compte de chacune.
 
     Une par une et non en lot : sur un échec partiel, l'opérateur doit
@@ -6949,6 +6959,24 @@ def _vm_create_runner(run, cluster, kc, namespace, names, start, manifest,
     try:
         for name in names:
             vm = _vm_manifest_for_instance(manifest, name, namespace, start)
+            # v1.60.0 : le cloud-init de la fenêtre de création (il était
+            # perdu) : un Secret par VM, référencé comme le fait Harvester.
+            if cloudinit:
+                secret = _hv.cloudinit_secret(name, namespace, cloudinit["user_data"],
+                                              cloudinit["network_data"])
+                vm = _hv.attach_cloudinit(vm, secret["metadata"]["name"])
+                if cloudinit.get("ssh_names"):
+                    vm.setdefault("metadata", {}).setdefault("annotations", {}).update(
+                        _hv.ssh_names_annotation(cloudinit["ssh_names"]))
+                if not dry_run:
+                    r = subprocess.run(["kubectl", "--kubeconfig", kc, "create", "-f", "-", "-o", "name"],
+                                       input=json.dumps(secret), capture_output=True, text=True, timeout=60)
+                    if r.returncode != 0:
+                        detail = (r.stderr or r.stdout).strip().splitlines()
+                        failed.append((name, detail[-1][:300] if detail else "cloud-init secret"))
+                        step(name, "error", failed[-1][1])
+                        continue
+                    step(name, "running", f"cloud-init: secret {secret['metadata']['name']}")
             cmd = ["kubectl", "--kubeconfig", kc, "create", "-f", "-",
                    "-o", "name"]
             if dry_run:
@@ -6992,6 +7020,42 @@ def _vm_create_runner(run, cluster, kc, namespace, names, start, manifest,
     run.close()
 
 
+def _vm_create_cloudinit(kc, cluster, namespace, data):
+    """Le cloud-init demandé à la création : user-data et network-data, clés
+    SSH choisies (leur clé publique ajoutée à ssh_authorized_keys) et agent
+    invité. None s'il n'y a rien à poser."""
+    ci = data.get("cloudinit")
+    keys = data.get("ssh_keys") or []
+    agent = bool(data.get("guest_agent"))
+    if not isinstance(ci, dict):
+        ci = {}
+    user = ci.get("user_data") or ""
+    net = ci.get("network_data") or ""
+    if not isinstance(user, str) or not isinstance(net, str) or len(user) + len(net) > 256 * 1024:
+        raise ValueError("cloud-init: text of 256 KiB at most")
+    if not isinstance(keys, list):
+        raise ValueError("ssh_keys: a list of key pair names")
+    names, publics = [], []
+    for ref in keys:
+        ref = str(ref)
+        kns, kname = ref.split("/", 1) if "/" in ref else (namespace, ref)
+        if not (_K8S_NAME_RE.match(kns) and _K8S_NAME_RE.match(kname)):
+            raise ValueError(f"ssh key {ref!r}: namespace/name")
+        kp = _kubectl_json(kc, "get", "keypairs.harvesterhci.io", kname, "-n", kns, cluster=cluster)
+        pub = ((kp or {}).get("spec") or {}).get("publicKey")
+        if not pub:
+            raise ValueError(f"no SSH key {kns}/{kname}")
+        names.append(kname)
+        publics.append(pub)
+    if agent:
+        user = _hv.with_guest_agent(user)
+    if publics:
+        user = _hv.with_ssh_keys(user, publics)
+    if not user.strip() and not net.strip():
+        return None
+    return {"user_data": user, "network_data": net, "ssh_names": names}
+
+
 @app.route("/api/vms/<cluster>/create", methods=["POST"])
 @requires_auth
 @_rate_limit("10/minute")
@@ -7033,11 +7097,15 @@ def api_vm_create(cluster):
     invalid = [n for n in names if not _valid_k8s_name(n)]
     if invalid:
         return jsonify({"error": f"generated name is not RFC 1123: {invalid[0]}"}), 400
+    try:
+        cloudinit = _vm_create_cloudinit(kc, cluster, namespace, data)
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
 
     action_id = track_action(
         f"vm-create:{namespace}/{name}" + (f" x{count}" if count > 1 else ""),
         cluster, _vm_create_runner,
-        cluster, kc, namespace, names, start, manifest, dry_run)
+        cluster, kc, namespace, names, start, manifest, dry_run, cloudinit)
     return jsonify({"action_id": action_id, "names": names,
                     "dry_run": dry_run}), 202
 
@@ -8403,7 +8471,7 @@ def api_vm_get_cloudinit(cluster, namespace, name):
             result["userData"] = ci.get("userData", "")
             result["networkData"] = ci.get("networkData", "")
             break
-        ref = ci.get("userDataSecretRef") or ci.get("networkDataSecretRef")
+        ref = ci.get("secretRef") or ci.get("userDataSecretRef") or ci.get("networkDataSecretRef")
         if ref and ref.get("name"):
             secret_name = ref["name"]
             try:
@@ -8432,74 +8500,53 @@ def api_vm_get_cloudinit(cluster, namespace, name):
 
 @app.route("/api/vm/<cluster>/<namespace>/<name>/cloudinit", methods=["PUT"])
 @requires_auth
+@_rate_limit("30/minute")
 def api_vm_put_cloudinit(cluster, namespace, name):
-    """Update the cloud-init Secret referenced by the VM."""
+    """Enregistre le cloud-init d'une VM : son Secret s'il existe, sinon un
+    Secret neuf branché sur la VM (v1.60.0 ; avant, une VM sans cloud-init ou
+    en cloud-init inline était refusée). Action suivie, par
+    `harvester-resources vm cloudinit`."""
+    data = request.get_json(force=True, silent=True) or {}
+    body = {"user_data": data.get("userData", ""), "network_data": data.get("networkData", ""),
+            "guest_agent": bool(data.get("guestAgent"))}
+    if isinstance(data.get("sshNames"), list):
+        body["ssh_names"] = data["sshNames"]
+    return _vm_cloudinit_action(cluster, namespace, name, body)
+
+
+def _vm_cloudinit_action(cluster, namespace, name, body):
     kc = _kubectl_for_cluster(cluster)
     if not kc:
         return jsonify({"error": f"unknown cluster: {cluster}"}), 404
-    data = request.get_json(force=True, silent=True) or {}
-    user_data = data.get("userData", "")
-    network_data = data.get("networkData", "")
-
-    try:
-        vm_json = subprocess.check_output(
-            ["kubectl", "--kubeconfig", kc, "get", "vm", name, "-n", namespace, "-o", "json"],
-            stderr=subprocess.DEVNULL, timeout=10,
-        )
-        vm = json.loads(vm_json)
-    except Exception:
-        return jsonify({"error": "VM not found"}), 404
-
-    volumes = ((vm.get("spec", {}).get("template", {}) or {}).get("spec", {}) or {}).get("volumes", [])
-    secret_name = None
-    for vol in volumes:
-        ci = vol.get("cloudInitNoCloud") or vol.get("cloudInitConfigDrive")
-        if not ci:
+    wd = _capi_work_dir()
+    files, extra = [], []
+    for key, opt in (("user_data", "--user-data"), ("network_data", "--network-data")):
+        text = body.get(key)
+        if text is None:
             continue
-        ref = ci.get("userDataSecretRef") or ci.get("networkDataSecretRef")
-        if ref and ref.get("name"):
-            secret_name = ref["name"]
-            break
+        if not isinstance(text, str) or len(text) > 256 * 1024:
+            for f_ in files:
+                Path(f_).unlink(missing_ok=True)
+            return jsonify({"error": f"{key}: text of 256 KiB at most"}), 400
+        fd, path = tempfile.mkstemp(prefix="ci-", suffix=".yaml", dir=str(wd) if wd else None)
+        with os.fdopen(fd, "w") as f:
+            f.write(text)
+        files.append(path)
+        extra += [opt, path]
+    if body.get("guest_agent"):
+        extra.append("--guest-agent")
+    if isinstance(body.get("ssh_names"), list):
+        extra += ["--ssh-names", ",".join(str(n) for n in body["ssh_names"] if _K8S_NAME_RE.match(str(n)))]
+    cmd = [sys.executable, str(BIN_DIR / RESOURCES_SCRIPT), "vm", "cloudinit", "--kubeconfig", kc,
+           "--namespace", namespace, "--name", name] + extra
 
-    if not secret_name:
-        return jsonify({"error": "VM has no cloud-init secret reference (inline cloud-init editing not supported yet)"}), 400
-
-    # Patch the Secret data
-    import base64
-    patch = {"data": {
-        "userdata": base64.b64encode(user_data.encode()).decode(),
-        "networkdata": base64.b64encode(network_data.encode()).decode(),
-    }}
-    try:
-        subprocess.check_call(
-            ["kubectl", "--kubeconfig", kc, "patch", "secret", secret_name,
-             "-n", namespace, "--type", "merge", "-p", json.dumps(patch)],
-            stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, timeout=20,
-        )
-    except subprocess.CalledProcessError as e:
-        return jsonify({"error": "patch secret failed", "detail": e.stderr.decode() if e.stderr else ""}), 500
-
-    # v1.16.0 : Harvester affiche les KeyPairs d'une VM d'après
-    # l'annotation harvesterhci.io/sshNames. L'assistant injecte la clé
-    # dans le cloud-init mais la VM n'apparaissait attachée à aucune clé
-    # dans l'UI Harvester. On synchronise l'annotation quand le client
-    # nous dit quelles KeyPairs il a utilisées.
-    ssh_names = data.get("sshNames")
-    if isinstance(ssh_names, list):
-        names = sorted({str(n) for n in ssh_names if str(n).strip()})
-        ann_patch = {"metadata": {"annotations": {
-            "harvesterhci.io/sshNames": json.dumps(names),
-        }}}
-        try:
-            subprocess.check_call(
-                ["kubectl", "--kubeconfig", kc, "patch", "vm", name,
-                 "-n", namespace, "--type", "merge", "-p", json.dumps(ann_patch)],
-                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=15,
-            )
-        except Exception:
-            log.warning("[%s] sshNames annotation not updated for %s/%s",
-                        cluster, namespace, name)
-    return jsonify({"ok": True, "secret": secret_name})
+    def after():
+        for f_ in files:
+            Path(f_).unlink(missing_ok=True)
+    run, err = _cli_action(cluster, f"vm:cloudinit:{namespace}/{name}", cmd, "harvester-resources", after=after)
+    if err:
+        after()
+    return _res_reply(run, err, vm=f"{namespace}/{name}", action="cloudinit")
 
 
 @app.route("/api/vm/<cluster>/<namespace>/<name>/runStrategy", methods=["PATCH"])
@@ -10991,6 +11038,294 @@ def api_addon_values_set(cluster, namespace, name):
     if err:
         Path(path).unlink(missing_ok=True)
     return _res_reply(run, err, addon=f"{namespace}/{name}")
+
+
+# ---------------------------------------------------------------------------
+# v1.60.0 : « Edit YAML » et « Download YAML », comme dans Harvester, sur une
+# liste fermée de types (bin/lib/hv_yaml.py). Lire est une vue ; vérifier est
+# un essai à blanc côté serveur (les webhooks de Harvester jugent) ; écrire
+# est une action suivie, par bin/harvester-resources.py yaml.
+# ---------------------------------------------------------------------------
+import hv_yaml as _hy  # noqa: E402
+
+
+class _YamlDumper(yaml.SafeDumper):
+    pass
+
+
+def _yaml_str(dumper, value):
+    # un cloud-init, un certificat : en bloc lisible, pas en une ligne échappée
+    if "\n" in value:
+        return dumper.represent_scalar("tag:yaml.org,2002:str", value, style="|")
+    return dumper.represent_scalar("tag:yaml.org,2002:str", value)
+
+
+_YamlDumper.add_representer(str, _yaml_str)
+
+
+def _to_yaml(obj):
+    return yaml.dump(obj, Dumper=_YamlDumper, sort_keys=False, default_flow_style=False,
+                     allow_unicode=True, width=4096)
+
+
+def _yaml_target(kind, write=False, need_ns=True):
+    """(spec du type, namespace) ou une réponse d'erreur. En création, le
+    namespace peut venir du YAML lui-même."""
+    try:
+        s = _hy.spec_of(kind)
+    except ValueError as e:
+        return None, None, (jsonify({"error": str(e)}), 400)
+    if not _hy.allowed(kind, current_role(), write=write):
+        need = s["write" if write else "read"]
+        return None, None, (jsonify({"error": "forbidden", "role": current_role(), "required": need,
+                                     "hint": f"a {s['kind']} is {'changed' if write else 'read in YAML'} "
+                                             f"by the '{need}' role"}), 403)
+    ns = request.args.get("namespace") or ""
+    if s["namespaced"] and not _K8S_NAME_RE.match(ns) and (need_ns or ns):
+        return None, None, (jsonify({"error": "a valid namespace is required"}), 400)
+    return s, (ns if s["namespaced"] else ""), None
+
+
+@app.route("/api/yaml/<cluster>/<kind>/<oname>")
+@requires_auth
+def api_yaml_get(cluster, kind, oname):
+    name = oname
+    s, ns, err = _yaml_target(kind)
+    if err:
+        return err
+    kc = _kubectl_for_cluster(cluster)
+    if not kc:
+        return jsonify({"error": f"unknown cluster: {cluster}"}), 404
+    args = ["get", s["resource"], name] + (["-n", ns] if ns else [])
+    obj = _kubectl_json(kc, *args, cluster=cluster)
+    if obj is None:
+        return jsonify({"error": f"no {s['kind']} {ns + '/' if ns else ''}{name}"}), 404
+    try:
+        _hy.check_readable(kind, obj)
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 404
+    text = _to_yaml(_hy.clean(obj))
+    if request.args.get("download") == "1":
+        return Response(text, mimetype="application/yaml",
+                        headers={"Content-Disposition": f'attachment; filename="{name}.yaml"'})
+    return jsonify({"cluster": cluster, "kind": kind, "namespace": ns, "name": name, "yaml": text,
+                    "writable": _hy.allowed(kind, current_role(), write=True)})
+
+
+def _yaml_body(kind, ns, name, creating):
+    body = request.get_json(silent=True) or {}
+    text = body.get("yaml")
+    if not isinstance(text, str) or not text.strip():
+        return None, (jsonify({"error": "a JSON object with the 'yaml' text is expected"}), 400)
+    if len(text) > 1_000_000:
+        return None, (jsonify({"error": "this YAML is larger than 1 MB"}), 413)
+    try:
+        docs = [d for d in yaml.safe_load_all(text) if d is not None]
+    except yaml.YAMLError as e:
+        return None, (jsonify({"error": f"not valid YAML: {str(e).splitlines()[0]}"}), 400)
+    if len(docs) != 1:
+        return None, (jsonify({"error": f"one object at a time: this text holds {len(docs)}"}), 400)
+    try:
+        obj = _hy.check_target(kind, docs[0], ns, name, creating=creating)
+    except ValueError as e:
+        return None, (jsonify({"error": str(e)}), 400)
+    return obj, None
+
+
+def _yaml_write(cluster, kind, ns, name, creating):
+    s, ns_q, err = _yaml_target(kind, write=True, need_ns=not creating)
+    if err:
+        return err
+    obj, err = _yaml_body(kind, ns_q, name, creating)
+    if err:
+        return err
+    kc = _kubectl_for_cluster(cluster)
+    if not kc:
+        return jsonify({"error": f"unknown cluster: {cluster}"}), 404
+    body = request.get_json(silent=True) or {}
+    verb = "create" if creating else "replace"
+    if body.get("check"):
+        # essai à blanc côté serveur : les webhooks de Harvester jugent, rien ne change
+        r = _kubectl_run(["kubectl", "--kubeconfig", kc, verb, "--dry-run=server", "-f", "-", "-o", "name"],
+                         input=json.dumps(obj), capture_output=True, text=True, timeout=30)
+        if r.returncode != 0:
+            detail = (r.stderr or r.stdout or "").strip()
+            if "denied the request:" in detail:
+                detail = "Harvester refused: " + detail.split("denied the request:", 1)[1].strip()
+            return jsonify({"ok": False, "error": detail[:1500]}), 200
+        return jsonify({"ok": True})
+    meta = obj.get("metadata") or {}
+    target = meta.get("name") or meta.get("generateName", "") + "…"
+    wd = _capi_work_dir()
+    fd, path = tempfile.mkstemp(prefix="yaml-", suffix=".json", dir=str(wd) if wd else None)
+    with os.fdopen(fd, "w") as f:
+        json.dump(obj, f)
+    cmd = [sys.executable, str(BIN_DIR / RESOURCES_SCRIPT), "yaml", "--kubeconfig", kc,
+           "--kind", kind, "--file", path]
+    if creating:
+        cmd.append("--create")
+    else:
+        cmd += ["--name", name] + (["--namespace", ns_q] if ns_q else [])
+    ref = f"{(meta.get('namespace') + '/') if meta.get('namespace') else ''}{target}"
+    run, err = _cli_action(cluster, f"yaml:{verb}:{kind}:{ref}", cmd, "harvester-resources",
+                           after=lambda: (Path(path).unlink(missing_ok=True), _invalidate_cluster_caches(cluster)))
+    if err:
+        Path(path).unlink(missing_ok=True)
+    return _res_reply(run, err, kind=kind, name=target)
+
+
+# ---------------------------------------------------------------------------
+# v1.60.0 : le menu d'actions d'une VM, comme celui de Harvester (pause,
+# redémarrage doux, arrêt forcé, suppression avec le choix des volumes, clone,
+# template, CD-ROM, disque à chaud, migration vers un nœud et son abandon,
+# cloud-init). Chaque geste est une action suivie, par
+# bin/harvester-resources.py vm.
+# ---------------------------------------------------------------------------
+import hv_vm as _hv  # noqa: E402
+
+_VM_DO = ("pause", "unpause", "softreboot", "restart", "force-stop", "clone", "eject",
+          "add-volume", "remove-volume", "migrate", "abort-migration", "template", "cloudinit")
+
+
+@app.route("/api/vm/<cluster>/<namespace>/<name>/state")
+@requires_auth
+def api_vm_menu_state(cluster, namespace, name):
+    """Ce que le menu d'une VM a besoin de savoir pour proposer les bons gestes."""
+    kc = _kubectl_for_cluster(cluster)
+    if not kc:
+        return jsonify({"error": f"unknown cluster: {cluster}"}), 404
+    vm = _kubectl_json(kc, "get", "virtualmachines.kubevirt.io", name, "-n", namespace, cluster=cluster)
+    if vm is None:
+        return jsonify({"error": f"no VM {namespace}/{name}"}), 404
+    vmi = _kubectl_json(kc, "get", "virtualmachineinstances.kubevirt.io", name, "-n", namespace, cluster=cluster)
+    migs = (_kubectl_json(kc, "get", "virtualmachineinstancemigrations.kubevirt.io", "-n", namespace,
+                          cluster=cluster) or {}).get("items") or []
+    nodes = (_kubectl_json(kc, "get", "nodes", cluster=cluster) or {}).get("items") or []
+    conds = {c.get("type") for c in ((vmi or {}).get("status") or {}).get("conditions") or []
+             if str(c.get("status")) == "True"}
+    here = ((vmi or {}).get("status") or {}).get("nodeName")
+    targets = []
+    for n in nodes:
+        nm = (n.get("metadata") or {}).get("name")
+        ready = any(c.get("type") == "Ready" and c.get("status") == "True"
+                    for c in (n.get("status") or {}).get("conditions") or [])
+        # sans nœud connu, aucune cible : on ne proposerait pas le nœud même de la VM
+        if here and nm != here and ready and not (n.get("spec") or {}).get("unschedulable"):
+            targets.append(nm)
+    return jsonify({
+        "running": vmi is not None,
+        "paused": "Paused" in conds,
+        "agent": "AgentConnected" in conds,
+        "migrating": bool(_hv.active_migrations(migs, name)) if vmi is not None else False,
+        "node": here,
+        "targets": sorted(targets),
+        "run_strategy": (vm.get("spec") or {}).get("runStrategy"),
+        "volumes": [{k: x[k] for k in ("volume", "claim", "kind", "source", "hotpluggable")}
+                    for x in _hv.vm_volumes(vm)],
+        "cloudinit_secrets": _hv.cloudinit_secrets(vm),
+    })
+
+
+def _vm_do_args(action, body):
+    """Les options d'un geste, contrôlées avant de lancer l'outil."""
+    b = body if isinstance(body, dict) else {}
+    out = []
+    flag = lambda k: bool(b.get(k))  # noqa: E731
+    if action == "clone":
+        out += ["--new-name", _hv.check_name(str(b.get("new_name") or ""), "new name")]
+        if flag("with_data"):
+            out.append("--with-data")
+        if flag("start"):
+            out.append("--start")
+    elif action == "eject":
+        out += ["--volume", _hv.check_name(str(b.get("volume") or ""), "volume")]
+        if flag("delete_volume"):
+            out.append("--delete-volume")
+    elif action == "add-volume":
+        out += ["--claim", _hv.check_name(str(b.get("claim") or ""), "volume")]
+        if b.get("volume"):
+            out += ["--volume", _hv.check_name(str(b["volume"]), "disk name")]
+        bus = str(b.get("bus") or "scsi")
+        if bus not in ("scsi", "virtio", "sata"):
+            raise ValueError("bus: scsi, virtio or sata")
+        out += ["--bus", bus]
+    elif action == "remove-volume":
+        out += ["--volume", _hv.check_name(str(b.get("volume") or ""), "disk name")]
+    elif action == "migrate":
+        if b.get("node"):
+            if not _K8S_NAME_RE.match(str(b["node"])):
+                raise ValueError("node: a node name")
+            out += ["--node", str(b["node"])]
+    elif action == "template":
+        out += ["--template-name", _hv.check_name(str(b.get("template_name") or ""), "template name")]
+        if b.get("description"):
+            out += ["--description", str(b["description"])[:200]]
+        if flag("with_data"):
+            out.append("--with-data")
+        if flag("set_default"):
+            out.append("--set-default")
+    return out
+
+
+@app.route("/api/vm/<cluster>/<namespace>/<name>/do/<action>", methods=["POST"])
+@requires_auth
+@_rate_limit("60/minute")
+def api_vm_do(cluster, namespace, name, action):
+    if action not in _VM_DO:
+        return jsonify({"error": f"action must be one of {', '.join(_VM_DO)}"}), 400
+    kc = _kubectl_for_cluster(cluster)
+    if not kc:
+        return jsonify({"error": f"unknown cluster: {cluster}"}), 404
+    body = request.get_json(silent=True) or {}
+    if action == "cloudinit":
+        return _vm_cloudinit_action(cluster, namespace, name, body)
+    try:
+        extra = _vm_do_args(action, body)
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
+    cmd = [sys.executable, str(BIN_DIR / RESOURCES_SCRIPT), "vm", action, "--kubeconfig", kc,
+           "--namespace", namespace, "--name", name] + extra
+    run, err = _cli_action(cluster, f"vm:{action}:{namespace}/{name}", cmd, "harvester-resources",
+                           after=lambda: _invalidate_cluster_caches(cluster))
+    return _res_reply(run, err, vm=f"{namespace}/{name}", action=action)
+
+
+@app.route("/api/vm/<cluster>/<namespace>/<name>", methods=["DELETE"])
+@requires_auth
+@_rate_limit("30/minute")
+def api_vm_delete(cluster, namespace, name):
+    """Supprimer une VM, et les volumes cochés (comme la fenêtre de Harvester).
+    Le bouton de la vue Cluster appelait cette route, qui n'existait pas."""
+    kc = _kubectl_for_cluster(cluster)
+    if not kc:
+        return jsonify({"error": f"unknown cluster: {cluster}"}), 404
+    body = request.get_json(silent=True) or {}
+    remove = body.get("remove_volumes") or []
+    if not isinstance(remove, list) or not all(isinstance(r, str) and _K8S_NAME_RE.match(r) for r in remove):
+        return jsonify({"error": "remove_volumes: a list of volume names"}), 400
+    cmd = [sys.executable, str(BIN_DIR / RESOURCES_SCRIPT), "vm", "delete", "--kubeconfig", kc,
+           "--namespace", namespace, "--name", name]
+    if remove:
+        cmd += ["--remove-volumes", ",".join(remove)]
+    if body.get("keep_cloudinit"):
+        cmd.append("--keep-cloudinit")
+    run, err = _cli_action(cluster, f"vm:delete:{namespace}/{name}", cmd, "harvester-resources",
+                           after=lambda: _invalidate_cluster_caches(cluster))
+    return _res_reply(run, err, vm=f"{namespace}/{name}", removed=remove)
+
+
+@app.route("/api/yaml/<cluster>/<kind>/<oname>", methods=["PUT"])
+@requires_auth
+@_rate_limit("30/minute")
+def api_yaml_put(cluster, kind, oname):
+    return _yaml_write(cluster, kind, request.args.get("namespace") or "", oname, creating=False)
+
+
+@app.route("/api/yaml/<cluster>/<kind>", methods=["POST"])
+@requires_auth
+@_rate_limit("30/minute")
+def api_yaml_create(cluster, kind):
+    return _yaml_write(cluster, kind, request.args.get("namespace") or "", None, creating=True)
 
 
 # ---------------------------------------------------------------------------

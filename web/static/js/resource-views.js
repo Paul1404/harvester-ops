@@ -99,11 +99,13 @@ const ResourceViews = (() => {
     restore: () => tr('bk.act.restore'), delete: () => tr('bk.act.delete'),
     suspend: () => tr('bk.act.suspend'), resume: () => tr('bk.act.resume'),
     default: () => tr('of.act.default'), configure: () => tr('of.act.configure'),
+    yaml: () => tr('yw.act.yaml'),
   };
   const ACT_TIP = {
     restore: () => tr('bk.act.restoreTip'), delete: () => tr('bk.act.deleteTip'),
     suspend: () => tr('bk.act.suspendTip'), resume: () => tr('bk.act.resumeTip'),
     default: () => tr('of.act.defaultTip'), configure: () => tr('of.act.configureTip'),
+    yaml: () => tr('yw.act.yamlTip'),
   };
   const act = (a, disabled, why, admin) => `<button type="button" class="btn btn-sm ${a === 'delete' ? 'btn-danger' : 'btn-secondary'} res-act tip${admin ? ' needs-admin' : ''}"
       data-act="${a}" data-tip="${esc(disabled && why ? why : ACT_TIP[a]())}" ${disabled ? 'disabled' : ''}>${esc(ACT_LABEL[a]())}</button>`;
@@ -111,6 +113,12 @@ const ResourceViews = (() => {
   // v1.59.0 : les gestes des listes des sections (créer, supprimer, classe
   // par défaut, configurer un add-on), par ObjectForms
   const OBJ_KIND = { images: 'image', storageclasses: 'storageclass', sshkeys: 'sshkey', secrets: 'secret' };
+  // v1.60.0 : le type YAML de chaque liste (« Edit YAML » de Harvester)
+  const YAML_KIND = { images: 'image', storageclasses: 'storageclass', sshkeys: 'sshkey', secrets: 'secret',
+                      addons: 'addon', schedules: 'schedule', vmbackups: 'vmbackup', vmsnapshots: 'vmbackup',
+                      volsnaps: 'volsnap' };
+  const YAML_ADMIN = new Set(['secrets', 'addons']);
+  const yamlAct = (kind) => act('yaml', false, '', YAML_ADMIN.has(kind));
   function sectionAction(cur, a, row) {
     if (!window.ObjectForms) return;
     const done = (id) => { if (id) { if (window.Dock && Dock.poll) Dock.poll(); say(cur, esc(tr('bk.started', { id }))); setTimeout(() => load(cur), 3000); } };
@@ -131,7 +139,7 @@ const ResourceViews = (() => {
         `${bytes(r.virtual_size)}<div class="res-dim">${esc(tr('res.img.file', { size: bytes(r.size) }))}</div>`,
         (IMG_STATE[r.state] || IMG_STATE.importing)(r),
         `<code>${esc(r.storage_class || '–')}</code>`, vms(r.used_by), age(r.created),
-        act('delete', r.volumes > 0, tr('of.t.inUse'))],
+        act('delete', r.volumes > 0, tr('of.t.inUse')) + yamlAct('images')],
       details: (r) => [[tr('res.d.url'), r.url ? `<code>${esc(r.url)}</code>` : '–'],
                        [tr('res.d.backend'), esc(r.backend || '–')],
                        [tr('res.d.volumes'), esc(r.volumes)],
@@ -149,7 +157,7 @@ const ResourceViews = (() => {
          ${r.image ? `<div class="res-dim tip" data-tip="${esc(tr('res.sc.imageTip'))}">${icon('cdrom', 11)} ${esc(r.image.display_name || r.image.ref)}</div>` : ''}`,
         esc(r.replicas || '–'), esc(r.reclaim_policy || '–'), esc(r.binding || '–'),
         r.expansion ? icon('ok') : icon('fail'), esc(r.volumes), age(r.created),
-        (r.is_default || r.image ? '' : act('default', false, '', true)) + act('delete', r.volumes > 0 || !!r.image, tr('of.t.inUse'), true)],
+        (r.is_default || r.image ? '' : act('default', false, '', true)) + act('delete', r.volumes > 0 || !!r.image, tr('of.t.inUse'), true) + yamlAct('storageclasses')],
       details: (r) => [[tr('res.d.provisioner'), `<code>${esc(r.provisioner)}</code>`],
                        ...Object.entries(r.parameters || {}).map(([k, v]) => [k, `<code>${esc(v)}</code>`])],
       text: (r) => `${r.name} ${(r.image || {}).display_name || ''}`,
@@ -163,7 +171,7 @@ const ResourceViews = (() => {
         `<strong>${esc(r.name)}</strong><div class="res-dim">${esc(r.namespace)}</div>`,
         `<code>${esc(r.fingerprint || '–')}</code>`,
         r.validated ? badge('ok', tr('res.key.valid')) : badge('warn', tr('res.key.pending')),
-        vms(r.used_by), age(r.created), act('delete')],
+        vms(r.used_by), age(r.created), act('delete') + yamlAct('sshkeys')],
       details: (r) => [[tr('res.d.publicKey'), `<code class="res-wrap">${esc(r.public_key || '')}</code>`]],
       text: (r) => `${r.namespace}/${r.name} ${r.fingerprint || ''}`,
       sort: [(r) => r.name, (r) => r.fingerprint, (r) => (r.validated ? 1 : 0), (r) => (r.used_by || []).length,
@@ -178,7 +186,7 @@ const ResourceViews = (() => {
         `<code>${esc(r.type)}</code>`,
         (r.keys || []).map(k => `<code class="res-key">${esc(k)}</code>`).join(' ') || '–',
         vms(r.used_by), age(r.created),
-        act('delete', (r.used_by || []).length > 0 || r.system, r.system ? tr('of.t.system') : tr('of.t.inUse'))],
+        act('delete', (r.used_by || []).length > 0 || r.system, r.system ? tr('of.t.system') : tr('of.t.inUse')) + yamlAct('secrets')],
       details: null,
       text: (r) => `${r.namespace}/${r.name} ${r.type} ${(r.keys || []).join(' ')}`,
       sort: [(r) => `${r.name} ${r.namespace}`, (r) => r.type, (r) => (r.keys || []).length,
@@ -196,7 +204,7 @@ const ResourceViews = (() => {
             data-addon="${esc(r.namespace)}/${esc(r.name)}" data-enable="${r.enabled ? '0' : '1'}"
             data-tip="${esc(r.enabled ? tr('res.addon.disableTip') : tr('res.addon.enableTip'))}"
             ${addonBusy(r) ? 'disabled' : ''}>${esc(r.enabled ? tr('res.addon.disable') : tr('res.addon.enable'))}</button>
-         ${act('configure', addonBusy(r), '', true)}`],
+         ${act('configure', addonBusy(r), '', true)}${yamlAct('addons')}`],
       details: null,
       text: (r) => `${r.namespace}/${r.name} ${r.chart}`,
       sort: [(r) => r.name, (r) => r.chart, (r) => r.status, null],
@@ -214,7 +222,7 @@ const ResourceViews = (() => {
         r.suspended ? badge('dim', tr('bk.st.suspended'))
           : (r.failures ? badge('warn', tr('bk.st.failures', { n: r.failures }), tr('bk.st.failuresTip', { max: r.max_failure }))
             : badge('ok', tr('bk.st.active'))),
-        act(r.suspended ? 'resume' : 'suspend') + act('delete')],
+        act(r.suspended ? 'resume' : 'suspend') + act('delete') + yamlAct('schedules')],
       details: null,
       text: (r) => `${r.namespace}/${r.name} ${r.vm} ${r.cron}`,
       sort: [(r) => r.name, (r) => r.vm, (r) => r.type, (r) => r.cron, (r) => r.kept, (r) => r.last,
@@ -227,7 +235,7 @@ const ResourceViews = (() => {
         `<strong>${esc(r.name)}</strong><div class="res-dim">${esc(r.namespace)}${r.schedule ? ` · ${esc(tr('bk.fromSchedule', { name: r.schedule }))}` : ''}</div>`,
         vms([`${r.namespace}/${r.vm}`]), backupState(r), bytes(r.size),
         `<span class="res-dim">${esc(r.target || '–')}</span>`, age(r.created),
-        act('restore', !r.ready) + act('delete')],
+        act('restore', !r.ready) + act('delete') + yamlAct('vmbackups')],
       details: null,
       text: (r) => `${r.namespace}/${r.name} ${r.vm} ${r.schedule || ''}`,
       sort: [(r) => r.name, (r) => r.vm, (r) => (r.ready ? 2 : r.error ? 0 : 1), (r) => r.size || 0, (r) => r.target,
@@ -238,7 +246,7 @@ const ResourceViews = (() => {
       row: (r) => [
         `<strong>${esc(r.name)}</strong><div class="res-dim">${esc(r.namespace)}${r.schedule ? ` · ${esc(tr('bk.fromSchedule', { name: r.schedule }))}` : ''}</div>`,
         vms([`${r.namespace}/${r.vm}`]), backupState(r), age(r.created),
-        act('restore', !r.ready) + act('delete')],
+        act('restore', !r.ready) + act('delete') + yamlAct('vmsnapshots')],
       details: null,
       text: (r) => `${r.namespace}/${r.name} ${r.vm} ${r.schedule || ''}`,
       sort: [(r) => r.name, (r) => r.vm, (r) => (r.ready ? 2 : r.error ? 0 : 1), (r) => r.created, null],
@@ -251,7 +259,7 @@ const ResourceViews = (() => {
         `<code>${esc(r.pvc || '–')}</code>`, esc(r.size || '–'),
         r.error ? badge('fail', tr('res.img.failed'), r.error) : (r.ready ? badge('ok', tr('res.img.ready')) : badge('info', tr('bk.st.inProgress'))),
         r.owner ? `<span class="res-dim tip" data-tip="${esc(tr('bk.ownerTip'))}">${icon('snapshot', 11)} ${esc(r.owner)}</span>` : '–',
-        age(r.created), act('restore', !r.ready) + act('delete', !!r.owner, tr('bk.ownerTip'))],
+        age(r.created), act('restore', !r.ready) + act('delete', !!r.owner, tr('bk.ownerTip')) + yamlAct('volsnaps')],
       details: null,
       text: (r) => `${r.namespace}/${r.name} ${r.pvc || ''} ${r.owner || ''}`,
       sort: [(r) => r.name, (r) => r.pvc, (r) => r.size, (r) => (r.ready ? 1 : 0), (r) => r.owner, (r) => r.created, null]
@@ -365,6 +373,10 @@ const ResourceViews = (() => {
     if (actBtn) {
       const id = actBtn.closest('tr')?.dataset.id;
       const row = cur.rows && cur.rows.get(id);
+      if (row && actBtn.dataset.act === 'yaml' && window.YamlWindow) {
+        YamlWindow.open(cur.cluster, YAML_KIND[cur.kind], row.namespace || '', row.name, { onDone: () => load(cur) });
+        return;
+      }
       if (row && cur.opts && cur.opts.onAction) cur.opts.onAction(actBtn.dataset.act, row);
       else if (row) sectionAction(cur, actBtn.dataset.act, row);
       return;

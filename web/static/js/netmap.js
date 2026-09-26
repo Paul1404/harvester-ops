@@ -192,6 +192,13 @@ const NetMap = (() => {
     </div>`;
   }
 
+  // v1.60.0 : « Edit YAML » de Harvester, sur un réseau de VMs (NetworkAttachmentDefinition)
+  function yamlBtn(b) {
+    if (!/^nad-/.test(b.id) || !window.YamlWindow) return '';
+    return `<button type="button" class="vsw-more tip" data-netmap-yaml="${esc(b.id.slice(4))}"
+      data-tip-i18n="yw.act.yamlTip">${esc(tr('yw.act.yaml', 'YAML'))}</button>`;
+  }
+
   function blockHtml(b) {
     return `<section class="vsw vsw-net${b.pod ? ' vsw-pod' : ''}" data-block="${esc(b.id)}">
       <header class="vsw-head">
@@ -200,6 +207,7 @@ const NetMap = (() => {
         <span class="vsw-sub">${esc(b.tag)}</span>
         ${b.ready === false ? `<span class="vsw-badge warn">${esc(tr('fabric.notReady', 'not ready'))}</span>` : ''}
         <span class="vsw-sub vsw-ports">${b.attached.length} VM</span>
+        ${yamlBtn(b)}
       </header>
       <div class="vsw-body">
         <div class="vsw-col vsw-left">
@@ -227,6 +235,7 @@ const NetMap = (() => {
           <div class="vsw-tags"><span>${esc(b.tag)}</span></div>
           ${/^nad-/.test(b.id) && window.ObjectForms ? `<button type="button" class="btn btn-sm btn-danger tip needs-admin"
               data-netmap-delete="${esc(b.id.slice(4))}" data-tip-i18n="of.t.netDelete">${esc(tr('of.delete', 'Delete'))}</button>` : ''}
+          ${yamlBtn(b)}
           </div>`).join('')}</div>
       </section>` : '';
     const scroll = body.scrollTop;
@@ -284,6 +293,12 @@ const NetMap = (() => {
       if (edit && window.VMEdit) {
         const [ns, name] = edit.dataset.netmapEdit.split('/');
         window.VMEdit.open(cluster, ns, name);
+        return;
+      }
+      const yml = e.target.closest('[data-netmap-yaml]');
+      if (yml && window.YamlWindow) {
+        const [ns, name] = yml.dataset.netmapYaml.split('/');
+        YamlWindow.open(cluster, 'network', ns, name, { onDone: () => refresh() });
         return;
       }
       // v1.59.0 : supprimer un réseau de VMs que rien n'utilise

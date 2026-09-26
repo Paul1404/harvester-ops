@@ -1853,8 +1853,10 @@ const VMEdit = (() => {
       </div>
       <div class="form-hint" id="ci-source"></div>
       <div class="apply-bar">
-        <button class="btn btn-primary btn-sm" data-action="apply-cloudinit">Save cloud-init</button>
-        <button class="btn btn-secondary btn-sm" data-action="reload-cloudinit">Reload</button>
+        <label class="apply-dry tip" data-tip="${esc(tr('vm.create.guestAgentTip', 'Adds qemu-guest-agent to the cloud-init: IP addresses, soft reboot and access credentials need it'))}">
+          <input type="checkbox" data-ci-agent> ${esc(tr('vm.create.guestAgent', 'Install the guest agent'))}</label>
+        <button class="btn btn-primary btn-sm tip" data-action="apply-cloudinit" data-tip="${esc(tr('vm.edit.ci.saveTip', 'Save to the VM\'s cloud-init secret (created and attached if the VM has none); the VM reads it at its next boot; followed in the dock'))}">${esc(tr('vm.edit.ci.save', 'Save cloud-init'))}</button>
+        <button class="btn btn-secondary btn-sm tip" data-action="reload-cloudinit" data-tip="${esc(tr('yw.reloadTip', 'Read it again from the cluster'))}">${esc(tr('yw.reload', 'Reload'))}</button>
         <span class="apply-result" data-section="cloudinit"></span>
       </div>`;
   }
@@ -2318,19 +2320,20 @@ const VMEdit = (() => {
       out.innerHTML = d.source === 'secret'
         ? `source: Secret <code>${esc(d.secretName)}</code>`
         : d.source === 'inline'
-          ? `<span style="color:var(--warn)">inline cloud-init (read-only)</span>`
-          : '<span style="color:var(--text-dim)">no cloud-init configured</span>';
+          ? `<span style="color:var(--warn)">${esc(tr('vm.edit.ci.inline', 'inline cloud-init: saving moves it into a Secret'))}</span>`
+          : `<span style="color:var(--text-dim)">${esc(tr('vm.edit.ci.none', 'no cloud-init yet: saving creates one (read at the next boot)'))}</span>`;
     } catch (e) {
       out.innerHTML = `<span style="color:var(--danger)">${Icons.svg('fail', { size: 14 })} ${esc(e.message)}</span>`;
     }
   }
 
   async function applyCloudInit(sectionEl, cluster, namespace, name) {
-    const result = sectionEl.querySelector('.apply-result');
-    result.textContent = 'saving…';
+    const result = sectionEl.querySelector('.apply-result[data-section="cloudinit"]') || sectionEl.querySelector('.apply-result');
+    result.textContent = tr('vm.create.sending', 'Sending…');
     const body = {
       userData:    sectionEl.querySelector('[data-ci="userData"]').value,
       networkData: sectionEl.querySelector('[data-ci="networkData"]').value,
+      guestAgent:  !!sectionEl.querySelector('[data-ci-agent]')?.checked,
       // v1.16.0 : noms des KeyPairs choisies dans l'assistant. Le YAML
       // porte le matériel de clé ; Harvester, lui, affiche les clés
       // d'une VM d'après l'annotation sshNames — on la synchronise.
@@ -2342,14 +2345,33 @@ const VMEdit = (() => {
         .filter(Boolean),
     };
     try {
+      // v1.60.0 : une action suivie (dock, Activité), qui crée et branche un
+      // Secret quand la VM n'a pas encore de cloud-init
       const res = await fetch(`/api/vm/${enc(cluster)}/${enc(namespace)}/${enc(name)}/cloudinit`,
         { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
       const d = await res.json();
       if (!res.ok) {
         result.innerHTML = `<span style="color:var(--danger)">${Icons.svg('fail', { size: 14 })} ${esc(d.error || res.status)}</span>`;
-      } else {
-        result.innerHTML = `<span style="color:var(--accent)">${Icons.svg('ok', { size: 14 })} saved to Secret ${esc(d.secret)}</span>`;
+        return;
       }
+      if (window.Dock && Dock.poll) Dock.poll();
+      result.textContent = tr('bk.started', 'Started').replace('{id}', d.action_id);
+      if (!window.SSEReconnect) return;
+      let last = '';
+      const es = SSEReconnect.connect(`/api/stream/${enc(d.action_id)}`, {
+        on: {
+          step: (e) => { try { const s = JSON.parse(e.data); if (s.message) { last = s.message; result.textContent = s.message; } } catch { /* ligne illisible */ } },
+          end: (e) => {
+            let x = {};
+            try { x = JSON.parse(e.data); } catch { /* fin sans détail */ }
+            es.close();
+            result.innerHTML = x.status === 'done'
+              ? `<span style="color:var(--accent)">${Icons.svg('ok', { size: 14 })} ${esc(last || 'saved')}</span>`
+              : `<span style="color:var(--danger)">${Icons.svg('fail', { size: 14 })} ${esc(last || x.error_summary || x.status || '?')}</span>`;
+            if (x.status === 'done') loadCloudInit(sectionEl, cluster, namespace, name);
+          },
+        },
+      });
     } catch (e) {
       result.innerHTML = `<span style="color:var(--danger)">${Icons.svg('fail', { size: 14 })} ${esc(e.message)}</span>`;
     }

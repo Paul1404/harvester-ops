@@ -836,9 +836,15 @@ def test_cloudinit_save_syncs_the_ssh_names_annotation():
     """Harvester lists a VM's keys from harvesterhci.io/sshNames; the
     assistant injected the key material but left the annotation empty, so
     the Harvester UI showed no key at all."""
+    # v1.60.0 : l'enregistrement est une action suivie, par l'outil, qui pose
+    # l'annotation à partir de --ssh-names
     src = (WEB / "app.py").read_text()
-    put = src.split("def api_vm_put_cloudinit", 1)[1].split("@app.route", 1)[0]
-    assert "harvesterhci.io/sshNames" in put
+    put = src.split("def _vm_cloudinit_action", 1)[1].split("@app.route", 1)[0]
+    assert '"--ssh-names"' in put
+    tool = (WEB.parent / "bin" / "harvester-resources.py").read_text()
+    body = tool.split("def vm_cloudinit", 1)[1].split("\ndef ", 1)[0]
+    assert "ssh_names_annotation" in body
+    assert 'SSH_NAMES = "harvesterhci.io/sshNames"' in (WEB.parent / "bin" / "lib" / "hv_vm.py").read_text()
     js = VM_EDIT_JS.read_text()
     # the ref label is "name (namespace)" — Harvester wants the bare name
     assert "replace(/\\s*\\([^()]*\\)\\s*$/, '')" in js

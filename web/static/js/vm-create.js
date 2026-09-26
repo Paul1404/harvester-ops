@@ -133,6 +133,15 @@ const VMCreate = (() => {
             <label class="vm-create-start">
               <input name="start" type="checkbox" checked>
               <span>${esc(tr('vm.create.start', 'Start once created'))}</span></label>
+            <label class="vm-create-start tip" data-tip="${esc(tr('vm.create.guestAgentTip',
+                'Adds qemu-guest-agent to the cloud-init: IP addresses, soft reboot and access credentials need it'))}">
+              <input name="guest_agent" type="checkbox" checked>
+              <span>${esc(tr('vm.create.guestAgent', 'Install the guest agent'))}</span></label>
+            <label style="grid-column:1/-1;">${esc(tr('vm.create.sshKeys', 'SSH keys'))}
+              <select name="ssh_keys" multiple size="3" class="tip" data-tip="${esc(tr('vm.create.sshKeysTip',
+                'Key pairs added to the cloud-init (ssh_authorized_keys); Ctrl+click to pick several'))}"></select>
+              <span class="form-hint">${esc(tr('vm.create.sshKeysHint',
+                'Their public key is added to the user-data, as Harvester does.'))}</span></label>
             <label style="grid-column:1/-1;">${esc(tr('vm.create.template', 'Start from a template'))}
               <select name="template"><option value="">${
                 esc(tr('vm.create.noTemplate', '(from scratch)'))}</option></select>
@@ -221,6 +230,18 @@ const VMCreate = (() => {
         sel.innerHTML = `<option value="${esc(namespace || 'default')}">${
           esc(namespace || 'default')}</option>`;
       }
+    })();
+
+    // v1.60.0 : les clés SSH du cluster (menu SSH Keys de Harvester)
+    (async () => {
+      const sel = head.querySelector('[name="ssh_keys"]');
+      try {
+        const list = await fetch(`/api/sshkeys/${encodeURIComponent(cluster)}`).then(r => r.json());
+        const keys = (Array.isArray(list) ? list : list.items || []).filter(k => k && k.name);
+        sel.innerHTML = keys.map(k => `<option value="${esc(`${k.namespace}/${k.name}`)}">${
+          esc(`${k.namespace}/${k.name}`)}</option>`).join('');
+        if (!keys.length) sel.disabled = true;
+      } catch { sel.disabled = true; }
     })();
 
     // --- templates : liste, puis application comme point de départ ---
@@ -334,12 +355,22 @@ const VMCreate = (() => {
       try { manifest = buildManifest(); }
       catch (e) { say(esc(String(e.message || e)), true); return; }
 
+      // v1.60.0 : le cloud-init, les clés SSH et l'agent invité partent
+      // avec la demande (le cloud-init était perdu à la création).
+      const ciEl = rendered.get('cloudinit');
+      const cloudinit = ciEl ? {
+        user_data: ciEl.querySelector('[data-ci="userData"]')?.value || '',
+        network_data: ciEl.querySelector('[data-ci="networkData"]')?.value || '',
+      } : null;
+      const sshKeys = [...head.querySelectorAll('[name="ssh_keys"] option')].filter(o => o.selected).map(o => o.value);
+      const guestAgent = head.querySelector('[name="guest_agent"]').checked;
       say(esc(tr('vm.create.sending', 'Sending…')));
       try {
         const r = await fetch(`/api/vms/${encodeURIComponent(cluster)}/create`, {
           method: 'POST', headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ namespace: ns, name, count, start,
-                                 manifest, dry_run: dryRun }),
+                                 manifest, dry_run: dryRun, cloudinit,
+                                 ssh_keys: sshKeys, guest_agent: guestAgent }),
         });
         const d = await r.json();
         if (!r.ok) { say(esc(d.error || 'error'), true); return; }

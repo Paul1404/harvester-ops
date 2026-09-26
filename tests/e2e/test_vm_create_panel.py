@@ -321,3 +321,51 @@ def test_leaving_the_image_mode_unlocks_the_storage_class(context, flask_server)
     sc = field_of(item, 'storage_class').first
     assert not sc.is_disabled()
     assert 'follows the image' not in sc.inner_text().lower()
+
+
+def test_the_cloud_init_ssh_keys_and_guest_agent_go_with_the_request(context, flask_server):
+    """v1.60.0 : le cloud-init de la fenêtre de création était perdu (la
+    section ne produisait rien). Il part maintenant avec la demande, avec les
+    clés SSH choisies et la case « agent invité », comme dans Harvester."""
+    page = context.new_page()
+    sent = {}
+
+    def handle(route, request):
+        sent.update(json.loads(request.post_data or "{}"))
+        route.fulfill(status=202, content_type="application/json",
+                      body=json.dumps({"action_id": "act-ci", "names": ["web"]}))
+    page.route("**/api/vms/*/create", handle)
+    page.route("**/api/sshkeys/**", lambda r, q: r.fulfill(
+        status=200, content_type="application/json",
+        body=json.dumps([{"name": "ops", "namespace": "default", "public_key": "ssh-ed25519 AAAA"},
+                         {"name": "ci", "namespace": "default", "public_key": "ssh-ed25519 BBBB"}])))
+    open_panel(page, flask_server["base_url"])
+    page.fill('#fp-vm-create [name="name"]', 'web')
+    agent = page.locator('#fp-vm-create [name="guest_agent"]')
+    assert agent.is_checked()                                  # coché par défaut, comme Harvester
+    assert agent.locator("xpath=..").get_attribute("data-tip")
+    page.locator('#fp-vm-create [name="ssh_keys"]').select_option(["default/ops"])
+    page.click('#fp-vm-create [data-section="cloudinit"]')
+    page.wait_for_timeout(400)
+    page.fill('#fp-vm-create [data-ci="userData"]', "#cloud-config\nhostname: web\n")
+    page.click('#fp-vm-create [data-action="create"]')
+    page.wait_for_timeout(900)
+    assert sent["cloudinit"] == {"user_data": "#cloud-config\nhostname: web\n", "network_data": ""}
+    assert sent["ssh_keys"] == ["default/ops"] and sent["guest_agent"] is True
+
+
+def test_without_visiting_cloud_init_nothing_is_invented(context, flask_server):
+    page = context.new_page()
+    sent = {}
+
+    def handle(route, request):
+        sent.update(json.loads(request.post_data or "{}"))
+        route.fulfill(status=202, content_type="application/json",
+                      body=json.dumps({"action_id": "act-2", "names": ["web"]}))
+    page.route("**/api/vms/*/create", handle)
+    open_panel(page, flask_server["base_url"])
+    page.fill('#fp-vm-create [name="name"]', 'web')
+    page.locator('#fp-vm-create [name="guest_agent"]').uncheck()
+    page.click('#fp-vm-create [data-action="create"]')
+    page.wait_for_timeout(900)
+    assert sent["cloudinit"] is None and sent["ssh_keys"] == [] and sent["guest_agent"] is False

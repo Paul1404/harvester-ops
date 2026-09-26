@@ -4,6 +4,46 @@ All notable changes to this project will be documented here.
 Format inspired by [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 This file summarises each minor release; per-patch detail lives in `git log`.
 
+## [1.59.0] - 2026-09-26 - Create, change and delete in every section, as in Harvester
+
+### Added
+- **Create, change and delete** what Harvester's own menus allow, each in a
+  window (kept open or minimised) and followed in the dock:
+  - Images: a new image from an http(s) address, followed until imported;
+    delete an unused image.
+  - Storage Classes (administrators): create (replicas, stale timeout,
+    locality, disk and node tags, reclaim, binding, migration, expansion),
+    make default, delete an unused class.
+  - Volumes: create, empty or from an image; expand from the volume detail.
+  - VM Networks (administrators): create a VLAN or untagged network, route
+    automatic or manual; delete an unused network.
+  - SSH Keys: create (pasted or from a .pub file), delete.
+  - Secrets: create with several keys, delete an unused secret.
+  - Add-ons (administrators): edit the configuration (Helm values) in a
+    window; reading it is reserved to administrators (it can carry
+    passwords).
+- `harvester-resources create|delete|sc-default|volume-expand|addon-values`
+  on the command line.
+
+### Fixed
+- An anonymous write was told "needs the operator role, you are a viewer"
+  instead of being asked to sign in.
+- Harvester's own rules, found on harv1, are respected: an image volume's
+  class is read from the image; a second default storage class is refused,
+  so the old one is unset first (and set back if the new one is refused).
+
+### Tests
+- The objects produced (checked against Harvester's webhooks by a
+  server-side dry run on harv1), what blocks a deletion, the CLI (creation
+  followed until ready, a used object kept, the default class moved and
+  restored on refusal, a volume that only grows), the routes (administrator
+  kinds, namespaces, the configuration read by administrators only); in
+  Chromium, each form and what it sends, row gestures, tooltips.
+- Real, on harv1: every gesture done through the interface, checked with
+  kubectl, then undone (image by URL, volume from it and expanded, storage
+  class made default and back, SSH key, secret, VLAN network, add-on
+  configuration), nothing left behind.
+
 ## [1.58.0] - 2026-09-26 - The Backups window: backups, snapshots and their schedules
 
 ### Added

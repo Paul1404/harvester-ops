@@ -98,70 +98,91 @@ const ResourceViews = (() => {
   const ACT_LABEL = {
     restore: () => tr('bk.act.restore'), delete: () => tr('bk.act.delete'),
     suspend: () => tr('bk.act.suspend'), resume: () => tr('bk.act.resume'),
+    default: () => tr('of.act.default'), configure: () => tr('of.act.configure'),
   };
   const ACT_TIP = {
     restore: () => tr('bk.act.restoreTip'), delete: () => tr('bk.act.deleteTip'),
     suspend: () => tr('bk.act.suspendTip'), resume: () => tr('bk.act.resumeTip'),
+    default: () => tr('of.act.defaultTip'), configure: () => tr('of.act.configureTip'),
   };
-  const act = (a, disabled, why) => `<button type="button" class="btn btn-sm ${a === 'delete' ? 'btn-danger' : 'btn-secondary'} res-act tip"
+  const act = (a, disabled, why, admin) => `<button type="button" class="btn btn-sm ${a === 'delete' ? 'btn-danger' : 'btn-secondary'} res-act tip${admin ? ' needs-admin' : ''}"
       data-act="${a}" data-tip="${esc(disabled && why ? why : ACT_TIP[a]())}" ${disabled ? 'disabled' : ''}>${esc(ACT_LABEL[a]())}</button>`;
+
+  // v1.59.0 : les gestes des listes des sections (créer, supprimer, classe
+  // par défaut, configurer un add-on), par ObjectForms
+  const OBJ_KIND = { images: 'image', storageclasses: 'storageclass', sshkeys: 'sshkey', secrets: 'secret' };
+  function sectionAction(cur, a, row) {
+    if (!window.ObjectForms) return;
+    const done = (id) => { if (id) { if (window.Dock && Dock.poll) Dock.poll(); say(cur, esc(tr('bk.started', { id }))); setTimeout(() => load(cur), 3000); } };
+    const fail = (err) => say(cur, `<span class="res-error">${esc(err.message)}</span>`);
+    if (a === 'delete') ObjectForms.remove(OBJ_KIND[cur.kind], cur.cluster, row).then(done).catch(fail);
+    else if (a === 'default') ObjectForms.setDefaultClass(cur.cluster, row.name).then(done).catch(fail);
+    else if (a === 'configure') ObjectForms.openAddonValues(cur.cluster, row, () => load(cur));
+  }
 
   const VIEWS = {
     images: {
+      create: 'image',
       cols: () => [tr('res.col.name'), tr('res.col.source'), tr('res.col.size'), tr('res.col.state'),
-                   tr('res.col.class'), tr('res.col.usedBy'), tr('res.col.age')],
+                   tr('res.col.class'), tr('res.col.usedBy'), tr('res.col.age'), ''],
       row: (r) => [
         `<strong>${esc(r.display_name)}</strong><div class="res-dim">${esc(r.namespace)}/${esc(r.name)}</div>`,
         esc(r.source_type || '–'),
         `${bytes(r.virtual_size)}<div class="res-dim">${esc(tr('res.img.file', { size: bytes(r.size) }))}</div>`,
         (IMG_STATE[r.state] || IMG_STATE.importing)(r),
-        `<code>${esc(r.storage_class || '–')}</code>`, vms(r.used_by), age(r.created)],
+        `<code>${esc(r.storage_class || '–')}</code>`, vms(r.used_by), age(r.created),
+        act('delete', r.volumes > 0, tr('of.t.inUse'))],
       details: (r) => [[tr('res.d.url'), r.url ? `<code>${esc(r.url)}</code>` : '–'],
                        [tr('res.d.backend'), esc(r.backend || '–')],
                        [tr('res.d.volumes'), esc(r.volumes)],
                        ...(r.message ? [[tr('res.d.message'), esc(r.message)]] : [])],
       text: (r) => `${r.display_name} ${r.namespace}/${r.name} ${r.source_type} ${r.url || ''}`,
       sort: [(r) => r.display_name, (r) => r.source_type, (r) => r.virtual_size || 0, (r) => r.state,
-             (r) => r.storage_class, (r) => (r.used_by || []).length, (r) => r.created]
+             (r) => r.storage_class, (r) => (r.used_by || []).length, (r) => r.created, null]
     },
     storageclasses: {
+      create: 'storageclass',
       cols: () => [tr('res.col.name'), tr('res.col.replicas'), tr('res.col.reclaim'), tr('res.col.binding'),
-                   tr('res.col.expansion'), tr('res.col.volumes'), tr('res.col.age')],
+                   tr('res.col.expansion'), tr('res.col.volumes'), tr('res.col.age'), ''],
       row: (r) => [
         `<strong>${esc(r.name)}</strong> ${r.is_default ? badge('ok', tr('res.sc.default'), tr('res.sc.defaultTip')) : ''}
          ${r.image ? `<div class="res-dim tip" data-tip="${esc(tr('res.sc.imageTip'))}">${icon('cdrom', 11)} ${esc(r.image.display_name || r.image.ref)}</div>` : ''}`,
         esc(r.replicas || '–'), esc(r.reclaim_policy || '–'), esc(r.binding || '–'),
-        r.expansion ? icon('ok') : icon('fail'), esc(r.volumes), age(r.created)],
+        r.expansion ? icon('ok') : icon('fail'), esc(r.volumes), age(r.created),
+        (r.is_default || r.image ? '' : act('default', false, '', true)) + act('delete', r.volumes > 0 || !!r.image, tr('of.t.inUse'), true)],
       details: (r) => [[tr('res.d.provisioner'), `<code>${esc(r.provisioner)}</code>`],
                        ...Object.entries(r.parameters || {}).map(([k, v]) => [k, `<code>${esc(v)}</code>`])],
       text: (r) => `${r.name} ${(r.image || {}).display_name || ''}`,
       sort: [(r) => r.name, (r) => Number(r.replicas) || 0, (r) => r.reclaim_policy, (r) => r.binding,
-             (r) => (r.expansion ? 1 : 0), (r) => r.volumes, (r) => r.created]
+             (r) => (r.expansion ? 1 : 0), (r) => r.volumes, (r) => r.created, null]
     },
     sshkeys: {
-      cols: () => [tr('res.col.name'), tr('res.col.fingerprint'), tr('res.col.state'), tr('res.col.usedBy'), tr('res.col.age')],
+      create: 'sshkey',
+      cols: () => [tr('res.col.name'), tr('res.col.fingerprint'), tr('res.col.state'), tr('res.col.usedBy'), tr('res.col.age'), ''],
       row: (r) => [
         `<strong>${esc(r.name)}</strong><div class="res-dim">${esc(r.namespace)}</div>`,
         `<code>${esc(r.fingerprint || '–')}</code>`,
         r.validated ? badge('ok', tr('res.key.valid')) : badge('warn', tr('res.key.pending')),
-        vms(r.used_by), age(r.created)],
+        vms(r.used_by), age(r.created), act('delete')],
       details: (r) => [[tr('res.d.publicKey'), `<code class="res-wrap">${esc(r.public_key || '')}</code>`]],
       text: (r) => `${r.namespace}/${r.name} ${r.fingerprint || ''}`,
       sort: [(r) => r.name, (r) => r.fingerprint, (r) => (r.validated ? 1 : 0), (r) => (r.used_by || []).length,
-             (r) => r.created]
+             (r) => r.created, null]
     },
     secrets: {
-      cols: () => [tr('res.col.name'), tr('res.col.type'), tr('res.col.keys'), tr('res.col.usedBy'), tr('res.col.age')],
+      create: 'secret',
+      cols: () => [tr('res.col.name'), tr('res.col.type'), tr('res.col.keys'), tr('res.col.usedBy'), tr('res.col.age'), ''],
       row: (r) => [
         `<strong>${esc(r.name)}</strong><div class="res-dim">${esc(r.namespace)}</div>
          ${r.cloud_init ? badge('info', tr('res.sec.cloudinit'), tr('res.sec.cloudinitTip')) : ''}`,
         `<code>${esc(r.type)}</code>`,
         (r.keys || []).map(k => `<code class="res-key">${esc(k)}</code>`).join(' ') || '–',
-        vms(r.used_by), age(r.created)],
+        vms(r.used_by), age(r.created),
+        act('delete', (r.used_by || []).length > 0 || r.system, r.system ? tr('of.t.system') : tr('of.t.inUse'))],
       details: null,
       text: (r) => `${r.namespace}/${r.name} ${r.type} ${(r.keys || []).join(' ')}`,
       sort: [(r) => `${r.name} ${r.namespace}`, (r) => r.type, (r) => (r.keys || []).length,
-             (r) => (r.used_by || []).length, (r) => r.created]
+             (r) => (r.used_by || []).length, (r) => r.created, null]
     },
     addons: {
       cols: () => [tr('res.col.name'), tr('res.col.chart'), tr('res.col.state'), ''],
@@ -174,7 +195,8 @@ const ResourceViews = (() => {
         `<button type="button" class="btn btn-sm ${r.enabled ? 'btn-secondary' : 'btn-primary'} tip needs-admin"
             data-addon="${esc(r.namespace)}/${esc(r.name)}" data-enable="${r.enabled ? '0' : '1'}"
             data-tip="${esc(r.enabled ? tr('res.addon.disableTip') : tr('res.addon.enableTip'))}"
-            ${addonBusy(r) ? 'disabled' : ''}>${esc(r.enabled ? tr('res.addon.disable') : tr('res.addon.enable'))}</button>`],
+            ${addonBusy(r) ? 'disabled' : ''}>${esc(r.enabled ? tr('res.addon.disable') : tr('res.addon.enable'))}</button>
+         ${act('configure', addonBusy(r), '', true)}`],
       details: null,
       text: (r) => `${r.namespace}/${r.name} ${r.chart}`,
       sort: [(r) => r.name, (r) => r.chart, (r) => r.status, null],
@@ -248,6 +270,8 @@ const ResourceViews = (() => {
           ${k === 'secrets' ? `<label class="res-system tip" data-tip="${esc(tr('res.sec.systemTip'))}">
               <input type="checkbox" class="res-system-box" ${cur.showSystem ? 'checked' : ''}> <span>${esc(tr('res.sec.system'))}</span></label>` : ''}
           <button type="button" class="btn btn-sm btn-secondary res-refresh tip" data-tip="${esc(tr('res.refreshTip'))}">${icon('refresh')} ${esc(tr('overview.refresh'))}</button>
+          ${VIEWS[k].create && !(cur.opts && cur.opts.onAction) ? `<button type="button" class="btn btn-sm btn-primary res-new tip${k === 'storageclasses' ? ' needs-admin' : ''}"
+              data-tip="${esc(tr('of.t.new'))}">${icon('add')} ${esc(tr('of.new'))}</button>` : ''}
         </div>
         <div class="res-feedback"></div>
         <div class="res-body"><p class="form-hint">${esc(tr('common.loading'))}</p></div>
@@ -338,10 +362,15 @@ const ResourceViews = (() => {
     // v1.58.0 : un geste de ligne (restaurer, supprimer, suspendre) part à
     // qui a monté la liste (la fenêtre Backups)
     const actBtn = e.target.closest('[data-act]');
-    if (actBtn && cur.opts && cur.opts.onAction) {
+    if (actBtn) {
       const id = actBtn.closest('tr')?.dataset.id;
       const row = cur.rows && cur.rows.get(id);
-      if (row) cur.opts.onAction(actBtn.dataset.act, row);
+      if (row && cur.opts && cur.opts.onAction) cur.opts.onAction(actBtn.dataset.act, row);
+      else if (row) sectionAction(cur, actBtn.dataset.act, row);
+      return;
+    }
+    if (e.target.closest('.res-new') && window.ObjectForms) {
+      ObjectForms.openNew(VIEWS[cur.kind].create, cur.cluster, { onDone: () => load(cur) });
       return;
     }
     const vm = e.target.closest('[data-vm]');

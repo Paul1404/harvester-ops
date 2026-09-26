@@ -451,7 +451,12 @@ const StorageMap = (() => {
       ? `<button type="button" class="btn btn-sm btn-danger tip" data-sto-delete="${esc(k)}"
                  data-tip-i18n="storage.deleteTip">${window.Icons ? Icons.svg('delete') : ''} ${esc(tr('storage.delete', 'Delete this volume'))}</button>`
       : `<p class="form-hint">${esc(tr('storage.lockedHint', 'Unlock destructive actions in the toolbar to delete this orphaned volume.'))}</p>`) : '';
+    // v1.59.0 : agrandir un volume, comme « Edit » dans les volumes de Harvester
+    const grow = v.pvc_name && window.ObjectForms
+      ? `<button type="button" class="btn btn-sm btn-secondary tip" data-sto-expand="${esc(k)}"
+                 data-tip-i18n="of.t.expand">${window.Icons ? Icons.svg('arrowUp') : ''} ${esc(tr('of.expand', 'Expand'))}</button>` : '';
     side.innerHTML = `<h3>${esc(v.pvc_name || v.longhorn)}</h3>`
+      + (grow ? `<div class="sto-actions">${grow}</div>` : '')
       + healthBoxHtml(v)
       + (last ? `<p class="hint warn">${esc(tr('storage.lastUsed', 'Last used by'))} ${esc(last)}. ${esc(tr('storage.lastUsedNote', 'That workload may come back and expect its data.'))}</p>` : '')
       + `<dl class="kv">`
@@ -574,6 +579,17 @@ const StorageMap = (() => {
       if (e.target.closest('.fabric-refresh')) { refresh(true); return; }
       const del = e.target.closest('[data-sto-delete]');
       if (del) { deleteVol(del.dataset.stoDelete, del); return; }
+      const grow = e.target.closest('[data-sto-expand]');
+      if (grow) {
+        const v = (lastData.volumes || []).find(x => volKey(x) === grow.dataset.stoExpand);
+        if (v && window.ObjectForms) {
+          const gi = v.requested ? `${Math.ceil(v.requested / 2 ** 30)}Gi` : '';
+          ObjectForms.expandVolume(cluster, v.pvc_namespace, v.pvc_name, gi)
+            .then(id => { if (id) setTimeout(() => refresh(true), 3000); })
+            .catch(err => alert(err.message));
+        }
+        return;
+      }
       const fixBtn = e.target.closest('[data-vol-fix]');
       if (fixBtn) { applyFix(fixBtn.dataset.volFix, fixBtn); return; }
       const banner = e.target.closest('[data-health-first]');

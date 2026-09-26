@@ -778,7 +778,9 @@ def current_role():
 
 # Chemins dont la simple LECTURE est réservée aux admins : savoir qui
 # détient l'administration d'un cluster n'a pas à être public.
-ADMIN_ONLY_READ_PREFIXES = ("/api/harvester-users", "/api/users")
+ADMIN_ONLY_READ_PREFIXES = ("/api/harvester-users", "/api/users",
+                            # v1.59.0 : la configuration d'un add-on peut porter des mots de passe
+                            "/api/addons/")
 
 
 # Lectures qui donnent plus qu'une vue : le kubeconfig d'un cluster créé
@@ -809,6 +811,10 @@ def _enforce_role():
     if not path.startswith("/api/"):
         return None
     if path in ("/api/whoami",):
+        return None
+    # v1.57.0 : sans identité, c'est requires_auth qui répond (401, « connectez-
+    # vous »), pas un « il faut le rôle opérateur, vous êtes lecteur » trompeur
+    if not open_mode() and _sso_session() is None and _local_session() is None and not _basic_user():
         return None
     # Une écriture portée par un cookie de session (Rancher ou compte local)
     # doit venir de la console même.
@@ -10546,6 +10552,7 @@ def api_my_password():
 # ---------------------------------------------------------------------------
 import cluster_objects as _co  # noqa: E402
 import hv_backups as _hb  # noqa: E402
+import hv_objects as _ho  # noqa: E402
 
 # v1.58.0 : les listes de la fenêtre Backups, servies par la même route
 _BACKUP_KINDS = {"vmbackups": _hb.K_BACKUP, "vmsnapshots": _hb.K_BACKUP,
@@ -10829,6 +10836,161 @@ def api_volsnap_delete(cluster, namespace, name):
     run, err = _res_action(cluster, f"volsnap:delete:{namespace}/{name}",
                            ["volsnap", "delete", "--namespace", namespace, "--name", name])
     return _res_reply(run, err, snapshot=name)
+
+
+# ---------------------------------------------------------------------------
+# v1.59.0 : créer, modifier, supprimer les objets des sections, comme dans
+# l'interface de Harvester (images, classes de stockage, clés SSH, secrets,
+# réseaux des VMs, volumes, configuration des add-ons). Par
+# bin/harvester-resources.py, en actions suivies.
+# ---------------------------------------------------------------------------
+# Ce qui change le cluster pour tous (une classe de stockage, un réseau) est
+# réservé aux administrateurs ; le reste aux opérateurs.
+_OBJ_ADMIN_KINDS = ("storageclass", "network")
+
+
+def _needs_admin():
+    if current_role() != "admin":
+        return jsonify({"error": "forbidden", "role": current_role(), "required": "admin",
+                        "hint": "storage classes and VM networks are managed by administrators"}), 403
+    return None
+
+
+@app.route("/api/objects/<cluster>/<kind>", methods=["POST"])
+@requires_auth
+@_rate_limit("30/minute")
+def api_object_create(cluster, kind):
+    if kind not in _ho.KINDS:
+        return jsonify({"error": f"kind must be one of {', '.join(_ho.KINDS)}"}), 400
+    if kind in _OBJ_ADMIN_KINDS:
+        denied = _needs_admin()
+        if denied:
+            return denied
+    body = request.get_json(silent=True) or {}
+    spec = body.get("spec") if isinstance(body.get("spec"), dict) else None
+    if spec is None:
+        return jsonify({"error": "a JSON object with a 'spec' is expected"}), 400
+    try:
+        # contrôle d'avance (l'image d'un volume est relue par l'outil)
+        if kind == "volume" and spec.get("image"):
+            _ho._name(spec.get("name"))
+            _ho._size(spec.get("size"))
+        else:
+            _ho.normalize(kind, spec, default_class="default")
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
+    name = spec.get("name") or spec.get("display_name") or "image"
+    run, err = _res_spec_action(cluster, f"{kind}:create:{spec.get('namespace') or ''}/{name}".replace(":/", ":"),
+                                ["create", "--kind", kind], spec)
+    return _res_reply(run, err, kind=kind, name=name)
+
+
+def _res_spec_action(cluster, label, args, spec):
+    script = BIN_DIR / RESOURCES_SCRIPT
+    if not script.is_file():
+        return None, (jsonify({"error": f"{RESOURCES_SCRIPT} not deployed"}), 503)
+    kc = _kubectl_for_cluster(cluster)
+    if not kc:
+        return None, (jsonify({"error": f"unknown cluster: {cluster}"}), 404)
+    cmd = [sys.executable, str(script), args[0], "--kubeconfig", kc] + list(args[1:])
+    return _cli_action(cluster, label, cmd, "harvester-resources", spec=spec,
+                       after=lambda: _invalidate_cluster_caches(cluster))
+
+
+@app.route("/api/objects/<cluster>/<kind>/<name>", methods=["DELETE"])
+@requires_auth
+@_rate_limit("30/minute")
+def api_object_delete(cluster, kind, name):
+    if kind not in _ho.KINDS:
+        return jsonify({"error": f"kind must be one of {', '.join(_ho.KINDS)}"}), 400
+    if kind in _OBJ_ADMIN_KINDS:
+        denied = _needs_admin()
+        if denied:
+            return denied
+    ns = request.args.get("namespace") or ""
+    if kind in _ho.NAMESPACED and not _K8S_NAME_RE.match(ns):
+        return jsonify({"error": "a valid namespace is required"}), 400
+    args = ["delete", "--kind", kind, "--name", name] + (["--namespace", ns] if kind in _ho.NAMESPACED else [])
+    script = BIN_DIR / RESOURCES_SCRIPT
+    kc = _kubectl_for_cluster(cluster)
+    if not kc:
+        return jsonify({"error": f"unknown cluster: {cluster}"}), 404
+    cmd = [sys.executable, str(script), "delete", "--kubeconfig", kc] + args[1:]
+    run, err = _cli_action(cluster, f"{kind}:delete:{(ns + '/') if ns else ''}{name}", cmd, "harvester-resources",
+                           after=lambda: _invalidate_cluster_caches(cluster))
+    return _res_reply(run, err, kind=kind, name=name)
+
+
+@app.route("/api/storageclasses/<cluster>/<name>/default", methods=["POST"])
+@requires_auth
+@_rate_limit("20/minute")
+def api_storageclass_default(cluster, name):
+    denied = _needs_admin()
+    if denied:
+        return denied
+    kc = _kubectl_for_cluster(cluster)
+    if not kc:
+        return jsonify({"error": f"unknown cluster: {cluster}"}), 404
+    cmd = [sys.executable, str(BIN_DIR / RESOURCES_SCRIPT), "sc-default", "--kubeconfig", kc, "--name", name]
+    run, err = _cli_action(cluster, f"storageclass:default:{name}", cmd, "harvester-resources")
+    return _res_reply(run, err, storage_class=name)
+
+
+@app.route("/api/volumes/<cluster>/<namespace>/<name>/expand", methods=["POST"])
+@requires_auth
+@_rate_limit("20/minute")
+def api_volume_expand(cluster, namespace, name):
+    body = request.get_json(silent=True) or {}
+    try:
+        size = _ho._size(body.get("size"))
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
+    kc = _kubectl_for_cluster(cluster)
+    if not kc:
+        return jsonify({"error": f"unknown cluster: {cluster}"}), 404
+    cmd = [sys.executable, str(BIN_DIR / RESOURCES_SCRIPT), "volume-expand", "--kubeconfig", kc,
+           "--namespace", namespace, "--name", name, "--size", size]
+    run, err = _cli_action(cluster, f"volume:expand:{namespace}/{name}", cmd, "harvester-resources",
+                           after=lambda: _invalidate_cluster_caches(cluster))
+    return _res_reply(run, err, volume=name, size=size)
+
+
+@app.route("/api/addons/<cluster>/<namespace>/<name>/values")
+@requires_auth
+def api_addon_values_get(cluster, namespace, name):
+    kc = _kubectl_for_cluster(cluster)
+    if not kc:
+        return jsonify({"error": f"unknown cluster: {cluster}"}), 404
+    got = _kubectl_json(kc, "get", "addons.harvesterhci.io", name, "-n", namespace, cluster=cluster)
+    if got is None:
+        return jsonify({"error": f"no add-on {namespace}/{name}"}), 404
+    return jsonify({"values": (got.get("spec") or {}).get("valuesContent") or "",
+                    "enabled": bool((got.get("spec") or {}).get("enabled"))})
+
+
+@app.route("/api/addons/<cluster>/<namespace>/<name>/values", methods=["POST"])
+@requires_auth
+@_rate_limit("10/minute")
+def api_addon_values_set(cluster, namespace, name):
+    body = request.get_json(silent=True) or {}
+    try:
+        text = _ho.check_values(body.get("values"))
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
+    kc = _kubectl_for_cluster(cluster)
+    if not kc:
+        return jsonify({"error": f"unknown cluster: {cluster}"}), 404
+    wd = _capi_work_dir()
+    fd, path = tempfile.mkstemp(prefix="addon-values-", suffix=".yaml", dir=str(wd) if wd else None)
+    with os.fdopen(fd, "w") as f:
+        f.write(text)
+    cmd = [sys.executable, str(BIN_DIR / RESOURCES_SCRIPT), "addon-values", "--kubeconfig", kc,
+           "--namespace", namespace, "--name", name, "--values", path]
+    run, err = _cli_action(cluster, f"addon:values:{namespace}/{name}", cmd, "harvester-resources",
+                           after=lambda: Path(path).unlink(missing_ok=True))
+    if err:
+        Path(path).unlink(missing_ok=True)
+    return _res_reply(run, err, addon=f"{namespace}/{name}")
 
 
 # ---------------------------------------------------------------------------

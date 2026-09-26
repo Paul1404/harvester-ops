@@ -38,6 +38,8 @@ const Sections = (() => {
       b.setAttribute('aria-selected', on ? 'true' : 'false');
     });
     root.querySelectorAll('.section-pane').forEach(p => { p.hidden = p.dataset.pane !== pane; });
+    // v1.59.0 : « Nouveau volume » ou « Nouveau réseau » selon l'onglet
+    root.querySelectorAll('[data-pane-only]').forEach(b => { b.hidden = b.dataset.paneOnly !== pane; });
   }
 
   /** Montre l'onglet courant de la section et le fait vivre ; rend la
@@ -78,6 +80,13 @@ const Sections = (() => {
       if (sec) show(sec, b.dataset.sectionTab);
     }));
     Object.keys(DEF).forEach(sec => paint(sec, current(sec)));
+    $$('[data-section-new]').forEach(b => b.addEventListener('click', () => {
+      const cluster = window.App && App.getCurrentCluster();
+      const sec = b.closest('[data-section]')?.dataset.section;
+      if (cluster && window.ObjectForms) {
+        ObjectForms.openNew(b.dataset.sectionNew, cluster, { onDone: () => activate(sec) });
+      }
+    }));
   }
 
   document.addEventListener('DOMContentLoaded', init);

@@ -356,6 +356,41 @@ Every list filters by words, sorts by any column (click the header, again to
 reverse; the order is remembered), opens a row's details, and opens a VM
 from its name. Lists refresh every 10 s while shown.
 
+**Creating, changing and deleting (1.59.0)**, as Harvester's own menus
+allow, each in a window that can stay open or be minimised, each gesture an
+action followed in the dock (`harvester-resources create|delete|sc-default|
+volume-expand|addon-values` on the command line):
+
+- **Images**: a new image from an http(s) address, with its storage class
+  (the default one proposed) and followed until imported; delete an image
+  no volume uses.
+- **Storage Classes** (administrators): a new class (replicas, stale replica
+  timeout, data locality, disk and node tags, reclaim policy, binding,
+  migration, expansion); make a class the default one (Harvester refuses a
+  second default: the old one is unset first, and set back if the new one is
+  refused); delete a class no volume or image uses.
+- **Volumes**: a new volume, empty or from an image (its `lh-` class read
+  from the image, the size at least the image's virtual size); expand a
+  volume from its detail; the existing deletion of orphaned volumes stays.
+- **VM Networks** (administrators): a new VLAN or untagged network on a
+  cluster network, route automatic (DHCP) or manual; delete a network no VM
+  uses, from the list of networks with no VM.
+- **SSH Keys**: a new key, pasted or read from a .pub file, followed until
+  Harvester validates it; delete.
+- **Secrets**: a new secret with several keys; delete a secret no VM uses
+  (the cluster's own secrets are never offered).
+- **Add-ons** (administrators): the configuration (Helm values, YAML) in a
+  window; saving redeploys an enabled add-on. Reading it is reserved to
+  administrators too, since it can carry passwords.
+
+Verified on harv1, each gesture checked with kubectl then undone: an image
+imported by URL (28 s), a volume made from it and expanded from 1 to 2 Gi,
+the image refused for deletion while used, then both deleted; a storage
+class created, made default and back, deleted; an SSH key validated and
+deleted; a secret with two keys (their names listed, never their values),
+deleted; a VLAN 3999 network created and deleted; an add-on configuration
+changed and restored.
+
 - **The host network, one virtual switch at a time (Fabric).** The
   Network view below looks at the network from the VMs; this one reads it
   the way an ESXi operator reads a Standard Switch: one block per switch,

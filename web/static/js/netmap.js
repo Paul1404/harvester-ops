@@ -224,7 +224,10 @@ const NetMap = (() => {
         <header class="vsw-head"><span class="vsw-kind">${esc(tr('netmap.idle', 'Networks with no VM'))}</span></header>
         <div class="vsw-unused-list">${m.idle.map(b => `<div class="vsw-pg" data-block="${esc(b.id)}">
           ${b.pod ? esc(b.title) : val(b.title, 'vsw-name')}
-          <div class="vsw-tags"><span>${esc(b.tag)}</span></div></div>`).join('')}</div>
+          <div class="vsw-tags"><span>${esc(b.tag)}</span></div>
+          ${/^nad-/.test(b.id) && window.ObjectForms ? `<button type="button" class="btn btn-sm btn-danger tip needs-admin"
+              data-netmap-delete="${esc(b.id.slice(4))}" data-tip-i18n="of.t.netDelete">${esc(tr('of.delete', 'Delete'))}</button>` : ''}
+          </div>`).join('')}</div>
       </section>` : '';
     const scroll = body.scrollTop;
     body.innerHTML = (m.used.map(blockHtml).join('') + idle)
@@ -281,6 +284,15 @@ const NetMap = (() => {
       if (edit && window.VMEdit) {
         const [ns, name] = edit.dataset.netmapEdit.split('/');
         window.VMEdit.open(cluster, ns, name);
+        return;
+      }
+      // v1.59.0 : supprimer un réseau de VMs que rien n'utilise
+      const drop = e.target.closest('[data-netmap-delete]');
+      if (drop && window.ObjectForms) {
+        const [ns, name] = drop.dataset.netmapDelete.split('/');
+        ObjectForms.remove('network', cluster, { namespace: ns, name })
+          .then(id => { if (id) { if (window.Dock && Dock.poll) Dock.poll(); setTimeout(() => refresh(), 3000); } })
+          .catch(err => alert(err.message));
         return;
       }
       // v1.57.0 : la fabrique est l'onglet Underlay de la section Network

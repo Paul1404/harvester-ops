@@ -219,6 +219,11 @@
           <button type="button" class="sub-tab tip" role="tab" data-section-tab="images" data-i18n-title="section.imagesTip" title="VM images: source, size, state and the VMs using them"><span class="tab-icon" data-icon="cdrom"></span> <span data-i18n="section.images">Images</span></button>
           <button type="button" class="sub-tab tip" role="tab" data-section-tab="classes" data-i18n-title="section.classesTip" title="Storage classes: replicas, placement and the volumes using them"><span class="tab-icon" data-icon="disk"></span> <span data-i18n="section.classes">Storage Classes</span></button>
         </div>
+        <div class="section-actions">
+          <button type="button" class="btn btn-sm btn-primary tip" data-section-new="volume" data-pane-only="volumes"
+                  data-tip-i18n="of.t.newVolume" data-i18n-title="of.t.newVolume" title="Create an empty volume, or one from an image">
+            <span data-icon="add"></span> <span data-i18n="of.new.volume">New volume</span></button>
+        </div>
       </div>
       <div class="section-pane" data-pane="volumes" data-board="storage" hidden><div class="topology-host" data-topology-mode="storage"></div></div>
       <div class="section-pane" data-pane="images" hidden><div class="resource-host" data-resource="images"></div></div>
@@ -235,6 +240,11 @@
           <button type="button" class="sub-tab tip" role="tab" data-section-tab="vmnets" data-i18n-title="section.vmnetsTip" title="The networks VMs attach to (VLAN, untagged), one block per network"><span class="tab-icon" data-icon="network"></span> <span data-i18n="section.vmnets">VM Networks</span></button>
           <button type="button" class="sub-tab tip" role="tab" data-section-tab="overlay" data-i18n-title="overview.tabVpcTip" title="kube-ovn: VPCs, subnets and overlay networks, with their forms"><span class="tab-icon" data-icon="network"></span> <span data-i18n="section.overlay">Overlay Networks</span></button>
           <button type="button" class="sub-tab tip" role="tab" data-section-tab="underlay" data-i18n-title="overview.tabFabricTip" title="Physical interfaces, virtual switches and the networks above them"><span class="tab-icon" data-icon="switch"></span> <span data-i18n="section.underlay">Underlay Networks</span></button>
+        </div>
+        <div class="section-actions">
+          <button type="button" class="btn btn-sm btn-primary tip needs-admin" data-section-new="network" data-pane-only="vmnets"
+                  data-tip-i18n="of.t.newNetwork" data-i18n-title="of.t.newNetwork" title="Create a VM network: a VLAN or an untagged network on a cluster network">
+            <span data-icon="add"></span> <span data-i18n="of.new.network">New VM network</span></button>
         </div>
       </div>
       <div class="section-pane" data-pane="vmnets" data-board="network" hidden><div class="topology-host" data-topology-mode="network"></div></div>
@@ -956,6 +966,7 @@
 <script src="/static/js/resource-views.js"></script>
 <script src="/static/js/sections.js"></script>
 <script src="/static/js/backups.js"></script>
+<script src="/static/js/object-forms.js"></script>
 <script src="/static/js/versions.js"></script>
 <script src="/static/js/console-accounts.js"></script>
 <script src="/static/js/user-menu.js"></script>

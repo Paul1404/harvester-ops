@@ -418,6 +418,45 @@ sur l'en-tête, à nouveau pour inverser ; l'ordre est retenu), ouvre le
 détail d'une ligne et ouvre une VM depuis son nom. Les listes se relisent
 toutes les 10 s tant qu'elles sont à l'écran.
 
+**Créer, modifier, supprimer (1.59.0)**, comme le permettent les menus de
+Harvester, chacun dans une fenêtre qu'on garde ouverte ou qu'on réduit,
+chaque geste étant une action suivie dans le dock (`harvester-resources
+create|delete|sc-default|volume-expand|addon-values` en ligne de commande) :
+
+- **Images** : une nouvelle image depuis une adresse http(s), avec sa classe
+  de stockage (celle par défaut proposée), suivie jusqu'à son import ;
+  supprimer une image qu'aucun volume n'utilise.
+- **Classes de stockage** (administrateurs) : une nouvelle classe (répliques,
+  délai d'une réplique périmée, localité des données, étiquettes de disque
+  et de nœud, récupération, liaison, migration, extension) ; en faire la
+  classe par défaut (Harvester refuse une seconde classe par défaut :
+  l'ancienne est retirée d'abord, et remise si la nouvelle est refusée) ;
+  supprimer une classe qu'aucun volume ni aucune image n'utilise.
+- **Volumes** : un nouveau volume, vide ou depuis une image (sa classe `lh-`
+  lue sur l'image, la taille au moins la taille virtuelle de l'image) ;
+  agrandir un volume depuis son détail ; la suppression des volumes
+  orphelins reste celle d'avant.
+- **Réseaux des VMs** (administrateurs) : un nouveau réseau VLAN ou sans
+  étiquette sur un réseau de cluster, route automatique (DHCP) ou manuelle ;
+  supprimer un réseau qu'aucune VM n'utilise, depuis la liste des réseaux
+  sans VM.
+- **Clés SSH** : une nouvelle clé, collée ou lue dans un fichier .pub,
+  suivie jusqu'à sa validation par Harvester ; supprimer.
+- **Secrets** : un nouveau secret à plusieurs clés ; supprimer un secret
+  qu'aucune VM n'utilise (les secrets du cluster lui-même ne sont jamais
+  proposés).
+- **Add-ons** (administrateurs) : la configuration (valeurs Helm, YAML) dans
+  une fenêtre ; l'enregistrer redéploie un add-on activé. La lire est aussi
+  réservé aux administrateurs, car elle peut porter des mots de passe.
+
+Vérifié sur harv1, chaque geste contrôlé par kubectl puis défait : une image
+importée par URL (28 s), un volume fait depuis elle et agrandi de 1 à 2 Gio,
+la suppression de l'image refusée tant qu'elle servait, puis les deux
+supprimés ; une classe de stockage créée, rendue par défaut puis rendue,
+supprimée ; une clé SSH validée puis supprimée ; un secret à deux clés
+(leurs noms listés, jamais leurs valeurs), supprimé ; un réseau VLAN 3999
+créé et supprimé ; la configuration d'un add-on modifiée puis remise.
+
 - **Le réseau de l'hôte, un switch virtuel à la fois (Fabrique).** La
   vue Réseau ci-dessous regarde le réseau depuis les VMs ; celle-ci le lit
   comme un exploitant ESXi lit un Standard Switch : un bloc par switch, de

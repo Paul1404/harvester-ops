@@ -232,3 +232,12 @@ def test_the_session_ends_after_its_lifetime():
     assert s.get(sid)["user"] == "alice"
     t[0] = 101
     assert s.get(sid) is None
+
+
+def test_an_anonymous_write_is_asked_to_sign_in_not_told_its_role(fresh):
+    """Le garde des rôles passait avant l'authentification : une écriture sans
+    session recevait « il faut le rôle opérateur, vous êtes lecteur »."""
+    wapp._accounts().create("alice", PW, "admin")
+    with wapp.app.test_client() as c:
+        r = c.post("/api/volumes/harv1/default/data/expand", json={"size": "2Gi"}, headers=ORIGIN)
+        assert r.status_code == 401 and r.get_json()["error"] == "authentication required"

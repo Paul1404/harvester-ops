@@ -10545,11 +10545,18 @@ def api_my_password():
 # volumes (web/cluster_objects.py). Écriture : bin/harvester-resources.py.
 # ---------------------------------------------------------------------------
 import cluster_objects as _co  # noqa: E402
+import hv_backups as _hb  # noqa: E402
+
+# v1.58.0 : les listes de la fenêtre Backups, servies par la même route
+_BACKUP_KINDS = {"vmbackups": _hb.K_BACKUP, "vmsnapshots": _hb.K_BACKUP,
+                 "schedules": _hb.K_SCHEDULE, "volsnaps": _hb.K_VOLSNAP}
 
 RESOURCES_SCRIPT = "harvester-resources.py"
 _CO_KIND_NAMES = {"vm": "virtualmachines.kubevirt.io", "pvc": "persistentvolumeclaims",
                   "vmimage": "virtualmachineimages.harvesterhci.io"}
-_CO_KIND_OF = {"virtualmachineimages.harvesterhci.io": "VirtualMachineImage",
+_CO_KIND_OF = {_hb.K_BACKUP: "VirtualMachineBackup", _hb.K_SCHEDULE: "ScheduleVMBackup",
+               _hb.K_VOLSNAP: "VolumeSnapshot",
+               "virtualmachineimages.harvesterhci.io": "VirtualMachineImage",
                "virtualmachines.kubevirt.io": "VirtualMachine",
                "persistentvolumeclaims": "PersistentVolumeClaim",
                "storageclasses.storage.k8s.io": "StorageClass",
@@ -10581,13 +10588,31 @@ def _kubectl_kinds(kc, kinds, cluster):
 def api_cluster_objects(cluster, kind):
     """Une liste de la vue Storage, Security ou Add-ons, avec qui s'en sert.
     Un Secret ne sort qu'avec le nom de ses clés, jamais ses valeurs."""
-    if kind not in _co.KINDS:
-        return jsonify({"error": f"kind must be one of {', '.join(_co.KINDS)}"}), 400
+    if kind not in _co.KINDS and kind not in _BACKUP_KINDS:
+        kinds_all = ", ".join(list(_co.KINDS) + list(_BACKUP_KINDS))
+        return jsonify({"error": f"kind must be one of {kinds_all}"}), 400
     kc = _kubectl_for_cluster(cluster)
     if not kc:
         return jsonify({"error": f"unknown cluster: {cluster}"}), 404
     if _cluster_reachable(kc) is False:
         return jsonify(_unreachable_payload(cluster, kc)), 200
+    if kind in _BACKUP_KINDS:
+        ns = request.args.get("namespace") or ""
+        if ns and not _K8S_NAME_RE.match(ns):
+            return jsonify({"error": "invalid namespace"}), 400
+        got = _kubectl_kinds(kc, [_BACKUP_KINDS[kind]], cluster)[_BACKUP_KINDS[kind]]
+        if ns:
+            got = [o for o in got if ((o.get("metadata") or {}).get("namespace")) == ns]
+        if kind == "vmbackups":
+            rows = _hb.backups(got, "backup")
+        elif kind == "vmsnapshots":
+            rows = _hb.backups(got, "snapshot")
+        elif kind == "schedules":
+            rows = _hb.schedules(got)
+        else:
+            rows = _hb.volume_snapshots(got)
+        rows.sort(key=lambda r: r.get("created") or "", reverse=True)
+        return jsonify({"cluster": cluster, "kind": kind, "items": rows})
     main = _co.FETCH[kind]
     kinds = [main] + [_CO_KIND_NAMES[u] for u in _co.NEEDS_USAGE[kind]]
     got = _kubectl_kinds(kc, kinds, cluster)
@@ -10631,6 +10656,179 @@ def api_addon_toggle(cluster, namespace, name):
     if err:
         return err
     return jsonify({"action_id": run.id, "addon": f"{namespace}/{name}", "enabled": body["enabled"]}), 202
+
+
+# ---------------------------------------------------------------------------
+# v1.58.0 : la fenêtre Backups (sauvegardes, instantanés, planifications,
+# instantanés de volumes). Chaque écriture est une action suivie, par
+# bin/harvester-resources.py (parité CLI).
+# ---------------------------------------------------------------------------
+
+def _res_action(cluster, label, args):
+    script = BIN_DIR / RESOURCES_SCRIPT
+    if not script.is_file():
+        return None, (jsonify({"error": f"{RESOURCES_SCRIPT} not deployed"}), 503)
+    kc = _kubectl_for_cluster(cluster)
+    if not kc:
+        return None, (jsonify({"error": f"unknown cluster: {cluster}"}), 404)
+    cmd = [sys.executable, str(script), args[0], args[1], "--kubeconfig", kc] + list(args[2:])
+    return _cli_action(cluster, label, cmd, "harvester-resources",
+                       after=lambda: _invalidate_cluster_caches(cluster))
+
+
+def _res_reply(run, err, **extra):
+    if err:
+        return err
+    return jsonify({"action_id": run.id, **extra}), 202
+
+
+def _body_name(body, key, required=True):
+    v = str(body.get(key) or "").strip()
+    if not v and not required:
+        return None
+    try:
+        return _hb.check_name(v, key)
+    except ValueError as e:
+        raise ValueError(str(e)) from None
+
+
+@app.route("/api/backup-target/<cluster>")
+@requires_auth
+def api_backup_target(cluster):
+    """La cible de sauvegarde du cluster, sans ses identifiants (un S3 porte
+    ses clés dans le réglage)."""
+    kc = _kubectl_for_cluster(cluster)
+    if not kc:
+        return jsonify({"error": f"unknown cluster: {cluster}"}), 404
+    if _cluster_reachable(kc) is False:
+        return jsonify(_unreachable_payload(cluster, kc)), 200
+    got = _kubectl_json(kc, "get", "settings.harvesterhci.io", "backup-target", cluster=cluster) or {}
+    try:
+        val = json.loads(got.get("value") or "{}") if got.get("value") else {}
+    except ValueError:
+        val = {}
+    return jsonify({"type": val.get("type") or "", "endpoint": val.get("endpoint") or "",
+                    "bucket": val.get("bucketName") or "", "region": val.get("bucketRegion") or "",
+                    "set": bool(val.get("type") and val.get("endpoint"))})
+
+
+@app.route("/api/backups/<cluster>/<namespace>", methods=["POST"])
+@requires_auth
+@_rate_limit("20/minute")
+def api_backup_create(cluster, namespace):
+    body = request.get_json(silent=True) or {}
+    kind = body.get("type") or "backup"
+    try:
+        vm = _body_name(body, "vm")
+        name = _body_name(body, "name", required=False)
+        if kind not in ("backup", "snapshot"):
+            raise ValueError("type must be backup or snapshot")
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
+    args = ["backup", "create", "--namespace", namespace, "--vm", vm, "--type", kind]
+    if name:
+        args += ["--name", name]
+    run, err = _res_action(cluster, f"{kind}:create:{namespace}/{vm}", args)
+    return _res_reply(run, err, vm=vm, type=kind)
+
+
+@app.route("/api/backups/<cluster>/<namespace>/<name>/restore", methods=["POST"])
+@requires_auth
+@_rate_limit("20/minute")
+def api_backup_restore(cluster, namespace, name):
+    body = request.get_json(silent=True) or {}
+    args = ["backup", "restore", "--namespace", namespace, "--name", name]
+    try:
+        if body.get("replace"):
+            args.append("--replace")
+        else:
+            args += ["--new-vm", _body_name(body, "new_vm")]
+            if body.get("keep_mac"):
+                args.append("--keep-mac")
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
+    if body.get("halt"):
+        args.append("--halt")
+    if body.get("delete_policy") in ("retain", "delete"):
+        args += ["--delete-policy", body["delete_policy"]]
+    target = "replace" if body.get("replace") else body.get("new_vm")
+    run, err = _res_action(cluster, f"backup:restore:{namespace}/{name}", args)
+    return _res_reply(run, err, backup=name, target=target)
+
+
+@app.route("/api/backups/<cluster>/<namespace>/<name>", methods=["DELETE"])
+@requires_auth
+@_rate_limit("20/minute")
+def api_backup_delete(cluster, namespace, name):
+    run, err = _res_action(cluster, f"backup:delete:{namespace}/{name}",
+                           ["backup", "delete", "--namespace", namespace, "--name", name])
+    return _res_reply(run, err, backup=name)
+
+
+@app.route("/api/schedules/<cluster>/<namespace>", methods=["POST"])
+@requires_auth
+@_rate_limit("20/minute")
+def api_schedule_create(cluster, namespace):
+    body = request.get_json(silent=True) or {}
+    try:
+        name, vm = _body_name(body, "name"), _body_name(body, "vm")
+        _hb.schedule_manifest(namespace, name, vm, body.get("cron"), body.get("retain"),
+                              body.get("max_failure"), body.get("type") or "backup")
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
+    args = ["schedule", "create", "--namespace", namespace, "--name", name, "--vm", vm,
+            "--cron", _hb.check_cron(body["cron"]), "--retain", str(int(body["retain"])),
+            "--max-failure", str(int(body["max_failure"])), "--type", body.get("type") or "backup"]
+    run, err = _res_action(cluster, f"schedule:create:{namespace}/{name}", args)
+    return _res_reply(run, err, schedule=name)
+
+
+@app.route("/api/schedules/<cluster>/<namespace>/<name>/<verb>", methods=["POST"])
+@requires_auth
+@_rate_limit("20/minute")
+def api_schedule_toggle(cluster, namespace, name, verb):
+    if verb not in ("suspend", "resume"):
+        return jsonify({"error": "suspend or resume"}), 400
+    run, err = _res_action(cluster, f"schedule:{verb}:{namespace}/{name}",
+                           ["schedule", verb, "--namespace", namespace, "--name", name])
+    return _res_reply(run, err, schedule=name)
+
+
+@app.route("/api/schedules/<cluster>/<namespace>/<name>", methods=["DELETE"])
+@requires_auth
+@_rate_limit("20/minute")
+def api_schedule_delete(cluster, namespace, name):
+    run, err = _res_action(cluster, f"schedule:delete:{namespace}/{name}",
+                           ["schedule", "delete", "--namespace", namespace, "--name", name])
+    return _res_reply(run, err, schedule=name)
+
+
+@app.route("/api/volsnaps/<cluster>/<namespace>/<name>/restore", methods=["POST"])
+@requires_auth
+@_rate_limit("20/minute")
+def api_volsnap_restore(cluster, namespace, name):
+    body = request.get_json(silent=True) or {}
+    try:
+        new = _body_name(body, "new_volume")
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
+    args = ["volsnap", "restore", "--namespace", namespace, "--name", name, "--new-volume", new]
+    sc = str(body.get("storage_class") or "").strip()
+    if sc:
+        if not _K8S_NAME_RE.match(sc):
+            return jsonify({"error": "invalid storage class"}), 400
+        args += ["--storage-class", sc]
+    run, err = _res_action(cluster, f"volsnap:restore:{namespace}/{name}", args)
+    return _res_reply(run, err, snapshot=name, volume=new)
+
+
+@app.route("/api/volsnaps/<cluster>/<namespace>/<name>", methods=["DELETE"])
+@requires_auth
+@_rate_limit("20/minute")
+def api_volsnap_delete(cluster, namespace, name):
+    run, err = _res_action(cluster, f"volsnap:delete:{namespace}/{name}",
+                           ["volsnap", "delete", "--namespace", namespace, "--name", name])
+    return _res_reply(run, err, snapshot=name)
 
 
 # ---------------------------------------------------------------------------

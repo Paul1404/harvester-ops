@@ -71,6 +71,41 @@ const ResourceViews = (() => {
   };
   const addonBusy = (r) => /ing$/.test(r.status || '');
 
+  function backupState(r) {
+    if (r.error) return badge('fail', tr('res.img.failed'), r.error);
+    if (r.ready) return badge('ok', tr('res.img.ready'));
+    return badge('info', r.progress != null ? tr('res.img.importing', { pct: r.progress }) : tr('bk.st.inProgress'));
+  }
+
+  // Un cron à cinq champs, dit en clair quand il suit un des modèles du
+  // formulaire (toutes les heures, chaque jour, chaque semaine).
+  function cronText(cron) {
+    const f = String(cron || '').split(/\s+/);
+    if (f.length !== 5) return cron || '';
+    const [mi, h, dom, mon, dow] = f;
+    const two = (x) => String(x).padStart(2, '0');
+    if (/^\d+$/.test(mi) && h === '*' && dom === '*' && mon === '*' && dow === '*') return tr('bk.cron.hourly', { m: two(mi) });
+    if (/^\d+$/.test(mi) && /^\d+$/.test(h) && dom === '*' && mon === '*') {
+      if (dow === '*') return tr('bk.cron.daily', { t: `${two(h)}:${two(mi)}` });
+      if (/^\d$/.test(dow)) {
+        const day = new Date(2026, 8, 27 + Number(dow) % 7).toLocaleDateString(undefined, { weekday: 'long' });
+        return tr('bk.cron.weekly', { day, t: `${two(h)}:${two(mi)}` });
+      }
+    }
+    return cron;
+  }
+
+  const ACT_LABEL = {
+    restore: () => tr('bk.act.restore'), delete: () => tr('bk.act.delete'),
+    suspend: () => tr('bk.act.suspend'), resume: () => tr('bk.act.resume'),
+  };
+  const ACT_TIP = {
+    restore: () => tr('bk.act.restoreTip'), delete: () => tr('bk.act.deleteTip'),
+    suspend: () => tr('bk.act.suspendTip'), resume: () => tr('bk.act.resumeTip'),
+  };
+  const act = (a, disabled, why) => `<button type="button" class="btn btn-sm ${a === 'delete' ? 'btn-danger' : 'btn-secondary'} res-act tip"
+      data-act="${a}" data-tip="${esc(disabled && why ? why : ACT_TIP[a]())}" ${disabled ? 'disabled' : ''}>${esc(ACT_LABEL[a]())}</button>`;
+
   const VIEWS = {
     images: {
       cols: () => [tr('res.col.name'), tr('res.col.source'), tr('res.col.size'), tr('res.col.state'),
@@ -142,12 +177,67 @@ const ResourceViews = (() => {
             ${addonBusy(r) ? 'disabled' : ''}>${esc(r.enabled ? tr('res.addon.disable') : tr('res.addon.enable'))}</button>`],
       details: null,
       text: (r) => `${r.namespace}/${r.name} ${r.chart}`,
-      sort: [(r) => r.name, (r) => r.chart, (r) => r.status, null]
+      sort: [(r) => r.name, (r) => r.chart, (r) => r.status, null],
+    },
+    // v1.58.0 : la fenêtre Backups
+    schedules: {
+      cols: () => [tr('res.col.name'), tr('bk.col.vm'), tr('res.col.type'), tr('bk.col.when'), tr('bk.col.keep'),
+                   tr('bk.col.last'), tr('res.col.state'), ''],
+      row: (r) => [
+        `<strong>${esc(r.name)}</strong><div class="res-dim">${esc(r.namespace)}</div>`,
+        vms([`${r.namespace}/${r.vm}`]),
+        esc(r.type === 'snapshot' ? tr('bk.f.typeSnapshot') : tr('bk.f.typeBackup')),
+        `<span class="tip" data-tip="${esc(r.cron)}">${esc(cronText(r.cron))}</span>`,
+        `${esc(r.kept)} / ${esc(r.retain)}`, r.last ? age(r.last) : '–',
+        r.suspended ? badge('dim', tr('bk.st.suspended'))
+          : (r.failures ? badge('warn', tr('bk.st.failures', { n: r.failures }), tr('bk.st.failuresTip', { max: r.max_failure }))
+            : badge('ok', tr('bk.st.active'))),
+        act(r.suspended ? 'resume' : 'suspend') + act('delete')],
+      details: null,
+      text: (r) => `${r.namespace}/${r.name} ${r.vm} ${r.cron}`,
+      sort: [(r) => r.name, (r) => r.vm, (r) => r.type, (r) => r.cron, (r) => r.kept, (r) => r.last,
+             (r) => (r.suspended ? 1 : 0), null],
+    },
+    vmbackups: {
+      cols: () => [tr('res.col.name'), tr('bk.col.vm'), tr('res.col.state'), tr('res.col.size'), tr('bk.col.target'),
+                   tr('res.col.age'), ''],
+      row: (r) => [
+        `<strong>${esc(r.name)}</strong><div class="res-dim">${esc(r.namespace)}${r.schedule ? ` · ${esc(tr('bk.fromSchedule', { name: r.schedule }))}` : ''}</div>`,
+        vms([`${r.namespace}/${r.vm}`]), backupState(r), bytes(r.size),
+        `<span class="res-dim">${esc(r.target || '–')}</span>`, age(r.created),
+        act('restore', !r.ready) + act('delete')],
+      details: null,
+      text: (r) => `${r.namespace}/${r.name} ${r.vm} ${r.schedule || ''}`,
+      sort: [(r) => r.name, (r) => r.vm, (r) => (r.ready ? 2 : r.error ? 0 : 1), (r) => r.size || 0, (r) => r.target,
+             (r) => r.created, null],
+    },
+    vmsnapshots: {
+      cols: () => [tr('res.col.name'), tr('bk.col.vm'), tr('res.col.state'), tr('res.col.age'), ''],
+      row: (r) => [
+        `<strong>${esc(r.name)}</strong><div class="res-dim">${esc(r.namespace)}${r.schedule ? ` · ${esc(tr('bk.fromSchedule', { name: r.schedule }))}` : ''}</div>`,
+        vms([`${r.namespace}/${r.vm}`]), backupState(r), age(r.created),
+        act('restore', !r.ready) + act('delete')],
+      details: null,
+      text: (r) => `${r.namespace}/${r.name} ${r.vm} ${r.schedule || ''}`,
+      sort: [(r) => r.name, (r) => r.vm, (r) => (r.ready ? 2 : r.error ? 0 : 1), (r) => r.created, null],
+    },
+    volsnaps: {
+      cols: () => [tr('res.col.name'), tr('bk.col.volume'), tr('res.col.size'), tr('res.col.state'), tr('bk.col.owner'),
+                   tr('res.col.age'), ''],
+      row: (r) => [
+        `<strong>${esc(r.name)}</strong><div class="res-dim">${esc(r.namespace)}</div>`,
+        `<code>${esc(r.pvc || '–')}</code>`, esc(r.size || '–'),
+        r.error ? badge('fail', tr('res.img.failed'), r.error) : (r.ready ? badge('ok', tr('res.img.ready')) : badge('info', tr('bk.st.inProgress'))),
+        r.owner ? `<span class="res-dim tip" data-tip="${esc(tr('bk.ownerTip'))}">${icon('snapshot', 11)} ${esc(r.owner)}</span>` : '–',
+        age(r.created), act('restore', !r.ready) + act('delete', !!r.owner, tr('bk.ownerTip'))],
+      details: null,
+      text: (r) => `${r.namespace}/${r.name} ${r.pvc || ''} ${r.owner || ''}`,
+      sort: [(r) => r.name, (r) => r.pvc, (r) => r.size, (r) => (r.ready ? 1 : 0), (r) => r.owner, (r) => r.created, null]
     },
   };
 
   // -- rendu ------------------------------------------------------------------
-  function shell() {
+  function shell(cur) {
     const k = cur.kind;
     cur.host.innerHTML = `
       <div class="card res-card" data-kind="${esc(k)}">
@@ -163,17 +253,17 @@ const ResourceViews = (() => {
         <div class="res-body"><p class="form-hint">${esc(tr('common.loading'))}</p></div>
       </div>`;
     const card = cur.host.querySelector('.res-card');
-    card.querySelector('.res-filter').addEventListener('input', (e) => { cur.filter = e.target.value; render(); });
-    card.querySelector('.res-refresh').addEventListener('click', () => load());
-    card.querySelector('.res-system-box')?.addEventListener('change', (e) => { cur.showSystem = e.target.checked; load(); });
-    card.addEventListener('click', onClick);
+    card.querySelector('.res-filter').addEventListener('input', (e) => { cur.filter = e.target.value; render(cur); });
+    card.querySelector('.res-refresh').addEventListener('click', () => load(cur));
+    card.querySelector('.res-system-box')?.addEventListener('change', (e) => { cur.showSystem = e.target.checked; load(cur); });
+    card.addEventListener('click', (e) => onClick(cur, e));
     card.addEventListener('keydown', (e) => {
       const head = e.target.closest('th[data-sort]');
-      if (head && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); sortBy(Number(head.dataset.sort)); }
+      if (head && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); sortBy(cur, Number(head.dataset.sort)); }
     });
   }
 
-  function render() {
+  function render(cur) {
     if (!cur || !cur.host.isConnected) return;
     const body = cur.host.querySelector('.res-body');
     const count = cur.host.querySelector('.res-count');
@@ -221,6 +311,7 @@ const ResourceViews = (() => {
         aria-sort="${on ? (srt.dir > 0 ? 'ascending' : 'descending') : 'none'}"
         data-tip="${esc(tr('res.sortTip'))}">${esc(c)} ${arrow}</th>`;
     };
+    cur.rows = new Map(rows.map(r => [`${r.namespace || ''}/${r.name}`, r]));
     body.innerHTML = `<table class="data-table res-table"><thead><tr>${cols.map(th).join('')}</tr></thead><tbody>
       ${rows.map(r => {
         const id = `${r.namespace || ''}/${r.name}`;
@@ -234,16 +325,25 @@ const ResourceViews = (() => {
 
   const SORT_KEY = (kind) => `harvester_ops_res_sort_${kind}`;
 
-  function sortBy(col) {
+  function sortBy(cur, col) {
     const same = cur.sort && cur.sort.col === col;
     cur.sort = { col, dir: same ? -cur.sort.dir : 1 };
     try { localStorage.setItem(SORT_KEY(cur.kind), JSON.stringify(cur.sort)); } catch {}
-    render();
+    render(cur);
   }
 
-  function onClick(e) {
+  function onClick(cur, e) {
     const head = e.target.closest('th[data-sort]');
-    if (head) { sortBy(Number(head.dataset.sort)); return; }
+    if (head) { sortBy(cur, Number(head.dataset.sort)); return; }
+    // v1.58.0 : un geste de ligne (restaurer, supprimer, suspendre) part à
+    // qui a monté la liste (la fenêtre Backups)
+    const actBtn = e.target.closest('[data-act]');
+    if (actBtn && cur.opts && cur.opts.onAction) {
+      const id = actBtn.closest('tr')?.dataset.id;
+      const row = cur.rows && cur.rows.get(id);
+      if (row) cur.opts.onAction(actBtn.dataset.act, row);
+      return;
+    }
     const vm = e.target.closest('[data-vm]');
     if (vm) {
       const [ns, name] = vm.dataset.vm.split('/');
@@ -251,21 +351,21 @@ const ResourceViews = (() => {
       return;
     }
     const add = e.target.closest('[data-addon]');
-    if (add) { toggleAddon(add); return; }
+    if (add) { toggleAddon(cur, add); return; }
     const row = e.target.closest('tr.res-row');
     if (row && !e.target.closest('button, a, input')) {
       const id = row.dataset.id;
       if (cur.open.has(id)) cur.open.delete(id); else cur.open.add(id);
-      render();
+      render(cur);
     }
   }
 
-  function say(html) {
+  function say(cur, html) {
     const fb = cur && cur.host.querySelector('.res-feedback');
     if (fb) fb.innerHTML = html;
   }
 
-  async function toggleAddon(btn) {
+  async function toggleAddon(cur, btn) {
     const ref = btn.dataset.addon;
     const enable = btn.dataset.enable === '1';
     const [ns, name] = ref.split('/');
@@ -276,74 +376,100 @@ const ResourceViews = (() => {
         method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ enabled: enable }) });
       const out = await r.json();
       if (!r.ok) throw new Error(out.hint || out.error || `HTTP ${r.status}`);
-      say(esc(tr('res.addon.started', { name, id: out.action_id })));
+      say(cur, esc(tr('res.addon.started', { name, id: out.action_id })));
       if (window.Dock && Dock.poll) Dock.poll();
-      follow(out.action_id, name, enable);
+      follow(cur, out.action_id, name, enable);
     } catch (e) {
       btn.disabled = false;
-      say(`<span class="res-error">${esc(tr('res.error', { msg: e.message }))}</span>`);
+      say(cur, `<span class="res-error">${esc(tr('res.error', { msg: e.message }))}</span>`);
     }
   }
 
-  function follow(actionId, name, enable) {
-    load();
+  function follow(cur, actionId, name, enable) {
+    load(cur);
     if (!window.SSEReconnect) return;
     const es = SSEReconnect.connect(`/api/stream/${enc(actionId)}`, {
       on: {
         step: (e) => {
-          try { const s = JSON.parse(e.data); if (s.message) say(esc(`${name}: ${s.message}`)); } catch { /* ligne illisible */ }
+          try { const s = JSON.parse(e.data); if (s.message) say(cur, esc(`${name}: ${s.message}`)); } catch { /* ligne illisible */ }
         },
         end: (e) => {
           let d = {};
           try { d = JSON.parse(e.data); } catch { /* fin sans détail */ }
           es.close();
-          say(d.status === 'done'
+          say(cur, d.status === 'done'
             ? `${icon('ok')} ${esc(enable ? tr('res.addon.enabled', { name }) : tr('res.addon.disabledDone', { name }))}`
             : `<span class="res-error">${icon('fail')} ${esc(tr('res.error', { msg: d.error_summary || d.status || '?' }))}</span>`);
-          load();
+          load(cur);
         },
       },
     });
   }
 
   // -- cycle de vie ---------------------------------------------------------------
-  async function load() {
-    if (!cur) return;
-    const me = cur;
-    const q = me.kind === 'secrets' && me.showSystem ? '?all=1' : '';
+  // v1.58.0 : une liste est une INSTANCE (la section en cours, et chaque
+  // onglet de la fenêtre Backups vivent côte à côte).
+  async function load(cur) {
+    if (!cur || cur.stopped) return;
+    const params = new URLSearchParams();
+    if (cur.kind === 'secrets' && cur.showSystem) params.set('all', '1');
+    if (cur.opts && cur.opts.namespace) params.set('namespace', cur.opts.namespace);
+    const q = params.toString() ? `?${params}` : '';
     try {
-      const r = await fetch(`/api/cluster-objects/${enc(me.cluster)}/${enc(me.kind)}${q}`);
+      const r = await fetch(`/api/cluster-objects/${enc(cur.cluster)}/${enc(cur.kind)}${q}`);
       const d = await r.json();
-      if (me !== cur) return;
+      if (cur.stopped) return;
       cur.data = r.ok ? d : { error: d.error === 'cluster refused' ? tr('res.refused') : (d.error || `HTTP ${r.status}`), hint: d.hint };
     } catch (e) {
-      if (me !== cur) return;
+      if (cur.stopped) return;
       cur.data = { error: e.message };
     }
-    render();
+    render(cur);
   }
+
+  function create(kind, cluster, host, opts = {}) {
+    let sort = null;
+    try { sort = JSON.parse(localStorage.getItem(SORT_KEY(kind)) || 'null'); } catch {}
+    const cur = { kind, cluster, host, opts, timer: null, data: null, filter: '', showSystem: false,
+                  open: new Set(), sort, rows: new Map(), stopped: false };
+    shell(cur);
+    cur.timer = setInterval(() => { if (!document.hidden && cur.host.isConnected) load(cur); }, REFRESH_MS);
+    return cur;
+  }
+
+  function halt(cur) {
+    if (!cur) return;
+    cur.stopped = true;
+    if (cur.timer) clearInterval(cur.timer);
+  }
+
+  /** Une liste montée ailleurs que dans une section (fenêtre Backups). */
+  function mount(kind, cluster, host, opts = {}) {
+    if (!VIEWS[kind] || !host) return null;
+    const cur = create(kind, cluster, host, opts);
+    load(cur);
+    return { kind, refresh: () => load(cur), stop: () => halt(cur) };
+  }
+
+  // La liste de la section courante (Storage, Security, Add-ons).
+  let section = null;
 
   function start(kind, cluster, host) {
     if (!VIEWS[kind] || !host) return Promise.resolve();
-    const same = cur && cur.kind === kind && cur.cluster === cluster && cur.host === host;
+    const same = section && section.kind === kind && section.cluster === cluster && section.host === host
+      && !section.stopped;
     if (!same) {
-      stop();
-      let sort = null;
-      try { sort = JSON.parse(localStorage.getItem(SORT_KEY(kind)) || 'null'); } catch {}
-      cur = { kind, cluster, host, timer: null, data: null, filter: '', showSystem: false, open: new Set(), sort };
-      shell();
-    } else if (cur.timer) {
-      clearInterval(cur.timer);
+      halt(section);
+      section = create(kind, cluster, host);
     }
-    cur.timer = setInterval(() => { if (!document.hidden) load(); }, REFRESH_MS);
-    return load();
+    return load(section);
   }
 
   function stop() {
-    if (cur && cur.timer) clearInterval(cur.timer);
-    cur = null;
+    halt(section);
+    section = null;
   }
 
-  return { start, stop, refresh: () => load(), _bytes: bytes };
+  return { start, stop, mount, refresh: () => load(section), _bytes: bytes, _cronText: cronText };
 })();
 window.ResourceViews = ResourceViews;

@@ -4,6 +4,45 @@ All notable changes to this project will be documented here.
 Format inspired by [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 This file summarises each minor release; per-patch detail lives in `git log`.
 
+## [1.58.0] - 2026-09-26 - The Backups window: backups, snapshots and their schedules
+
+### Added
+- **Backups window**, opened by the Backups button right of the namespace
+  selector in Virtual machines: the four tabs of Harvester's "Backup and
+  Snapshots" menu, for the chosen namespace or all, in a window that stays
+  open next to the VMs and comes back after a reload. The backup target is
+  shown (type and endpoint, never the keys of an S3 target).
+- **VM Schedules**: back up or snapshot a VM every hour, day or week (or a
+  cron), keep N copies, suspend after N failures; said in plain words
+  ("every Sunday at 03:30"); suspend, resume, delete.
+- **VM Backups and VM Snapshots**: take one now; restore into a new VM
+  (optionally keeping the MAC addresses) or over the original (stopped,
+  confirmed), optionally left stopped; delete.
+- **Volume Snapshots**: restore into a new volume; a snapshot taken with a
+  VM snapshot can only go with it.
+- `harvester-resources backup|schedule|volsnap` on the command line; every
+  gesture of the window is an action followed in the dock.
+- The lists of the sections can be mounted anywhere (several at once): the
+  window's tabs reuse the filter, the sortable columns and the row actions.
+
+### Fixed
+- Harvester's own rules are checked before sending: a schedule at most once
+  an hour, at least 2 failures before suspending and fewer than the copies
+  kept (all three refused by Harvester, found on harv1).
+
+### Tests
+- The objects and reads of the window, the CLI commands (a target needed
+  for a backup, a stopped VM to replace, a taken name refused, a VM
+  snapshot's volume snapshot not deleted alone), the routes (namespace
+  filter, the target's keys never returned, the arguments passed to the
+  CLI); in Chromium, the four tabs, the schedule form and its cron, both
+  restores, the volume restore, suspend and delete, the window after a
+  reload.
+- Real, on harv1: a snapshot of a stopped VM (12 s), restored into a new
+  stopped VM (9 s), its volume snapshot restored into a new bound volume, a
+  backup to the NAS over NFS, a weekly schedule created, suspended, resumed
+  and deleted, everything deleted and the cluster back to its first state.
+
 ## [1.57.0] - 2026-09-26 - Sign-in required, and the Harvester sections under Cluster
 
 ### Added

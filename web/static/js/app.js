@@ -1680,6 +1680,10 @@ const App = (() => {
 
     // Création de VM : le namespace courant sert de proposition, le panneau
     // laisse en changer.
+    // v1.58.0 : la fenêtre Backups, sur l'espace de noms choisi
+    $('#btn-vm-backups')?.addEventListener('click', () => {
+      if (window.Backups) Backups.open(currentCluster, currentNamespace || $('#ns-dropdown')?.value || '');
+    });
     $('#btn-vm-exports')?.addEventListener('click', () => {
       if (window.VMTransfer) window.VMTransfer.openStore(currentCluster);
     });

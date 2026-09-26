@@ -413,6 +413,10 @@
         <label data-i18n="vms.namespace">Namespace:</label>
         <select id="ns-dropdown"></select>
         <span class="vm-count-badge" id="ns-vm-count">0 VMs</span>
+        <!-- v1.58.0 : le menu « Backup and Snapshots » de Harvester, en fenêtre -->
+        <button class="btn btn-sm btn-secondary btn-ico tip" id="btn-vm-backups"
+                data-tip-i18n="vms.backupsTip" data-i18n-title="vms.backupsTip"
+                title="Backups, snapshots and their schedules for this namespace, in a window"><span data-icon="snapshot"></span> <span data-i18n="vms.backups">Backups</span></button>
         <button class="btn btn-sm btn-secondary" id="btn-ns-notes" data-i18n-title="vms.nsNotes" title="Namespace notes"><span data-icon="notes"></span> <span data-i18n="vms.nsNotes">Namespace notes</span></button>
         <button class="btn btn-sm btn-primary btn-ico tip" id="btn-vm-create"
                 data-tip-i18n="vm.create.tip.open" data-i18n-title="vm.create.tip.open"
@@ -951,6 +955,7 @@
 <script src="/static/js/cluster-map.js"></script>
 <script src="/static/js/resource-views.js"></script>
 <script src="/static/js/sections.js"></script>
+<script src="/static/js/backups.js"></script>
 <script src="/static/js/versions.js"></script>
 <script src="/static/js/console-accounts.js"></script>
 <script src="/static/js/user-menu.js"></script>

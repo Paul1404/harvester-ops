@@ -182,6 +182,34 @@ was exercised for real. The Cloud-init tab gains an
 
 CLI exposes the start/stop subset via `harvester-status`/`-shutdown -N <ns>`.
 
+### Backups, snapshots and their schedules (1.58.0)
+
+The **Backups** button, right of the namespace selector in Virtual machines,
+opens a window with the four tabs of Harvester's "Backup and Snapshots"
+menu, for the chosen namespace or all of them. It stays open next to the
+VMs, and comes back after a reload. The backup target is shown at the top
+(type and endpoint; the keys of an S3 target never reach the page).
+
+- **VM Schedules**: a VM backed up or snapshotted every hour, day or week
+  (or a cron), how many copies are kept, and after how many failures in a
+  row Harvester suspends it; the schedule is said in plain words ("every
+  Sunday at 03:30"). Suspend, resume, delete (the copies stay). A schedule
+  more frequent than once an hour is refused before Harvester refuses it.
+- **VM Backups** (on the backup target) and **VM Snapshots** (in the
+  cluster): state, size, target, the schedule that made them. Take one now,
+  restore one into a new VM (optionally keeping the MAC addresses, which is
+  refused on a network where the original still runs) or over the original
+  VM (stopped; confirmation), optionally left stopped; delete.
+- **Volume Snapshots**: restore one into a new volume; a volume snapshot
+  taken with a VM snapshot is deleted with it, not alone.
+
+Every gesture is an action followed in the dock, through
+`harvester-resources backup|schedule|volsnap` on the command line. Verified
+on harv1: a snapshot of a stopped VM (12 s), restored into a new stopped VM
+(9 s), its volume snapshot restored into a new volume (bound), a backup to
+the NAS (NFS), a weekly schedule created, suspended, resumed and deleted,
+and everything deleted again.
+
 ### Moving a VM to another cluster, exporting, importing (1.45.0)
 
 The Migrate window of a VM (its migrate button, or `harvester-vm-transfer`

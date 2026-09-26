@@ -198,6 +198,38 @@ reste de cette page a été exercé pour de vrai. L'onglet
 La CLI expose le sous-ensemble start/stop via `harvester-status` /
 `-shutdown -N <ns>`.
 
+### Sauvegardes, instantanés et leurs planifications (1.58.0)
+
+Le bouton **Sauvegardes**, à droite du sélecteur d'espace de noms dans
+Machines virtuelles, ouvre une fenêtre avec les quatre onglets du menu
+« Backup and Snapshots » de Harvester, pour l'espace choisi ou tous. Elle
+reste ouverte à côté des VMs et revient après un rechargement. La cible de
+sauvegarde est rappelée en haut (type et adresse ; les clés d'une cible S3
+n'arrivent jamais dans la page).
+
+- **Planifications** : une VM sauvegardée ou mise en instantané chaque
+  heure, jour ou semaine (ou selon un cron), combien de copies sont
+  gardées, et après combien d'échecs d'affilée Harvester la suspend ; la
+  planification est dite en clair (« chaque dimanche à 03:30 »). Suspendre,
+  reprendre, supprimer (les copies restent). Un planning plus fréquent
+  qu'une heure est refusé avant que Harvester ne le refuse.
+- **Sauvegardes de VM** (sur la cible) et **Instantanés de VM** (dans le
+  cluster) : état, taille, cible, planification d'origine. En prendre un
+  maintenant, en restaurer un dans une nouvelle VM (en gardant au besoin
+  les adresses MAC, refusées sur un réseau où l'originale tourne encore) ou
+  par-dessus la VM d'origine (arrêtée ; confirmation), laissée arrêtée si
+  on le veut ; supprimer.
+- **Instantanés de volumes** : en restaurer un dans un nouveau volume ; un
+  instantané de volume pris avec un instantané de VM part avec lui, pas
+  seul.
+
+Chaque geste est une action suivie dans le dock, par
+`harvester-resources backup|schedule|volsnap` en ligne de commande. Vérifié
+sur harv1 : un instantané d'une VM arrêtée (12 s), restauré dans une
+nouvelle VM arrêtée (9 s), son instantané de volume restauré dans un nouveau
+volume (lié), une sauvegarde vers le NAS (NFS), une planification
+hebdomadaire créée, suspendue, reprise et supprimée, puis tout supprimé.
+
 ### Déplacer une VM vers un autre cluster, l'exporter, l'importer (1.45.0)
 
 La fenêtre « Migrer » d'une VM (son bouton de migration, ou

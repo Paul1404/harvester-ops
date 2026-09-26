@@ -294,6 +294,7 @@ const FloatingPanels = (() => {
     'vm-snapshots': () => tr('panel.kind.snapshots', 'Snapshots'),
     'vm-migrate':   () => tr('panel.kind.migrate',   'Migrate'),
     'notes':        () => tr('panel.kind.notes',     'Notes'),
+    'backups':      () => tr('panel.kind.backups',   'Backups'),
   };
 
   function kindLabel(opts) {

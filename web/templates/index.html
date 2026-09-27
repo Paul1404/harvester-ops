@@ -798,6 +798,10 @@
         <p class="form-hint" data-i18n="husers.intro">Accounts declared on the
           selected Harvester cluster, and who holds cluster administration.</p>
         <div id="husers-body"><p class="form-hint">…</p></div>
+        <!-- v1.73.0 : les membres du cluster dans Rancher, avec leurs rôles -->
+        <h4 data-i18n="rm.clusterTitle">Members in Rancher</h4>
+        <p class="form-hint" data-i18n="rm.clusterIntro">Who Rancher gives rights on this cluster, and with which role.</p>
+        <div id="rmembers-body"></div>
       </div>
 
       <div class="settings-tab-content" id="stab-appearance">
@@ -1061,6 +1065,7 @@
 <script src="/static/js/dock.js"></script>
 <script src="/static/js/vm-edit.js"></script>
 <script src="/static/js/vm-create.js"></script>
+<script src="/static/js/rancher-members.js"></script>
 <script src="/static/js/harvester-users.js"></script>
 <script src="/static/js/vm-console.js"></script>
 <script src="/static/js/vm-snapshots.js"></script>

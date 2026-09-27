@@ -1,8 +1,8 @@
 # Parité avec l'interface de Harvester
 
-État au 2026-09-27, console **v1.72.0**, comparée à l'interface de **Harvester v1.9** (menus relevés dans le code de harvester-ui-extension v1.9.0 et la documentation v1.9).
+État au 2026-09-27, console **v1.73.0**, comparée à l'interface de **Harvester v1.9** (menus relevés dans le code de harvester-ui-extension v1.9.0 et la documentation v1.9).
 
-Sur 135 fonctions de l'interface de Harvester : **130 faites**, **4 partielles**, **1 manquantes** ; 2 hors périmètre. Une fonction manquante porte la version où elle est prévue.
+Sur 135 fonctions de l'interface de Harvester : **131 faites**, **3 partielles**, **1 manquantes** ; 2 hors périmètre. Une fonction manquante porte la version où elle est prévue.
 
 Statuts : Fait, Partiel (ce qui manque est dit), Manquant (version prévue), Console seulement (ce que Harvester n'a pas), Hors périmètre.
 
@@ -249,7 +249,7 @@ Menu Harvester : *Authentication / Rancher*
 | Rôles de virtualisation (chart Harvester RBAC, Rancher 2.14.1, expérimental) | Partiel | 1.50 | appliqués d'office par le jeton Rancher ; vérifié avec un membre du cluster, pas encore avec les rôles de ce chart |
 | Projets Rancher : namespaces rangés par projet, quotas de ressources | Fait | 1.72 | créer, modifier, supprimer un projet, déplacer un namespace, quota du namespace, limite par défaut des VMs ; par Rancher avec le jeton de la personne |
 | Annotations de projet d'un autre cluster signalées | Console seulement | 1.72 | Harvester montre ces namespaces hors projet sans dire pourquoi |
-| Membres du cluster | Partiel | 1.31 | comptes du cluster : activer, désactiver, admin ; pas encore les rôles Rancher |
+| Membres du cluster et des projets | Fait | 1.73 | comptes du cluster (1.31) et membres Rancher : chercher un utilisateur ou un groupe, donner ou retirer un rôle, par Rancher avec le jeton de la personne |
 | Connexion obligatoire, comptes et rôles propres à la console | Console seulement | 1.57 | sans Rancher ; Harvester seul n'a qu'un compte admin |
 
 ## Menus apportés par des add-ons

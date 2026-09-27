@@ -4,6 +4,39 @@ All notable changes to this project will be documented here.
 Format inspired by [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 This file summarises each minor release; per-patch detail lives in `git log`.
 
+## [1.73.0] - 2026-09-27 - Rancher members of the cluster and its projects
+
+### Added
+- **Members in Rancher**, under the cluster accounts in Settings, and
+  **Members** on a project in the Namespaces window: who Rancher gives rights
+  on the cluster or the project, with the role and the provider (local,
+  Keycloak...). A member is added by searching the users and groups Rancher
+  knows and choosing a role of the context; a role binding is removed,
+  except the last owner's. Everything goes through Rancher with the
+  person's token, so Rancher checks they may grant the role.
+- `harvester-resources member add|remove [--scope project --project p-xxxxx]`,
+  with the kubeconfig of a Rancher session.
+
+### Fixed (found by the real test)
+- The message of an addition or removal disappeared when the list was read
+  again a moment later; it now stays.
+
+### Tests
+- Library: the roles offered per context, members named with their kind and
+  provider, the binding body for a user or a group, the last owner and
+  system accounts kept.
+- Command line and routes: a role of the right context, refusals before any
+  DELETE, members and roles read with the session token, the search of
+  principals, 409 for a console account.
+- In Chromium: cluster members in Settings after a search, a project's
+  members from the Projects tab, the message kept after the reload, the
+  console account's notice.
+- Real, on harv1 signed in through Rancher (Rancher 2.14.1): the members read
+  with names and roles (Rancher's API does not list its system accounts'
+  bindings); a user found by search, given View Nodes on the cluster (the
+  binding checked in Rancher) then removed; given Read-only on the Default
+  project then removed; Rancher left with its three original bindings.
+
 ## [1.72.0] - 2026-09-27 - Rancher projects and quotas
 
 ### Added

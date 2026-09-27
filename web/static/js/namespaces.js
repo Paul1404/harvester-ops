@@ -97,6 +97,7 @@ const Namespaces = (() => {
         <td>${esc(fmtLimits(p.ns_default))}</td><td>${esc(fmtLimits(p.container))}</td><td class="num">${esc(n)}</td>
         <td class="nsw-acts">
           <button type="button" class="btn-icon-sm tip" data-pj-act="edit" data-tip="${esc(tr('pj.t.edit'))}">${icon('edit')}</button>
+          <button type="button" class="btn-icon-sm tip" data-pj-act="members" data-tip="${esc(tr('rm.t.projectMembers'))}">${icon('user')}</button>
           <button type="button" class="btn-icon-sm tip" data-pj-act="delete" ${locked || n ? 'disabled' : ''}
             data-tip="${esc(locked ? tr('pj.t.locked') : n ? tr('pj.t.notEmpty') : tr('pj.t.delete'))}">${icon('trash')}</button></td></tr>`; }).join('')}</tbody></table>`;
   }
@@ -426,6 +427,16 @@ const Namespaces = (() => {
         const p = projectById(w, pb.closest('tr').dataset.pj);
         if (!p) return;
         if (pb.dataset.pjAct === 'edit') projectForm(w, p);
+        else if (pb.dataset.pjAct === 'members' && window.RancherMembers) {
+          // v1.73.0 : les membres du projet, dans la zone de formulaire
+          const host = root.querySelector('[data-nsw="form"]');
+          host.hidden = false;
+          host.innerHTML = `<div class="nsw-form"><div class="bk-bar"><button type="button" class="btn btn-sm btn-secondary tip" data-nsw="cancel"
+            data-tip="${esc(tr('nsw.tip.cancel'))}">${esc(tr('rm.close'))}</button></div><div data-rm-host></div></div>`;
+          host.querySelector('[data-nsw="cancel"]').addEventListener('click', () => { host.hidden = true; host.innerHTML = ''; });
+          RancherMembers.render(host.querySelector('[data-rm-host]'), { cluster: w.cluster, scope: 'project', project: p.id,
+            title: tr('rm.projectTitle', { name: p.name }) });
+        }
         else if (pb.dataset.pjAct === 'delete' && confirm(tr('pj.confirmDelete', { name: p.name }))) {
           call('POST', `/api/projects/${enc(w.cluster)}/do/delete`, { id: p.id })
             .then(out => follow(w, out.action_id, tr('pj.done.deleted', { name: p.name })))

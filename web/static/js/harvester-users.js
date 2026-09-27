@@ -29,6 +29,9 @@ const HUsers = (() => {
     const body = document.querySelector('#husers-body');
     if (!body) return;
     const c = cluster();
+    // v1.73.0 : les membres Rancher du cluster, sous ses comptes
+    const rm = document.querySelector('#rmembers-body');
+    if (rm && c && window.RancherMembers) RancherMembers.render(rm, { cluster: c, scope: 'cluster' });
     if (!c) { body.innerHTML = `<p class="form-hint">${esc(tr('husers.noCluster', 'Select a cluster first.'))}</p>`; return; }
     body.innerHTML = `<p class="form-hint">${esc(tr('common.loading', 'Loading...'))}</p>`;
     let d;

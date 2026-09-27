@@ -1,8 +1,8 @@
 # Parity with the Harvester UI
 
-Status on 2026-09-27, console **v1.72.0**, compared with the **Harvester v1.9** UI (menus taken from the harvester-ui-extension v1.9.0 source and the v1.9 documentation).
+Status on 2026-09-27, console **v1.73.0**, compared with the **Harvester v1.9** UI (menus taken from the harvester-ui-extension v1.9.0 source and the v1.9 documentation).
 
-Of 135 functions of the Harvester UI: **130 done**, **4 partial**, **1 missing**; 2 out of scope. A missing function shows the version it is planned for.
+Of 135 functions of the Harvester UI: **131 done**, **3 partial**, **1 missing**; 2 out of scope. A missing function shows the version it is planned for.
 
 Statuses: Done, Partial (what is missing is said), Missing (planned version), Console only (what Harvester does not have), Out of scope.
 
@@ -249,7 +249,7 @@ Harvester menu: *Authentication / Rancher*
 | Virtualization roles (Harvester RBAC chart, Rancher 2.14.1, experimental) | Partial | 1.50 | applied by the Rancher token; checked with a cluster member, not yet with this chart's roles |
 | Rancher projects: namespaces by project, resource quotas | Done | 1.72 | create, edit, delete a project, move a namespace, namespace quota, VM default limit; through Rancher with the person's token |
 | Project annotations of another cluster flagged | Console only | 1.72 | Harvester shows these namespaces as not in a project without saying why |
-| Cluster members | Partial | 1.31 | cluster accounts: enable, disable, admin; Rancher roles not yet |
+| Cluster and project members | Done | 1.73 | cluster accounts (1.31) and Rancher members: search a user or group, grant or remove a role, through Rancher with the person's token |
 | Mandatory sign-in, the console's own accounts and roles | Console only | 1.57 | without Rancher; standalone Harvester has a single admin |
 
 ## Menus brought by add-ons

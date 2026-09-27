@@ -112,6 +112,7 @@ il s'utilise aussi seul.
   harvester-resources vmimport import-follow|import-delete --cluster harv1 --namespace ns --name imp
   harvester-resources project create|update --kubeconfig rancher-session.yaml --spec project.json [--id p-xxxxx]
   harvester-resources project move|ns-quota --kubeconfig rancher-session.yaml --namespace ns [--id p-xxxxx] [--spec quota.json]
+  harvester-resources member add|remove --kubeconfig rancher-session.yaml [--scope project --project p-xxxxx] --principal ID --role ROLE | --id BINDING
   harvester-resources monlog output-delete|flow-delete|amc-delete --cluster harv1 --kind Flow --namespace ns --name n
   harvester-resources kubeconfig revoke --cluster harv1 --name ci
 
@@ -148,6 +149,7 @@ import hv_upgrade as hup  # noqa: E402
 import hv_monlog as hml  # noqa: E402
 import hv_vmimport as hvi  # noqa: E402
 import hv_projects as hpj  # noqa: E402
+import hv_members as hmb  # noqa: E402
 
 EXIT_OK, EXIT_FAIL, EXIT_BLOCKED, EXIT_CANCELLED = 0, 1, 2, 3
 K_ADDON = "addons.harvesterhci.io"
@@ -3312,6 +3314,55 @@ def cmd_project(args):
     raise ValueError("action: create, update, delete, move, ns-quota")
 
 
+# ---------------------------------------------------------------------------
+# v1.73.0 : membres Rancher du cluster et des projets
+# ---------------------------------------------------------------------------
+
+def _members_target(r, args):
+    cid = r["cid"]
+    if args.scope == "project":
+        target = f"{cid}:{hpj.check_pid(args.project)}"
+        return target, "/v3/projectroletemplatebindings", f"?projectId={target}"
+    if args.scope != "cluster":
+        raise ValueError("--scope: cluster or project")
+    return cid, "/v3/clusterroletemplatebindings", f"?clusterId={cid}"
+
+
+def _member_users(r, bindings):
+    """Les utilisateurs Rancher des liaisons, pour les nommer et reconnaître
+    les comptes système (un membre qui ne lit pas les utilisateurs : sans)."""
+    out = {}
+    for uid in {b.get("userId") for b in bindings if b.get("userId")}:
+        try:
+            _, u = _rancher_call(r, "GET", f"/v3/users/{uid}")
+            out[uid] = u or {}
+        except ValueError:
+            pass
+    return out
+
+
+def cmd_member(args):
+    r = _rancher_session(args.kubeconfig)
+    target, path, qs = _members_target(r, args)
+    if args.action == "add":
+        body = hmb.binding_body(args.scope, target, args.principal, args.role)
+        _, rt = _rancher_call(r, "GET", f"/v3/roletemplates/{hmb.check_binding(args.role)}")
+        if (rt or {}).get("context") != args.scope or (rt or {}).get("locked"):
+            raise ValueError(f"role {args.role}: not a role for a {args.scope}")
+        _rancher_call(r, "POST", path, body)
+        step("member", "done", f"{args.principal}: {rt.get('name') or args.role} of the {args.scope}")
+        return EXIT_OK
+    if args.action == "remove":
+        bid = hmb.check_binding(args.id)
+        _, lst = _rancher_call(r, "GET", path + qs)
+        items = (lst or {}).get("data") or []
+        row = hmb.check_removal(hmb.member_rows(items, users=_member_users(r, items)), bid, args.scope)
+        _rancher_call(r, "DELETE", f"{path}/{bid}")
+        step("member", "done", f"{row['name']}: {row['role']} of the {args.scope} removed")
+        return EXIT_OK
+    raise ValueError("action: add or remove")
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(prog="harvester-resources", description=__doc__.split("\n\n")[0])
     sub = ap.add_subparsers(dest="cmd", required=True)
@@ -3741,6 +3792,16 @@ def main(argv=None):
     sp.add_argument("--id", help="update, delete, move: the project id (p-xxxxx); move without it: out of any project")
     sp.add_argument("--namespace")
     sp.add_argument("--timeout", type=int, default=120)
+    sp = sub.add_parser("member", help="Rancher members of the cluster or of a project: add, remove")
+    sp.set_defaults(fn=cmd_member)
+    sp.add_argument("action", choices=("add", "remove"))
+    sp.add_argument("--cluster")
+    sp.add_argument("--kubeconfig", help="the kubeconfig of a Rancher session (it points at Rancher's proxy)")
+    sp.add_argument("--scope", choices=("cluster", "project"), default="cluster")
+    sp.add_argument("--project", help="project scope: the project id (p-xxxxx)")
+    sp.add_argument("--principal", help="add: the Rancher principal (local://u-xxxxx, keycloakoidc_user://..., ..._group://...)")
+    sp.add_argument("--role", help="add: the role template (cluster-owner, cluster-member, project-member, read-only...)")
+    sp.add_argument("--id", help="remove: the role binding id")
     args = ap.parse_args(argv)
     signal.signal(signal.SIGTERM, _on_signal)
     try:

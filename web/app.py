@@ -11911,6 +11911,7 @@ def api_host_do(cluster, node, action):
 # ---------------------------------------------------------------------------
 import hv_ns as _hn  # noqa: E402
 import hv_projects as _hpj  # noqa: E402
+import hv_members as _hmb  # noqa: E402
 
 _NS_DO = ("update", "quota", "delete")
 
@@ -12029,6 +12030,137 @@ def api_projects_do(cluster, action):
             Path(f).unlink(missing_ok=True)
         return jsonify({"error": str(e)}), 400
     run, err = _res_cli(cluster, kc, label, args, files)
+    return _res_reply(run, err, action=action)
+
+# ---------------------------------------------------------------------------
+# v1.73.0 : membres Rancher du cluster et des projets, avec le jeton de la
+# session Rancher (lectures ici, écritures par harvester-resources member).
+# ---------------------------------------------------------------------------
+
+_MEMBER_DO = ("add", "remove")
+
+
+def _rancher_get(r, path):
+    token = Path(r["token_file"]).read_text().strip() if r.get("token_file") else r.get("token")
+    return _rs.Http(ca_file=r.get("ca_file")).request("GET", r["url"] + path,
+                                                       headers={"Authorization": f"Bearer {token}", "Accept": "application/json"})
+
+
+def _rancher_post(r, path, body):
+    token = Path(r["token_file"]).read_text().strip() if r.get("token_file") else r.get("token")
+    return _rs.Http(ca_file=r.get("ca_file")).request("POST", r["url"] + path, data=json.dumps(body),
+                                                       headers={"Authorization": f"Bearer {token}", "Accept": "application/json"})
+
+
+def _session_rancher(cluster):
+    kc = _kubectl_for_cluster(cluster)
+    if not kc:
+        return None, None
+    try:
+        return kc, _hpj.rancher_of(Path(kc).read_text())
+    except OSError:
+        return kc, None
+
+
+@app.route("/api/rancher-members/<cluster>")
+@requires_auth
+def api_rancher_members(cluster):
+    kc, r = _session_rancher(cluster)
+    if not kc:
+        return jsonify({"error": f"unknown cluster: {cluster}"}), 404
+    if r is None:
+        return jsonify({"managed": False, "members": [], "roles": []})
+    scope = request.args.get("scope") or "cluster"
+    try:
+        if scope == "project":
+            target = f"{r['cid']}:{_hpj.check_pid(request.args.get('project'))}"
+            path = f"/v3/projectroletemplatebindings?projectId={target}"
+        elif scope == "cluster":
+            path = f"/v3/clusterroletemplatebindings?clusterId={r['cid']}"
+        else:
+            raise ValueError("scope: cluster or project")
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
+    try:
+        st, lst = _rancher_get(r, path)
+        if st != 200:
+            return jsonify({"managed": True, "members": [], "roles": [], "error": f"Rancher answered {st}"}), 200
+        items = (lst or {}).get("data") or []
+        _, rts = _rancher_get(r, f"/v3/roletemplates?context={scope}&limit=-1")
+        roles = _hmb.role_rows((rts or {}).get("data") or [], scope)
+        users = {}
+        for uid in {b.get("userId") for b in items if b.get("userId")}:
+            s2, u = _rancher_get(r, f"/v3/users/{uid}")
+            if s2 == 200:
+                users[uid] = u
+        principals = {}
+        for pid in {b.get("userPrincipalId") or b.get("groupPrincipalId") for b in items} - {None, ""}:
+            s3, p = _rancher_get(r, "/v3/principals/" + quote(pid, safe=""))
+            if s3 == 200:
+                principals[pid] = p
+    except (_rs.SSOError, OSError) as e:
+        return jsonify({"managed": True, "members": [], "roles": [], "error": str(e)[:200]}), 200
+    return jsonify({"managed": True, "scope": scope, "roles": roles,
+                    "members": _hmb.member_rows(items, principals, users, {x["id"]: x["name"] for x in roles})})
+
+
+@app.route("/api/rancher-principals/<cluster>")
+@requires_auth
+def api_rancher_principals(cluster):
+    """Chercher un utilisateur ou un groupe que Rancher connaît (local,
+    Keycloak...), pour l'ajouter comme membre."""
+    kc, r = _session_rancher(cluster)
+    if not kc:
+        return jsonify({"error": f"unknown cluster: {cluster}"}), 404
+    if r is None:
+        return jsonify({"error": "projects live in Rancher", "code": "rancher-session-needed",
+                        "hint": "sign in to the console through Rancher to manage members"}), 409
+    q = str(request.args.get("q") or "").strip()[:100]
+    if len(q) < 2:
+        return jsonify({"items": []})
+    try:
+        st, out = _rancher_post(r, "/v3/principals?action=search", {"name": q})
+    except (_rs.SSOError, OSError) as e:
+        return jsonify({"error": str(e)[:200]}), 502
+    if st not in (200, 201):
+        return jsonify({"error": f"Rancher answered {st}"}), 502
+    items = [{"id": p.get("id"), "name": p.get("name") or p.get("loginName") or p.get("id"), "login": p.get("loginName") or "",
+              "kind": "group" if p.get("principalType") == "group" else "user",
+              "provider": (p.get("id") or "").split("://", 1)[0]} for p in (out or {}).get("data") or [] if p.get("id")]
+    return jsonify({"items": items[:50]})
+
+
+@app.route("/api/rancher-members/<cluster>/do/<action>", methods=["POST"])
+@requires_auth
+@_rate_limit("30/minute")
+def api_rancher_members_do(cluster, action):
+    if action not in _MEMBER_DO:
+        return jsonify({"error": "action: add or remove"}), 400
+    kc, r = _session_rancher(cluster)
+    if not kc:
+        return jsonify({"error": f"unknown cluster: {cluster}"}), 404
+    if r is None:
+        return jsonify({"error": "members live in Rancher", "code": "rancher-session-needed",
+                        "hint": "sign in to the console through Rancher to manage members"}), 409
+    b = request.get_json(silent=True) or {}
+    try:
+        scope = b.get("scope") or "cluster"
+        args = ["member", action, "--scope", scope]
+        if scope == "project":
+            args += ["--project", _hpj.check_pid(b.get("project"))]
+        elif scope != "cluster":
+            raise ValueError("scope: cluster or project")
+        if action == "add":
+            principal = _hmb.check_principal(b.get("principal"))
+            role = _hmb.check_binding(b.get("role"))
+            args += ["--principal", principal, "--role", role]
+            label = f"member:add:{scope}:{role}"
+        else:
+            args += ["--id", _hmb.check_binding(b.get("id"))]
+            label = f"member:remove:{scope}"
+    except (ValueError, TypeError) as e:
+        return jsonify({"error": str(e)}), 400
+    run, err = _res_cli(cluster, kc, label, args)
     return _res_reply(run, err, action=action)
 
 

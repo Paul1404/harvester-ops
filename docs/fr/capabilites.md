@@ -909,6 +909,23 @@ comme la page Projects/Namespaces de Harvester sous Rancher.
 En ligne de commande, avec le kubeconfig d'une session Rancher :
 `harvester-resources project create|update|delete|move|ns-quota`.
 
+### Membres Rancher du cluster et de ses projets (1.73.0)
+
+Sous les comptes du cluster (Réglages, **Comptes du cluster**), **Membres
+dans Rancher** liste à qui Rancher donne des droits sur le cluster, avec le
+rôle et le fournisseur (local, Keycloak...) ; dans la fenêtre Namespaces,
+**Membres** sur un projet fait de même pour le projet. Un membre s'ajoute en
+cherchant parmi les utilisateurs et groupes que Rancher connaît, puis en
+choisissant un rôle du contexte (propriétaire, membre, lecture seule ou un
+rôle plus fin). Le retrait est refusé pour le dernier propriétaire. L'API
+de Rancher ne liste pas les liaisons de ses comptes système : elles ne sont
+jamais proposées. Tout passe par Rancher avec votre jeton : Rancher vérifie
+que vous pouvez donner ce rôle. Connectée avec un compte de la console, la
+section invite à se connecter par Rancher.
+
+En ligne de commande, avec le kubeconfig d'une session Rancher :
+`harvester-resources member add|remove [--scope project --project p-xxxxx]`.
+
 ### Événements et utilisation du tableau de bord (1.62.0)
 
 L'aperçu a un onglet **Événements** : les événements du cluster, rangés comme

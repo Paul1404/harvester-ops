@@ -804,6 +804,22 @@ as Harvester's Projects/Namespaces page under Rancher.
 On the command line, with the kubeconfig of a Rancher session:
 `harvester-resources project create|update|delete|move|ns-quota`.
 
+### Rancher members of the cluster and its projects (1.73.0)
+
+Under the cluster accounts (Settings, **Cluster accounts**), **Members in
+Rancher** lists who Rancher gives rights on the cluster, with the role and
+the provider (local, Keycloak...); in the Namespaces window, **Members** on a
+project does the same for the project. A member is added by searching the
+users and groups Rancher knows, then choosing a role of the context (cluster
+owner, member, read-only or a finer role). Removing a binding is refused for
+the last owner. Rancher's API does not list the bindings of its system
+accounts, so they are never offered. Everything goes through Rancher with
+your token: Rancher checks that you may grant the role. Signed in with a
+console account, the block says to sign in through Rancher.
+
+On the command line, with the kubeconfig of a Rancher session:
+`harvester-resources member add|remove [--scope project --project p-xxxxx]`.
+
 ### Dashboard events and usage (1.62.0)
 
 The Overview has an **Events** tab: the cluster events, grouped as on

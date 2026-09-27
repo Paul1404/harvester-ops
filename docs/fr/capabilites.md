@@ -1397,6 +1397,27 @@ contrôleur, sont réservés aux administrateurs. En ligne de commande :
 `harvester-resources vmimport source-apply|source-recheck|source-delete|
 import-create|import-follow|import-delete`.
 
+### Stockage LVM et téléchargement des images CDI (1.74.0)
+
+- **Les images sur une classe hors Longhorn v1** (LVM, Longhorn v2, stockage
+  tiers) sont désormais créées comme Harvester les crée : avec le backend
+  `cdi`. Jusque-là la console demandait une image de fond Longhorn quelle
+  que soit la classe, et Harvester rangeait l'image en silence dans une
+  classe Longhorn au lieu de celle choisie (vu en réel sur harvlab2 avec une
+  classe LVM). Les envois depuis le navigateur suivent la même règle.
+- **Télécharger une image CDI** : Harvester copie d'abord le volume dans un
+  fichier qcow2 compressé, par un downloader temporaire. **Télécharger** le
+  dit, suit cette préparation comme une action, puis récupère le fichier
+  qcow2 ; Harvester retire ensuite le downloader. Une image Longhorn v1 se
+  télécharge toujours directement, compressée en gzip.
+- **Vérifié en réel** sur harvlab2 (Harvester 1.9.0, add-on LVM
+  expérimental de Harvester, disque virtuel de réserve) : un disque confié à
+  LVM depuis la fenêtre de l'hôte (groupe de volumes actif), une classe LVM
+  créée par le formulaire, une image importée dessus en image CDI avec son
+  volume LVM, et téléchargée en qcow2.
+
+En ligne de commande : `harvester-resources image prepare-download|download`.
+
 ## 4. Cluster API : clusters RKE2 en aval (console + CLI)
 
 Créer et exploiter des clusters Kubernetes dont les nœuds sont des VMs

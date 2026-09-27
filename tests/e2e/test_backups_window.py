@@ -163,6 +163,8 @@ def test_a_backup_can_carry_a_freeze_deadline(win):
     w.locator('[data-bk-tab="vmbackups"]').click()
     w.locator('[data-bk="new"]').click()
     f = w.locator(".bk-form")
+    # le formulaire remplit ses choix après coup : les lire trop tôt donnait [] (vu : 1 fois sur 3)
+    expect(f.locator('[name="freeze"] option')).to_have_count(7, timeout=5000)
     assert f.locator('[name="freeze"] option').evaluate_all("els => els.map(e => e.value)") \
         == ["", "5s", "10s", "30s", "1m", "3m", "5m"]                     # pas de gel sans fin
     f.locator('[name="freeze"]').select_option("10s")

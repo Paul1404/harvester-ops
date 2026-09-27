@@ -235,8 +235,8 @@ const StorageActions = (() => {
               why: !lhv1 ? tr('sta.why.lhv1') : !ready ? tr('sta.why.notReady') : '' }
           : { act: 'encrypt', label: tr('sta.img.encrypt'), icon: 'lock', tip: tr('sta.tip.imgEncrypt'),
               why: !lhv1 ? tr('sta.why.lhv1') : !ready ? tr('sta.why.notReady') : '' },
-        { act: 'download', label: tr('sta.img.download'), icon: 'download', tip: tr('sta.tip.imgDownload'),
-          why: !lhv1 ? tr('sta.why.lhv1') : !ready ? tr('sta.why.notReady') : '' },
+        { act: 'download', label: tr('sta.img.download'), icon: 'download', tip: lhv1 ? tr('sta.tip.imgDownload') : tr('sta.tip.imgDownloadCdi'),
+          why: !ready ? tr('sta.why.notReady') : '' },
         { act: 'createvm', label: tr('sta.img.createVm'), icon: 'vm', tip: tr('sta.tip.imgCreateVm'),
           why: !ready ? tr('sta.why.notReady') : '' },
       ];
@@ -299,12 +299,21 @@ const StorageActions = (() => {
         (f, msg) => imgDo(cluster, r, act, { display_name: f.display_name.value.trim(), storage_class: f.storage_class.value }, msg,
           tr('sta.done.imgClone', { name: f.display_name.value.trim() }), onDone));
     } else if (act === 'download') {
-      const a = document.createElement('a');
-      a.href = `${ibase(cluster, r.namespace, r.name)}/download`;
-      a.download = '';
-      document.body.appendChild(a);
-      a.click();
-      a.remove();
+      const fetchFile = () => {
+        const a = document.createElement('a');
+        a.href = `${ibase(cluster, r.namespace, r.name)}/download`;
+        a.download = '';
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+      };
+      if ((r.backend || 'backingimage') === 'backingimage') return fetchFile();
+      // v1.74.0 : une image CDI : Harvester convertit d'abord le volume en
+      // qcow2 (un downloader), suivi comme une action ; le fichier suit
+      dialog(id, tr('sta.img.download') + ` · ${r.display_name}`, 'download',
+        `<p class="form-hint">${esc(tr('sta.cdiDownloadHint'))}</p>`,
+        tr('sta.img.download'), (f, msg) => imgDo(cluster, r, 'prepare-download', {}, msg, tr('sta.done.cdiReady'),
+          () => fetchFile()), { submitIcon: 'download', height: 260 });
     } else if (act === 'createvm' && window.VMCreate) {
       VMCreate.open(cluster, r.namespace, { image: { ref: `${r.namespace}/${r.name}`, storage_class: r.storage_class,
         virtual_size: r.virtual_size, iso: /\.iso$/i.test(r.display_name || '') || (r.labels || {})['harvesterhci.io/image-type'] === 'iso' } });

@@ -3,7 +3,7 @@
 # Statuts : ok (fait), part (partiel), todo (manquant), plus (console seulement), na (hors périmètre).
 # v : version où c'est arrivé (ok/part) ou prévue (todo).
 
-AS_OF = "1.73.0"
+AS_OF = "1.74.0"
 DATE = "2026-09-27"
 
 S = []  # sections
@@ -114,7 +114,9 @@ r("ok", "1.59", "Créer depuis une URL", "Create from a URL")
 r("ok", "1.63", "Envoyer un fichier depuis le navigateur", "Upload a file from the browser", "la console le sert au cluster (port 8092)", "the console serves it to the cluster (port 8092)")
 r("ok", "1.63", "Somme de contrôle SHA512", "SHA512 checksum")
 r("ok", "1.63", "Chiffrer / déchiffrer", "Encrypt / decrypt")
-r("part", "1.63", "Télécharger l'image", "Download the image", "images Longhorn v1 ; images CDI : aucun stockage tiers sur les bancs pour les essayer", "Longhorn v1 images; CDI images: no third-party storage on the test benches to try them")
+r("ok", "1.74", "Télécharger l'image", "Download the image",
+  "images Longhorn v1 (gzip) ; images CDI en qcow2 par le downloader de Harvester, vérifié sur une classe LVM",
+  "Longhorn v1 images (gzip); CDI images as qcow2 through Harvester's downloader, verified on an LVM class")
 r("ok", "1.63", "Cloner, modifier (description, labels)", "Clone, edit (description, labels)", "le nom est figé par Harvester", "the name is fixed by Harvester")
 r("ok", "1.63", "Créer une VM depuis l'image", "Create a VM from the image")
 r("ok", "1.59", "Supprimer (si rien ne s'en sert)", "Delete (when unused)")
@@ -171,7 +173,9 @@ sec("advanced", "Avancé", "Advanced", "Advanced", "Advanced")
 r("ok", "1.64", "Templates : versions, par défaut, lancer une version, supprimer", "Templates: versions, default, launch a version, delete")
 r("ok", "1.64", "Clés SSH (créer, lire depuis un fichier, modifier, supprimer)", "SSH keys (create, read from file, edit, delete)")
 r("ok", "1.64", "Modèles de configuration cloud (user / network data)", "Cloud configuration templates (user / network data)")
-r("part", "1.64", "Classes de stockage (Longhorn v1, chiffrement, topologies, par défaut, supprimer)", "Storage classes (Longhorn v1, encryption, topologies, default, delete)", "LVM et Longhorn v2 proposés mais pas vérifiés en réel (absents des bancs)", "LVM and Longhorn v2 offered but not verified for real (absent from the benches)")
+r("part", "1.74", "Classes de stockage (Longhorn v1, chiffrement, topologies, LVM, par défaut, supprimer)", "Storage classes (Longhorn v1, encryption, topologies, LVM, default, delete)",
+  "LVM vérifié en réel en 1.74 (add-on expérimental, disque de réserve) ; Longhorn v2 proposé mais pas vérifié (absent des bancs)",
+  "LVM verified for real in 1.74 (experimental add-on, spare disk); Longhorn v2 offered but not verified (absent from the benches)")
 r("ok", "1.68", "Périphériques PCI", "PCI devices", "activer ou désactiver le passthrough, par sélection ; groupe IOMMU et VMs qui s'en servent dits", "enable or disable passthrough, by selection; IOMMU group and the VMs using them said")
 r("ok", "1.68", "SR-IOV réseau (nombre de VF)", "SR-IOV network devices (VF count)", "carte igb émulée sur le banc", "emulated igb card on the bench")
 r("todo", "", "GPU SR-IOV, vGPU, configurations MIG", "SR-IOV GPU, vGPU, MIG configurations", "non livré : aucun GPU compatible sous Harvester sur les bancs, rien ne peut y être essayé en réel", "not shipped: no compatible GPU under Harvester on the benches, nothing can be tried for real")

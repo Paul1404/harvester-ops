@@ -1251,6 +1251,27 @@ administrators. On the command line: `harvester-resources vmimport
 source-apply|source-recheck|source-delete|import-create|import-follow|
 import-delete`.
 
+### LVM storage and downloading CDI images (1.74.0)
+
+- **Images on a class outside Longhorn v1** (LVM, Longhorn v2, third-party
+  storage) are now created as Harvester creates them: with the `cdi`
+  backend. Until then the console asked for a Longhorn backing image
+  whatever the class, and Harvester quietly put the image in a Longhorn
+  class instead of the one chosen (seen for real on harvlab2 with an LVM
+  class). Uploads from the browser follow the same rule.
+- **Downloading a CDI image**: Harvester first copies the volume into a
+  compressed qcow2 file, through a temporary downloader. **Download** says
+  so, follows that preparation as an action, then fetches the qcow2 file;
+  Harvester removes the downloader afterwards. A Longhorn v1 image is still
+  downloaded straight away, gzip-compressed.
+- **Verified for real** on harvlab2 (Harvester 1.9.0, Harvester's
+  experimental LVM add-on, a spare virtual disk): a disk given to LVM from
+  the host window (volume group active), an LVM storage class created by the
+  form, an image imported on it as a CDI image with its LVM volume, and
+  downloaded as qcow2.
+
+On the command line: `harvester-resources image prepare-download|download`.
+
 ## 4. Cluster API: downstream RKE2 clusters (console + CLI)
 
 Create and operate Kubernetes clusters whose nodes are Harvester VMs,

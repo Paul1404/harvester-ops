@@ -300,7 +300,45 @@ def download_path(bi):
     return f"/api/v1/namespaces/longhorn-system/services/http:longhorn-backend:9500/proxy/v1/backingimages/{bi}/download"
 
 
-def upload_image(ns, display_name, url, storage_class, checksum=None, file_name="", description=""):
+# v1.74.0 : une image CDI (hors Longhorn v1) se télécharge par un
+# VirtualMachineImageDownloader du même nom : Harvester monte le volume dans
+# un déploiement « <image>-downloader » qui le convertit en qcow2 compressé
+# (qemu-img), puis son point de téléchargement le relaie et supprime le
+# downloader. Lu dans harvester v1.9.0 (controller/master/vmimagedownloader).
+
+def is_cdi(img):
+    return ((img or {}).get("spec") or {}).get("backend") == "cdi"
+
+
+def downloader_manifest(ns, name):
+    return {"apiVersion": "harvesterhci.io/v1beta1", "kind": "VirtualMachineImageDownloader",
+            "metadata": {"name": name, "namespace": ns}, "spec": {"imageName": name, "compressType": "qcow2"}}
+
+
+def downloader_state(o):
+    """(True, msg) prêt, (None, msg) en préparation ; pas d'échec dans le
+    modèle de Harvester : un déploiement qui ne démarre pas reste en
+    préparation, le délai de la commande tranche."""
+    if o is None:
+        return None, "creating the downloader"
+    st = o.get("status") or {}
+    if st.get("status") == "Ready" and st.get("downloadUrl"):
+        return True, "the qcow2 file is ready to download"
+    conds = st.get("conditions") or []
+    return None, (conds[-1].get("message") if conds else "") or "converting the volume to qcow2"
+
+
+def cdi_download_path(ns, name):
+    """Le point de téléchargement de Harvester, par le proxy de service de
+    l'apiserver : il relaie le fichier du downloader puis le supprime."""
+    for v, what in ((ns, "namespace"), (name, "image")):
+        if not re.match(r"^[a-z0-9]([-a-z0-9]*[a-z0-9])?$", v or ""):
+            raise ValueError(f"{what} name")
+    return (f"/api/v1/namespaces/harvester-system/services/https:harvester:8443/proxy/v1/harvester/"
+            f"harvesterhci.io.virtualmachineimages/{ns}/{name}/download")
+
+
+def upload_image(ns, display_name, url, storage_class, checksum=None, file_name="", description="", sc_obj=None):
     """L'image d'un fichier envoyé par le navigateur : la console le sert par
     son guichet à jetons et le cluster le télécharge (source « download »)."""
     display_name = (display_name or "").strip()
@@ -313,8 +351,9 @@ def upload_image(ns, display_name, url, storage_class, checksum=None, file_name=
            "metadata": {"generateName": "image-", "namespace": ns,
                         "labels": {"harvesterhci.io/image-type": kind},
                         "annotations": {"harvesterhci.io/image-name": file_name[:253]}},
-           "spec": {"displayName": display_name, "sourceType": "download", "url": url, "backend": "backingimage",
-                    "retry": 3}}
+           "spec": {"displayName": display_name, "sourceType": "download", "url": url,
+                    # v1.74.0 : cdi hors Longhorn v1, comme l'interface de Harvester
+                    "backend": "backingimage" if not sc_obj or is_longhorn_v1(sc_obj) else "cdi", "retry": 3}}
     if storage_class:
         out["metadata"]["annotations"][SC_ANN] = storage_class
         out["spec"]["targetStorageClassName"] = storage_class

@@ -49,8 +49,12 @@ def _bool(v, default=False):
     return str(v).lower() in ("1", "true", "yes", "on")
 
 
-def image_manifest(spec, default_class=None):
-    """Une image téléchargée depuis une URL (Harvester la récupère lui-même)."""
+def image_manifest(spec, default_class=None, sc_obj=None):
+    """Une image téléchargée depuis une URL (Harvester la récupère lui-même).
+    v1.74.0 : le backend suit la classe, comme dans l'interface de Harvester :
+    backingimage sur Longhorn v1, cdi ailleurs (LVM, Longhorn v2, tiers) ;
+    vu en réel, une image backingimage demandée sur une classe LVM finissait
+    en silence dans une classe Longhorn."""
     ns = _name(spec.get("namespace") or "default", "namespace")
     url = str(spec.get("url") or "").strip()
     if not re.match(r"^https?://\S+$", url):
@@ -58,7 +62,7 @@ def image_manifest(spec, default_class=None):
     display = str(spec.get("display_name") or url.rsplit("/", 1)[-1] or "image").strip()[:253]
     sc = str(spec.get("storage_class") or default_class or "").strip()
     meta = {"generateName": "image-", "namespace": ns}
-    body = {"displayName": display, "sourceType": "download", "url": url, "backend": "backingimage",
+    body = {"displayName": display, "sourceType": "download", "url": url, "backend": image_backend(sc_obj),
             "retry": 3}
     if sc:
         _name(sc, "storage class")
@@ -206,12 +210,21 @@ def volume_manifest(spec, image=None):
     return {"apiVersion": "v1", "kind": "PersistentVolumeClaim", "metadata": meta, "spec": body}
 
 
-def normalize(kind, spec, default_class=None, image=None):
+def image_backend(sc_obj):
+    """backingimage pour une classe Longhorn v1 (ou la classe par défaut non
+    lue), cdi pour toute autre."""
+    if not sc_obj:
+        return "backingimage"
+    lh1 = sc_obj.get("provisioner") == "driver.longhorn.io" and (sc_obj.get("parameters") or {}).get("dataEngine", "v1") != "v2"
+    return "backingimage" if lh1 else "cdi"
+
+
+def normalize(kind, spec, default_class=None, image=None, sc_obj=None):
     if kind not in KINDS:
         raise ValueError(f"kind must be one of {', '.join(KINDS)}")
     if not isinstance(spec, dict):
         raise ValueError("a JSON object is expected")
-    return {"image": lambda: image_manifest(spec, default_class),
+    return {"image": lambda: image_manifest(spec, default_class, sc_obj),
             "storageclass": lambda: storageclass_manifest(spec),
             "sshkey": lambda: sshkey_manifest(spec),
             "secret": lambda: secret_manifest(spec),

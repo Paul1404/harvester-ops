@@ -1,8 +1,8 @@
 # Parité avec l'interface de Harvester
 
-État au 2026-09-27, console **v1.73.0**, comparée à l'interface de **Harvester v1.9** (menus relevés dans le code de harvester-ui-extension v1.9.0 et la documentation v1.9).
+État au 2026-09-27, console **v1.74.0**, comparée à l'interface de **Harvester v1.9** (menus relevés dans le code de harvester-ui-extension v1.9.0 et la documentation v1.9).
 
-Sur 135 fonctions de l'interface de Harvester : **131 faites**, **3 partielles**, **1 manquantes** ; 2 hors périmètre. Une fonction manquante porte la version où elle est prévue.
+Sur 135 fonctions de l'interface de Harvester : **132 faites**, **2 partielles**, **1 manquantes** ; 2 hors périmètre. Une fonction manquante porte la version où elle est prévue.
 
 Statuts : Fait, Partiel (ce qui manque est dit), Manquant (version prévue), Console seulement (ce que Harvester n'a pas), Hors périmètre.
 
@@ -131,7 +131,7 @@ Menu Harvester : *Images*
 | Envoyer un fichier depuis le navigateur | Fait | 1.63 | la console le sert au cluster (port 8092) |
 | Somme de contrôle SHA512 | Fait | 1.63 |  |
 | Chiffrer / déchiffrer | Fait | 1.63 |  |
-| Télécharger l'image | Partiel | 1.63 | images Longhorn v1 ; images CDI : aucun stockage tiers sur les bancs pour les essayer |
+| Télécharger l'image | Fait | 1.74 | images Longhorn v1 (gzip) ; images CDI en qcow2 par le downloader de Harvester, vérifié sur une classe LVM |
 | Cloner, modifier (description, labels) | Fait | 1.63 | le nom est figé par Harvester |
 | Créer une VM depuis l'image | Fait | 1.63 |  |
 | Supprimer (si rien ne s'en sert) | Fait | 1.59 |  |
@@ -211,7 +211,7 @@ Menu Harvester : *Advanced*
 | Templates : versions, par défaut, lancer une version, supprimer | Fait | 1.64 |  |
 | Clés SSH (créer, lire depuis un fichier, modifier, supprimer) | Fait | 1.64 |  |
 | Modèles de configuration cloud (user / network data) | Fait | 1.64 |  |
-| Classes de stockage (Longhorn v1, chiffrement, topologies, par défaut, supprimer) | Partiel | 1.64 | LVM et Longhorn v2 proposés mais pas vérifiés en réel (absents des bancs) |
+| Classes de stockage (Longhorn v1, chiffrement, topologies, LVM, par défaut, supprimer) | Partiel | 1.74 | LVM vérifié en réel en 1.74 (add-on expérimental, disque de réserve) ; Longhorn v2 proposé mais pas vérifié (absent des bancs) |
 | Périphériques PCI | Fait | 1.68 | activer ou désactiver le passthrough, par sélection ; groupe IOMMU et VMs qui s'en servent dits |
 | SR-IOV réseau (nombre de VF) | Fait | 1.68 | carte igb émulée sur le banc |
 | GPU SR-IOV, vGPU, configurations MIG | Manquant |  | non livré : aucun GPU compatible sous Harvester sur les bancs, rien ne peut y être essayé en réel |

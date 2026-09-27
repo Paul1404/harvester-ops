@@ -145,3 +145,22 @@ def test_create_vm_from_an_image_and_upload(ui):
     method, path, _ = sent[-1]
     assert method == "PUT" and path.startswith("api/image-upload/harv-fake/default?")
     assert "display_name=cirros" in path and "file_name=cirros.qcow2" in path and "storage_class=harvester-longhorn" in path
+
+
+def test_a_cdi_image_prepares_its_download_then_fetches_it(ui):
+    """v1.74.0 : une image CDI (hors Longhorn v1) se télécharge : Harvester
+    convertit d'abord le volume (downloader), suivi comme une action, puis
+    le fichier qcow2 part."""
+    page, sent = ui
+    cdi = dict(IMAGES["items"][0], backend="cdi", storage_class="lvm-sc")
+    page.evaluate("document.body.insertAdjacentHTML('beforeend', '<button id=\"anc\">x</button>')")
+    page.evaluate("StorageActions.imageMenu(document.getElementById('anc'), 'harv-fake', " + json.dumps(cdi) + ", () => {})")
+    item = page.locator('.sta-menu [data-sta="download"]')
+    expect(item).to_be_enabled(timeout=5000)                                  # plus réservé à Longhorn v1
+    item.click()
+    w = page.locator("#fp-sta-download-harv-fake-default-image-a")
+    expect(w).to_contain_text("qcow2", timeout=5000)                          # la conversion est annoncée
+    with page.expect_download(timeout=10000) as dl:
+        w.locator('button[type="submit"]').click()
+    assert sent[-1] == ("POST", "api/image/harv-fake/default/image-a/do/prepare-download", {})
+    assert dl.value.url.endswith("/api/image/harv-fake/default/image-a/download")   # après la préparation

@@ -4,6 +4,41 @@ All notable changes to this project will be documented here.
 Format inspired by [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 This file summarises each minor release; per-patch detail lives in `git log`.
 
+## [1.74.0] - 2026-09-27 - LVM storage and downloading CDI images
+
+### Added
+- **Download** a CDI image (on a class outside Longhorn v1): Harvester first
+  copies the volume into a compressed qcow2 file through a temporary
+  downloader; the console says so, follows the preparation as an action,
+  then fetches the qcow2 file, and Harvester removes the downloader.
+- `harvester-resources image prepare-download`, and `image download` for
+  CDI images.
+
+### Fixed (found by the real test)
+- An image created from a URL or uploaded on a class outside Longhorn v1
+  asked for a Longhorn backing image: Harvester then quietly put it in a
+  Longhorn class instead of the one chosen (seen with an LVM class, no LVM
+  volume created). The backend now follows the class, as in Harvester's
+  interface: `backingimage` on Longhorn v1, `cdi` elsewhere.
+
+### Tests
+- Library: the downloader named after the image, ready only with its URL,
+  Harvester's download endpoint; the backend of a new image per class.
+- Command line and route: the downloader created and waited for, the qcow2
+  streamed; preparing refused before the import and a no-op for Longhorn;
+  the route serving the qcow2 only once prepared, for operators.
+- In Chromium: a CDI image's download window, its preparation, then the file.
+- A test of the backups window read the freeze choices before the form had
+  filled them (it failed about one run in three): it now waits for them.
+- Real, on harvlab2 (Harvester 1.9.0, Harvester's experimental LVM add-on
+  1.9.0, a spare 20 GiB virtual disk): the disk given to LVM from the host
+  window (volume group `hops-vg` active); an LVM storage class created by
+  the form (`lvm.driver.harvesterhci.io`, striped); an image imported on it,
+  now as a CDI image with its LVM volume bound; downloaded as qcow2 in 8 s
+  (same virtual size as the source), the downloader removed by Harvester;
+  the disk released from the host window (volume group deleted), then the
+  add-on, the class and the disk removed from the bench.
+
 ## [1.73.0] - 2026-09-27 - Rancher members of the cluster and its projects
 
 ### Added

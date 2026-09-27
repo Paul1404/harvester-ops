@@ -76,6 +76,7 @@ il s'utilise aussi seul.
   harvester-resources image download --cluster harv1 --namespace default --name image-x --out image.gz
   harvester-resources image upload --cluster harv1 --namespace default --file disk.qcow2 --display-name disk [--storage-class sc] [--checksum SHA512] [--port 8092]
   harvester-resources image download --cluster harv1 --namespace default --name image-x --out f.qcow2   (CDI images: through a downloader)
+  harvester-resources image prepare-download --cluster harv1 --namespace default --name image-x   (CDI images: the qcow2 made ready)
 
   harvester-resources template set-default|delete-version --cluster harv1 --namespace default --name web --version default/web-2
   harvester-resources template delete --cluster harv1 --namespace default --name web
@@ -476,7 +477,13 @@ def cmd_create(args):
         image = kube.get(ho.K["image"], ins, iname)
         if image is None:
             raise ValueError(f"no image {ins}/{iname}")
-    man = ho.normalize(kind, spec, default_class=_default_class(kube) if kind == "image" else None, image=image)
+    default_class = _default_class(kube) if kind == "image" else None
+    sc_obj = None
+    if kind == "image":
+        # v1.74.0 : le backend de l'image suit sa classe (cdi hors Longhorn v1)
+        sc_name = str(spec.get("storage_class") or default_class or "").strip()
+        sc_obj = kube.get(ho.K["storageclass"], None, sc_name) if sc_name else None
+    man = ho.normalize(kind, spec, default_class=default_class, image=image, sc_obj=sc_obj)
     meta = man["metadata"]
     ns = meta.get("namespace")
     if meta.get("name") and kube.get(ho.K[kind], ns, meta["name"]) is not None:
@@ -1919,11 +1926,39 @@ def img_crypto(kube, args, operation):
     return _wait_image(kube, args.namespace, made["metadata"]["name"], args.display_name, args.timeout, "image")
 
 
+def img_prepare_download(kube, args, img=None):
+    """v1.74.0 : une image CDI se télécharge par un downloader du même nom
+    (Harvester convertit le volume en qcow2) : le créer et l'attendre. Une
+    image Longhorn v1 n'a rien à préparer."""
+    img = img or _image(kube, args.namespace, args.name)
+    if not hs.is_cdi(img):
+        step("download", "done", f"image {args.name}: Longhorn image, nothing to prepare")
+        return EXIT_OK
+    if hs.image_state(img)[0] != "ready":
+        raise ValueError(f"image {args.name} is not imported yet")
+    if kube.get(hs.K_DOWNLOADER, args.namespace, args.name) is None:
+        kube.create(hs.downloader_manifest(args.namespace, args.name))
+        step("download", "running", f"downloader {args.name} created: Harvester converts the volume to qcow2")
+    return _wait(kube, hs.K_DOWNLOADER, args.namespace, args.name, hs.downloader_state, args.timeout, label="download")
+
+
 def img_download(kube, args):
     img = _image(kube, args.namespace, args.name)
+    out = Path(args.out)
+    if hs.is_cdi(img):
+        if img_prepare_download(kube, args, img) != EXIT_OK:
+            return EXIT_FAIL
+        path = hs.cdi_download_path(args.namespace, args.name)
+        step("download", "running", f"image {args.name} to {out.name} (qcow2; Harvester removes the downloader after)")
+        n = 0
+        with open(out, "wb") as f:
+            for chunk in kube.raw_stream(path):
+                f.write(chunk)
+                n += len(chunk)
+        step("download", "done", f"{n} bytes written")
+        return EXIT_OK
     sc = _sc(kube, ((img.get("status") or {}).get("storageClassName")))
     path = hs.download_path(hs.backing_image_of(img, sc))
-    out = Path(args.out)
     step("download", "running", f"image {args.name} to {out.name} (gzip)")
     n = 0
     with open(out, "wb") as f:
@@ -2004,9 +2039,11 @@ def img_upload(kube, args):
     try:
         host = args.advertise or _local_ip_for(kube.server_host() or "127.0.0.1")
         url = f"http://{host}:{srv.server_address[1]}/image/{token}"
+        sc_name = args.storage_class or _default_class(kube)
         obj = hs.upload_image(args.namespace, args.display_name, url, args.storage_class,
                               checksum=args.checksum, file_name=args.file_name or src.name,
-                              description=args.description or "")
+                              description=args.description or "",
+                              sc_obj=kube.get(ho.K["storageclass"], None, sc_name) if sc_name else None)
         step("upload", "running", f"{src.name} ({size} bytes) offered to the cluster from {host}")
         made = kube.create(obj)
         return _wait_image(kube, args.namespace, made["metadata"]["name"], args.display_name, args.timeout, "upload")
@@ -2016,7 +2053,8 @@ def img_upload(kube, args):
 
 
 IMAGE_ACTIONS = {"edit": img_edit, "clone": img_clone, "encrypt": lambda k, a: img_crypto(k, a, "encrypt"),
-                 "decrypt": lambda k, a: img_crypto(k, a, "decrypt"), "download": img_download, "upload": img_upload}
+                 "decrypt": lambda k, a: img_crypto(k, a, "decrypt"), "download": img_download, "upload": img_upload,
+                 "prepare-download": img_prepare_download}
 
 
 def cmd_image(args):
@@ -3584,7 +3622,7 @@ def main(argv=None):
     sp.add_argument("--description")
     sp.add_argument("--labels-file", help="edit: JSON object of the image's labels")
     sp.add_argument("--storage-class", help="encrypt/decrypt/upload: the target storage class")
-    sp.add_argument("--out", help="download: file written (gzip)")
+    sp.add_argument("--out", help="download: file written (gzip for a Longhorn image, qcow2 for a CDI image)")
     sp.add_argument("--file", help="upload: the image file")
     sp.add_argument("--file-name", help="upload: the original file name (label iso or raw_qcow2)")
     sp.add_argument("--checksum", help="upload: SHA512 of the file")

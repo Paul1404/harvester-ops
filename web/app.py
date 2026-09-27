@@ -12301,7 +12301,7 @@ def api_cluster_usage(cluster):
 import hv_storage as _hs  # noqa: E402
 
 _VOLUME_DO = ("clone", "export", "snapshot", "copy", "cancel-expand", "describe")
-_IMAGE_DO = ("edit", "clone", "encrypt", "decrypt")
+_IMAGE_DO = ("edit", "clone", "encrypt", "decrypt", "prepare-download")
 # à côté du magasin des archives (même disque persistant dans le service packagé)
 IMAGE_UPLOAD_DIR = Path(os.environ.get(
     "HARVESTER_OPS_IMAGE_UPLOAD_DIR",
@@ -12430,6 +12430,8 @@ def api_image_do(cluster, namespace, name, action):
                 extra += ["--labels-file", path]
             if not extra:
                 raise ValueError("nothing to change")
+        elif action == "prepare-download":
+            pass                                   # v1.74.0 : image CDI, le downloader de Harvester
         else:
             dn = str(b.get("display_name") or "").strip()
             if not dn or len(dn) > 63:
@@ -12451,7 +12453,8 @@ def api_image_do(cluster, namespace, name, action):
 def api_image_download(cluster, namespace, name):
     """« Télécharger » une image Longhorn v1 : le fichier compressé du
     BackingImage, par le proxy de service de l'apiserver (le relais de
-    Harvester lui-même). Réservé aux opérateurs : c'est tout le disque."""
+    Harvester lui-même) ; une image CDI : le qcow2 préparé par le downloader
+    de Harvester (v1.74.0). Réservé aux opérateurs : c'est tout le disque."""
     if ROLE_RANK.get(current_role(), 0) < ROLE_RANK["operator"]:
         return jsonify({"error": "forbidden", "required": "operator"}), 403
     kc = _kubectl_for_cluster(cluster)
@@ -12460,14 +12463,25 @@ def api_image_download(cluster, namespace, name):
     img = _kubectl_json(kc, "get", _hs.K_IMAGE, name, "-n", namespace, cluster=cluster)
     if img is None:
         return jsonify({"error": f"no image {namespace}/{name}"}), 404
+    display = re.sub(r"[^A-Za-z0-9._-]+", "_", ((img.get("spec") or {}).get("displayName") or name))[:120]
+    from kube import Kube as _Kube
+    if _hs.is_cdi(img):
+        # v1.74.0 : le fichier qcow2 que prépare le downloader de Harvester
+        # (action « prepare-download »), relayé par son point de
+        # téléchargement, qui supprime ensuite le downloader
+        dl = _kubectl_json(kc, "get", _hs.K_DOWNLOADER, name, "-n", namespace, cluster=cluster)
+        if _hs.downloader_state(dl)[0] is not True:
+            return jsonify({"error": "the qcow2 file is not ready", "code": "prepare-first",
+                            "hint": "prepare the download first: Harvester converts the volume"}), 409
+        stream = _Kube(kc).raw_stream(_hs.cdi_download_path(namespace, name))
+        return Response(stream_with_context(stream), mimetype="application/octet-stream",
+                        headers={"Content-Disposition": f'attachment; filename="{display}.qcow2"'})
     sc = _kubectl_json(kc, "get", _hs.K_SC, ((img.get("status") or {}).get("storageClassName")) or "x", cluster=cluster)
     try:
         path = _hs.download_path(_hs.backing_image_of(img, sc))
     except ValueError as e:
         return jsonify({"error": str(e)}), 409
-    from kube import Kube as _Kube
     stream = _Kube(kc).raw_stream(path)
-    display = re.sub(r"[^A-Za-z0-9._-]+", "_", ((img.get("spec") or {}).get("displayName") or name))[:120]
     return Response(stream_with_context(stream), mimetype="application/gzip",
                     headers={"Content-Disposition": f'attachment; filename="{display}.gz"'})
 

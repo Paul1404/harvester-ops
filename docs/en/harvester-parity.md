@@ -1,8 +1,8 @@
 # Parity with the Harvester UI
 
-Status on 2026-09-27, console **v1.73.0**, compared with the **Harvester v1.9** UI (menus taken from the harvester-ui-extension v1.9.0 source and the v1.9 documentation).
+Status on 2026-09-27, console **v1.74.0**, compared with the **Harvester v1.9** UI (menus taken from the harvester-ui-extension v1.9.0 source and the v1.9 documentation).
 
-Of 135 functions of the Harvester UI: **131 done**, **3 partial**, **1 missing**; 2 out of scope. A missing function shows the version it is planned for.
+Of 135 functions of the Harvester UI: **132 done**, **2 partial**, **1 missing**; 2 out of scope. A missing function shows the version it is planned for.
 
 Statuses: Done, Partial (what is missing is said), Missing (planned version), Console only (what Harvester does not have), Out of scope.
 
@@ -131,7 +131,7 @@ Harvester menu: *Images*
 | Upload a file from the browser | Done | 1.63 | the console serves it to the cluster (port 8092) |
 | SHA512 checksum | Done | 1.63 |  |
 | Encrypt / decrypt | Done | 1.63 |  |
-| Download the image | Partial | 1.63 | Longhorn v1 images; CDI images: no third-party storage on the test benches to try them |
+| Download the image | Done | 1.74 | Longhorn v1 images (gzip); CDI images as qcow2 through Harvester's downloader, verified on an LVM class |
 | Clone, edit (description, labels) | Done | 1.63 | the name is fixed by Harvester |
 | Create a VM from the image | Done | 1.63 |  |
 | Delete (when unused) | Done | 1.59 |  |
@@ -211,7 +211,7 @@ Harvester menu: *Advanced*
 | Templates: versions, default, launch a version, delete | Done | 1.64 |  |
 | SSH keys (create, read from file, edit, delete) | Done | 1.64 |  |
 | Cloud configuration templates (user / network data) | Done | 1.64 |  |
-| Storage classes (Longhorn v1, encryption, topologies, default, delete) | Partial | 1.64 | LVM and Longhorn v2 offered but not verified for real (absent from the benches) |
+| Storage classes (Longhorn v1, encryption, topologies, LVM, default, delete) | Partial | 1.74 | LVM verified for real in 1.74 (experimental add-on, spare disk); Longhorn v2 offered but not verified (absent from the benches) |
 | PCI devices | Done | 1.68 | enable or disable passthrough, by selection; IOMMU group and the VMs using them said |
 | SR-IOV network devices (VF count) | Done | 1.68 | emulated igb card on the bench |
 | SR-IOV GPU, vGPU, MIG configurations | Missing |  | not shipped: no compatible GPU under Harvester on the benches, nothing can be tried for real |

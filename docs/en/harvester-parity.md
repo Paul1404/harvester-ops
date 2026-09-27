@@ -1,8 +1,8 @@
 # Parity with the Harvester UI
 
-Status on 2026-09-27, console **v1.63.0**, compared with the **Harvester v1.9** UI (menus taken from the harvester-ui-extension v1.9.0 source and the v1.9 documentation).
+Status on 2026-09-27, console **v1.64.0**, compared with the **Harvester v1.9** UI (menus taken from the harvester-ui-extension v1.9.0 source and the v1.9 documentation).
 
-Of 135 functions of the Harvester UI: **96 done**, **14 partial**, **25 missing**; 2 out of scope. A missing function shows the version it is planned for.
+Of 135 functions of the Harvester UI: **100 done**, **11 partial**, **24 missing**; 2 out of scope. A missing function shows the version it is planned for.
 
 Statuses: Done, Partial (what is missing is said), Missing (planned version), Console only (what Harvester does not have), Out of scope.
 
@@ -131,7 +131,7 @@ Harvester menu: *Images*
 | Upload a file from the browser | Done | 1.63 | the console serves it to the cluster (port 8092) |
 | SHA512 checksum | Done | 1.63 |  |
 | Encrypt / decrypt | Done | 1.63 |  |
-| Download the image | Partial | 1.63 | Longhorn v1 images; CDI images in 1.64 |
+| Download the image | Partial | 1.63 | Longhorn v1 images; CDI images: no third-party storage on the test benches to try them |
 | Clone, edit (description, labels) | Done | 1.63 | the name is fixed by Harvester |
 | Create a VM from the image | Done | 1.63 |  |
 | Delete (when unused) | Done | 1.59 |  |
@@ -206,16 +206,16 @@ Harvester menu: *Advanced*
 
 | Function | Status | Version | Note |
 |---|---|---|---|
-| Templates: create, launch a VM | Partial | 1.28 | versions, default version, delete in 1.64 |
-| SSH keys (create, read from file, delete) | Partial | 1.59 | edit in 1.64 |
-| Cloud configuration templates (user / network data) | Missing | planned 1.64 |  |
-| Storage classes (Longhorn v1, default, delete) | Partial | 1.59 | encryption, LVM, v2 and topologies in 1.64 |
+| Templates: versions, default, launch a version, delete | Done | 1.64 |  |
+| SSH keys (create, read from file, edit, delete) | Done | 1.64 |  |
+| Cloud configuration templates (user / network data) | Done | 1.64 |  |
+| Storage classes (Longhorn v1, encryption, topologies, default, delete) | Partial | 1.64 | LVM and Longhorn v2 offered but not verified for real (absent from the benches) |
 | PCI devices | Partial | 1.15 | list and attach to VMs; enable passthrough in 1.66 |
 | SR-IOV network devices (VF count) | Missing | planned 1.66 |  |
 | SR-IOV GPU, vGPU, MIG configurations | Missing | planned 1.66 | to be documented as unverified: no compatible GPU under Harvester |
 | USB devices (passthrough) | Missing | planned 1.66 |  |
 | Add-ons: enable, disable, configure | Done | 1.57 |  |
-| Secrets (Opaque: create, delete) | Partial | 1.59 | TLS, Basic, Registry, SSH types and edit in 1.64 |
+| Secrets (Opaque, TLS, Basic, Registry, SSH, encryption: create, new values, delete) | Done | 1.64 |  |
 | Harvester settings (all 40: NTP, proxy, CA, TLS, overcommit…) | Missing | planned 1.66 |  |
 
 ## Harvester upgrade

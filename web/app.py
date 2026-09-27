@@ -666,6 +666,7 @@ ADMIN_ONLY_PREFIXES = (
     "/api/vmtemplates/",        # templates partagés du cluster
     "/api/host/",               # v1.62.0 : disques, CPU manager, BMC, suppression d'un hôte
     "/api/ns-admin/",           # v1.62.0 : créer, modifier, supprimer un namespace
+    "/api/templates/",          # v1.64.0 : versions des modèles partagés du cluster
     "/api/users",               # gestion des comptes de la console
     "/api/harvester-users",     # comptes du cluster Harvester
     "/api/kubeovn/",            # réseaux kube-ovn : un changement peut couper des VMs
@@ -8310,25 +8311,57 @@ def api_vmtemplate_spec(cluster, namespace, name):
                          "-n", namespace, "-o", "json", cluster=cluster)
     if not tmpl:
         return jsonify({"error": "template not found"}), 404
-    version_id = ((tmpl.get("spec") or {}).get("defaultVersionId")) or ""
+    # v1.64.0 : une version choisie (menu du modèle), sinon celle par défaut
+    version_id = request.args.get("version") or ((tmpl.get("spec") or {}).get("defaultVersionId")) or ""
     if "/" not in version_id:
         return jsonify({"error": "template has no default version"}), 404
     v_ns, v_name = version_id.split("/", 1)
-    if not _valid_k8s_name(v_ns) or not _valid_k8s_name(v_name):
-        return jsonify({"error": "invalid default version id"}), 400
+    if not _valid_k8s_name(v_ns) or not _K8S_SUBDOMAIN_RE.match(v_name):
+        return jsonify({"error": "invalid version id"}), 400
     version = _kubectl_json(kc, "get", "virtualmachinetemplateversion", v_name,
                             "-n", v_ns, "-o", "json", cluster=cluster)
     if not version:
         return jsonify({"error": f"version {version_id} not found"}), 404
-    vm = ((version.get("spec") or {}).get("vm")) or {}
+    if ((version.get("spec") or {}).get("templateId")) != f"{namespace}/{name}":
+        return jsonify({"error": f"{version_id} is not a version of {namespace}/{name}"}), 400
+    vm = json.loads(json.dumps(((version.get("spec") or {}).get("vm")) or {}))
+    # comme Harvester (edit/kubevirt.io.virtualmachine) : ni les accès, ni les
+    # clés dynamiques, ni la MAC ; pas de source dans les modèles de volume
+    meta = vm.setdefault("metadata", {})
+    ann = meta.setdefault("annotations", {})
+    for k in ("harvesterhci.io/dynamic-ssh-key-names", "harvesterhci.io/dynamic-ssh-key-users",
+              "harvesterhci.io/mac-address"):
+        ann.pop(k, None)
+    try:
+        vct = json.loads(ann.get("harvesterhci.io/volumeClaimTemplates") or "[]")
+        for t in vct:
+            (t.get("spec") or {}).pop("dataSource", None)
+        if vct:
+            ann["harvesterhci.io/volumeClaimTemplates"] = json.dumps(vct)
+    except ValueError:
+        pass
+    ts = ((vm.get("spec") or {}).get("template") or {}).get("spec") or {}
+    ts.pop("accessCredentials", None)
+    cloudinit = None
+    for v in ts.get("volumes") or []:
+        ref = ((v.get("cloudInitNoCloud") or {}).get("secretRef") or {}).get("name")
+        if not ref:
+            continue
+        sec = _kubectl_json(kc, "get", "secret", ref, "-n", v_ns, cluster=cluster)
+        data = (sec or {}).get("data") or {}
+        dec = lambda k: base64.b64decode(data[k]).decode(errors="replace") if data.get(k) else ""  # noqa: E731
+        cloudinit = {"user_data": dec("userdata"), "network_data": dec("networkdata")}
     return jsonify({
         "template": f"{namespace}/{name}",
         "version": version_id,
         "description": (tmpl.get("spec") or {}).get("description"),
         # La spec seule : le nom viendra du formulaire, à chaque
         # instanciation.
-        "vm": {"metadata": vm.get("metadata") or {},
-               "spec": vm.get("spec") or {}},
+        "vm": {"metadata": meta, "spec": vm.get("spec") or {}},
+        # v1.64.0 : le cloud-init de la version, recopié dans un Secret propre
+        # à la nouvelle VM (partager celui de la version l'exposait à la
+        # suppression avec la VM)
+        "cloudinit": cloudinit,
     })
 
 
@@ -12079,6 +12112,222 @@ def api_image_upload(cluster, namespace):
     run2, err = _res_cli(cluster, kc, f"image:upload:{namespace}/{display}",
                          ["image", "upload", "--namespace", namespace] + extra, [str(part)])
     return _res_reply(run2, err, received=run.id, image=display)
+
+
+# ---------------------------------------------------------------------------
+# v1.64.0 : les menus « Advanced » de Harvester : modèles de VM et leurs
+# versions, modèles cloud-init, classes de stockage complètes, secrets typés,
+# clés SSH modifiables. Écriture par bin/harvester-resources.py.
+# ---------------------------------------------------------------------------
+import hv_advanced as _hadv  # noqa: E402
+
+
+@app.route("/api/templates/<cluster>")
+@requires_auth
+def api_templates(cluster):
+    kc = _kubectl_for_cluster(cluster)
+    if not kc:
+        return jsonify({"error": f"unknown cluster: {cluster}"}), 404
+    if _cluster_reachable(kc) is False:
+        return jsonify(_unreachable_payload(cluster, kc)), 200
+    from concurrent.futures import ThreadPoolExecutor
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        ft = pool.submit(_kubectl_json, kc, "get", _hadv.K_TEMPLATE, "-A", cluster=cluster)
+        fv = pool.submit(_kubectl_json, kc, "get", _hadv.K_VERSION, "-A", cluster=cluster)
+        tpls, vers = (ft.result() or {}).get("items") or [], (fv.result() or {}).get("items") or []
+    items = []
+    for t in tpls:
+        m = t.get("metadata") or {}
+        items.append({"namespace": m.get("namespace"), "name": m.get("name"),
+                      "description": (t.get("spec") or {}).get("description") or "",
+                      "default_version": (t.get("spec") or {}).get("defaultVersionId"),
+                      "versions": _hadv.versions_of(t, vers)})
+    items.sort(key=lambda r: (r["namespace"], r["name"]))
+    return jsonify({"cluster": cluster, "items": items})
+
+
+@app.route("/api/templates/<cluster>/<namespace>/<name>/do/<action>", methods=["POST"])
+@requires_auth
+@_rate_limit("30/minute")
+def api_template_do(cluster, namespace, name, action):
+    if action not in ("set-default", "delete-version", "delete"):
+        return jsonify({"error": "action: set-default, delete-version or delete"}), 400
+    kc = _kubectl_for_cluster(cluster)
+    if not kc:
+        return jsonify({"error": f"unknown cluster: {cluster}"}), 404
+    b = request.get_json(silent=True) or {}
+    extra = []
+    if action != "delete":
+        ver = str(b.get("version") or "")
+        parts = ver.split("/")
+        if len(parts) != 2 or not all(_K8S_SUBDOMAIN_RE.match(x) for x in parts):
+            return jsonify({"error": "version: namespace/name"}), 400
+        extra += ["--version", ver]
+    run, err = _res_cli(cluster, kc, f"template:{action}:{namespace}/{name}",
+                        ["template", action, "--namespace", namespace, "--name", name] + extra)
+    return _res_reply(run, err, template=f"{namespace}/{name}", action=action)
+
+
+@app.route("/api/cloud-templates/<cluster>")
+@requires_auth
+def api_cloud_templates(cluster):
+    kc = _kubectl_for_cluster(cluster)
+    if not kc:
+        return jsonify({"error": f"unknown cluster: {cluster}"}), 404
+    if _cluster_reachable(kc) is False:
+        return jsonify(_unreachable_payload(cluster, kc)), 200
+    got = _kubectl_json(kc, "get", "configmaps", "-A", "-l", _hadv.CLOUD_LABEL, cluster=cluster)
+    return jsonify({"cluster": cluster, "items": _hadv.cloud_templates((got or {}).get("items") or [])})
+
+
+def _ct_text_file(files, text):
+    wd = _capi_work_dir()
+    fd, path = tempfile.mkstemp(prefix="ct-", dir=str(wd) if wd else None)
+    with os.fdopen(fd, "w") as f:
+        f.write(text)
+    files.append(path)
+    return path
+
+
+@app.route("/api/cloud-templates/<cluster>", methods=["POST"])
+@requires_auth
+@_rate_limit("20/minute")
+def api_cloud_template_create(cluster):
+    kc = _kubectl_for_cluster(cluster)
+    if not kc:
+        return jsonify({"error": f"unknown cluster: {cluster}"}), 404
+    b = request.get_json(silent=True) or {}
+    files = []
+    try:
+        _hadv.cloud_template(str(b.get("name") or ""), str(b.get("namespace") or "default"), b.get("type"),
+                             str(b.get("text") or ""), str(b.get("description") or ""))
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
+    path = _ct_text_file(files, str(b["text"]))
+    run, err = _res_cli(cluster, kc, f"cloudtpl:create:{b.get('namespace') or 'default'}/{b['name']}",
+                        ["cloudtpl", "create", "--namespace", str(b.get("namespace") or "default"), "--name", str(b["name"]),
+                         "--type", b["type"], "--file", path, "--description", str(b.get("description") or "")[:1000]], files)
+    return _res_reply(run, err, template=b["name"])
+
+
+@app.route("/api/cloud-templates/<cluster>/<namespace>/<name>/do/<action>", methods=["POST"])
+@requires_auth
+@_rate_limit("20/minute")
+def api_cloud_template_do(cluster, namespace, name, action):
+    if action not in ("update", "delete"):
+        return jsonify({"error": "action: update or delete"}), 400
+    kc = _kubectl_for_cluster(cluster)
+    if not kc:
+        return jsonify({"error": f"unknown cluster: {cluster}"}), 404
+    b = request.get_json(silent=True) or {}
+    files, extra = [], []
+    if action == "update":
+        try:
+            _hadv.cloud_template(name, namespace, "user", str(b.get("text") or ""))
+        except ValueError as e:
+            return jsonify({"error": str(e)}), 400
+        extra += ["--file", _ct_text_file(files, str(b["text"])), "--description", str(b.get("description") or "")[:1000]]
+    run, err = _res_cli(cluster, kc, f"cloudtpl:{action}:{namespace}/{name}",
+                        ["cloudtpl", action, "--namespace", namespace, "--name", name] + extra, files)
+    return _res_reply(run, err, template=f"{namespace}/{name}", action=action)
+
+
+@app.route("/api/storage-options/<cluster>")
+@requires_auth
+def api_storage_options(cluster):
+    """Ce que propose le formulaire de classe : moteurs présents (Longhorn v2
+    si son réglage est actif, LVM si son pilote CSI est là), nœuds LVM et
+    leurs groupes de volumes, secrets de chiffrement."""
+    kc = _kubectl_for_cluster(cluster)
+    if not kc:
+        return jsonify({"error": f"unknown cluster: {cluster}"}), 404
+    from concurrent.futures import ThreadPoolExecutor
+    reads = {"csi": ("csidrivers",), "v2": ("settings.longhorn.io", "v2-data-engine", "-n", "longhorn-system"),
+             "vgs": ("lvmvolumegroups.harvesterhci.io", "-A"), "secrets": ("secrets", "-A")}
+    with ThreadPoolExecutor(max_workers=len(reads)) as pool:
+        futs = {k: pool.submit(_kubectl_json, kc, "get", *a, cluster=cluster) for k, a in reads.items()}
+        got = {k: f.result() for k, f in futs.items()}
+    drivers = {(d.get("metadata") or {}).get("name") for d in (got["csi"] or {}).get("items") or []}
+    vgs = [{"node": (v.get("spec") or {}).get("nodeName"), "vg": (v.get("spec") or {}).get("vgName")}
+           for v in (got["vgs"] or {}).get("items") or []]
+    secrets = [f"{(s.get('metadata') or {}).get('namespace')}/{(s.get('metadata') or {}).get('name')}"
+               for s in (got["secrets"] or {}).get("items") or [] if _hadv.crypto_secret_ok(s)]
+    return jsonify({"longhorn_v2": str((got["v2"] or {}).get("value")) == "true",
+                    "lvm": _hadv.LVM in drivers, "lvm_groups": vgs, "crypto_secrets": sorted(secrets)})
+
+
+@app.route("/api/storageclass/<cluster>", methods=["POST"])
+@requires_auth
+@_rate_limit("20/minute")
+def api_storageclass_create(cluster):
+    denied = _needs_admin()
+    if denied:
+        return denied
+    kc = _kubectl_for_cluster(cluster)
+    if not kc:
+        return jsonify({"error": f"unknown cluster: {cluster}"}), 404
+    b = request.get_json(silent=True) or {}
+    try:
+        _hadv.storage_class(b)
+    except (ValueError, TypeError) as e:
+        return jsonify({"error": str(e)}), 400
+    run, err = _cli_action(cluster, f"storageclass:create:{b.get('name')}",
+                           [sys.executable, str(BIN_DIR / RESOURCES_SCRIPT), "storageclass", "--kubeconfig", kc],
+                           "harvester-resources", spec=b, after=lambda: _invalidate_cluster_caches(cluster))
+    return _res_reply(run, err, storageclass=b.get("name"))
+
+
+@app.route("/api/secret/<cluster>/<namespace>/<name>/do/<action>", methods=["POST"])
+@requires_auth
+@_rate_limit("20/minute")
+def api_secret_do(cluster, namespace, name, action):
+    """Créer un secret typé ou donner de nouvelles valeurs (administrateurs :
+    un secret peut porter des mots de passe). Les valeurs passent par un
+    fichier privé, jamais par la ligne de commande."""
+    if action not in ("create", "update"):
+        return jsonify({"error": "action: create or update"}), 400
+    denied = _needs_admin()
+    if denied:
+        return denied
+    kc = _kubectl_for_cluster(cluster)
+    if not kc:
+        return jsonify({"error": f"unknown cluster: {cluster}"}), 404
+    b = request.get_json(silent=True) or {}
+    try:
+        if action == "create":
+            if b.get("type") == "crypto":
+                _hadv.crypto_secret(name, namespace, str(b.get("passphrase") or ""), b.get("cipher") or "aes-xts-plain64",
+                                    b.get("hash") or "sha256", b.get("size") or "256", b.get("pbkdf") or "argon2i")
+            else:
+                _hadv.typed_secret(name, namespace, b.get("type") or "Opaque", b.get("fields") or {})
+    except (ValueError, TypeError) as e:
+        return jsonify({"error": str(e)}), 400
+    run, err = _cli_action(cluster, f"secret:{action}:{namespace}/{name}",
+                           [sys.executable, str(BIN_DIR / RESOURCES_SCRIPT), "secret", action, "--kubeconfig", kc,
+                            "--namespace", namespace, "--name", name],
+                           "harvester-resources", spec=b, after=lambda: _invalidate_cluster_caches(cluster))
+    return _res_reply(run, err, secret=f"{namespace}/{name}", action=action)
+
+
+@app.route("/api/sshkey/<cluster>/<namespace>/<name>/do/update", methods=["POST"])
+@requires_auth
+@_rate_limit("20/minute")
+def api_sshkey_update(cluster, namespace, name):
+    kc = _kubectl_for_cluster(cluster)
+    if not kc:
+        return jsonify({"error": f"unknown cluster: {cluster}"}), 404
+    b = request.get_json(silent=True) or {}
+    files = []
+    try:
+        _hadv.keypair_update({}, str(b.get("public_key") or ""))
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
+    extra = ["--public-key-file", _ct_text_file(files, str(b["public_key"]))]
+    if "description" in b:
+        extra += ["--description", str(b.get("description") or "")[:1000]]
+    run, err = _res_cli(cluster, kc, f"sshkey:update:{namespace}/{name}",
+                        ["sshkey", "update", "--namespace", namespace, "--name", name] + extra, files)
+    return _res_reply(run, err, sshkey=f"{namespace}/{name}")
 
 
 @app.route("/api/vm/<cluster>/<namespace>/<name>/logs")

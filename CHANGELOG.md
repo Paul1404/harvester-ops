@@ -4,6 +4,58 @@ All notable changes to this project will be documented here.
 Format inspired by [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 This file summarises each minor release; per-patch detail lives in `git log`.
 
+## [1.64.0] - 2026-09-27 - Templates, cloud configs, storage classes, secrets and SSH keys, as in Harvester
+
+### Added
+- **Templates** window (Virtual machines tab, next to the namespace
+  selector): each VM template with its versions, ready or not, the default
+  one marked. **Launch** a chosen version (the creation window opens on it,
+  its cloud-init copied into a Secret of the new VM and editable before
+  creating), **make default**, **delete a version** (not the default) or the
+  whole template, YAML of both.
+- **Cloud configs** window: Harvester's cloud-init templates (user-data and
+  network-data ConfigMaps), created, edited, deleted, YAML.
+- **Storage class** form: the engine (Longhorn v1; Longhorn v2 and LVM when
+  the cluster has them), **encryption** with its secret and online
+  expansion, an allowed topology, the binding mode, the reclaim policy, a
+  description.
+- **Secrets** by type (Opaque, basic authentication, SSH key, TLS
+  certificate, registry, and the encryption secret of storage classes), and
+  **new values** for an existing secret from its row (never shown; an empty
+  field keeps the current value; an Opaque secret can lose a key).
+- **SSH keys** can be edited (key and description); Harvester computes the
+  new fingerprint.
+- `harvester-resources template set-default|delete-version|delete`,
+  `cloudtpl create|update|delete`, `storageclass --spec`,
+  `secret create|update --spec`, `sshkey update`.
+
+### Changed
+- A VM created from a template no longer carries the template's access
+  credentials, dynamic SSH keys, MAC address or volume sources, as in
+  Harvester.
+
+### Removed
+- The "strict local" data locality of the storage class form: Longhorn
+  accepts it only with a single replica, and the form offers several.
+
+### Tests
+- Library, command line and routes: versions and their default, the
+  refusal to delete the default version, cloud templates and their labels,
+  each storage class engine and its encryption secrets, each secret type
+  and its new values, the SSH key fingerprint left to Harvester.
+- In Chromium: the Templates and Cloud configs windows and what they send,
+  launching a version (template chosen, version asked, cloud-init shown),
+  the encrypted storage class form, typed secrets and their new values,
+  the SSH key edit.
+- Real, on harv1: a template with two versions (default changed in 3 s, a
+  version deleted in 3 s, a VM launched from a version with its own copy of
+  the cloud-init, the template deleted with its versions); a cloud config
+  created, edited and deleted; five typed secrets created and two given new
+  values from the list; an encrypted storage class whose volume a pod wrote
+  and read (41 s); an SSH key edited, fingerprint recomputed in 2 s.
+  LVM and Longhorn v2 are offered but not tried: neither is enabled on the
+  test clusters.
+
 ## [1.63.0] - 2026-09-27 - Volumes and images, as in Harvester
 
 ### Added

@@ -297,6 +297,8 @@ const FloatingPanels = (() => {
     'backups':      () => tr('panel.kind.backups',   'Backups'),
     'host-settings': () => tr('panel.kind.host',     'Host'),
     'namespaces':   () => tr('panel.kind.namespaces', 'Namespaces'),
+    'templates':    () => tr('panel.kind.templates', 'Templates'),
+    'cloud-templates': () => tr('panel.kind.cloudTemplates', 'Cloud configs'),
   };
 
   function kindLabel(opts) {

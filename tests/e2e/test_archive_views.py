@@ -268,7 +268,8 @@ def test_a_late_check_does_not_reenable_start_while_running(export_pane):
     start = pane.locator('[data-x="start"]')
     expect(start).to_be_enabled(timeout=5000)
     start.click()
-    expect(pane.locator('[data-x="feedback"]')).to_contain_text("exp000000002", timeout=5000)
+    # 15 s : sous la charge de la suite complète, le lancement dépassait 5 s
+    expect(pane.locator('[data-x="feedback"]')).to_contain_text("exp000000002", timeout=15000)
     n = len(checks)
     # un champ quitté après le lancement relance le contrôle
     pane.locator('[data-x="source"]').select_option("stopped")

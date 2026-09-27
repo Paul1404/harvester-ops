@@ -880,6 +880,38 @@ jetable, une image CirrOS envoyée depuis le navigateur (22 s), une création
 de VM ouverte depuis une image ; l'annulation d'un agrandissement figé sur le
 banc à trois nœuds.
 
+### Modèles, configurations cloud, classes de stockage, secrets, clés SSH (1.64.0)
+
+- **Modèles** (à côté du sélecteur de namespace de l'onglet Machines
+  virtuelles) : chaque modèle de VM et ses versions, la plus récente
+  d'abord, marquées prêtes ou non (leurs images importées) et par défaut.
+  **Lancer** ouvre la création de VM depuis une version (son cloud-init est
+  recopié dans un Secret de la nouvelle VM, jamais partagé avec le modèle,
+  comme le fait Harvester) ; **par défaut** ; **supprimer une version** (pas
+  celle par défaut) ou le modèle entier ; YAML. Une version ne change
+  jamais : on en fait une nouvelle depuis le menu d'une VM (Générer un
+  modèle).
+- **Configurations cloud** : les modèles cloud-init de Harvester (user-data
+  et network-data, gardés en ConfigMaps étiquetées) : créer, modifier le
+  texte et la description, supprimer, YAML.
+- **Classes de stockage** : le formulaire de création propose le moteur
+  (Longhorn v1 ; Longhorn v2 si son moteur de données est activé ; LVM si
+  son add-on est installé, avec le nœud, le groupe de volumes et le type),
+  le **chiffrement** avec le secret de la phrase secrète (et
+  l'agrandissement à chaud des volumes chiffrés), une topologie permise, le
+  mode de liaison, la politique de récupération et une description. Les
+  classes Longhorn v1 chiffrées ont été essayées pour de vrai (un volume
+  écrit et relu par un pod) ; les choix LVM et Longhorn v2 non, aucun des
+  deux n'étant activé sur les clusters d'essai.
+- **Secrets** : créés par type (Opaque, authentification basique, clé SSH,
+  certificat TLS, registre, et le secret de **chiffrement** des classes de
+  stockage) ; **nouvelles valeurs** pour un secret existant (les valeurs ne
+  sont jamais montrées ; un champ vide garde l'actuelle ; un secret Opaque
+  peut perdre une clé). Les valeurs passent par un fichier privé, jamais
+  par une ligne de commande.
+- **Clés SSH** : **modifier** la clé publique et la description ; Harvester
+  calcule la nouvelle empreinte.
+
 ## 4. Cluster API : clusters RKE2 en aval (console + CLI)
 
 Créer et exploiter des clusters Kubernetes dont les nœuds sont des VMs

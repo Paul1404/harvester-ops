@@ -171,6 +171,8 @@ def ssh_keys(items, vms=()):
             "namespace": _meta(it).get("namespace"), "name": _meta(it).get("name"),
             "fingerprint": status.get("fingerPrint"),
             "public_key": (it.get("spec") or {}).get("publicKey"),
+            # v1.64.0 : la description, modifiable avec la clé
+            "description": (_meta(it).get("annotations") or {}).get("field.cattle.io/description") or "",
             "validated": valid, "used_by": sorted(users.get(_ref(it), [])),
             "created": _created(it),
         })

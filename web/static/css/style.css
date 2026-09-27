@@ -4982,3 +4982,19 @@ body.login-page {
 .hs-win > [data-hs="err"]:empty { display: none; }
 .hs-head { padding-top: 6px; }
 .hs-body > .hint { padding-top: 12px; }
+
+/* v1.64.0 : fenêtres Modèles et Configurations cloud ; la barre des VMs
+   passe à la ligne plutôt que de couper ses boutons en deux */
+.ns-selector-row { flex-wrap: wrap; }
+.ns-selector-row .btn { white-space: nowrap; }
+.tpl-win { display: flex; flex-direction: column; gap: 8px; padding: 6px 10px 10px; }
+.tpl-win > .form-hint, .tpl-win .bk-bar .form-hint { margin: 0; }
+.tpl-win .bk-bar { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.tpl-win .hs-last:empty { display: none; }
+.tpl-card { margin: 0 0 12px; padding: 0; overflow: hidden; }
+.tpl-head { display: flex; align-items: flex-start; gap: 8px; padding: 8px 10px; }
+.tpl-head .tpl-title { flex: 1 1 auto; min-width: 0; }
+.tpl-head .res-desc { max-width: none; }
+.tpl-head .tpl-acts { flex: 0 0 auto; display: flex; gap: 6px; }
+td.tpl-acts { text-align: right; white-space: nowrap; }
+td.tpl-acts .btn + .btn { margin-left: 4px; }

@@ -99,13 +99,13 @@ const ResourceViews = (() => {
     restore: () => tr('bk.act.restore'), delete: () => tr('bk.act.delete'),
     suspend: () => tr('bk.act.suspend'), resume: () => tr('bk.act.resume'),
     default: () => tr('of.act.default'), configure: () => tr('of.act.configure'),
-    yaml: () => tr('yw.act.yaml'), more: () => tr('sta.act.more'),
+    yaml: () => tr('yw.act.yaml'), more: () => tr('sta.act.more'), edit: () => tr('sta.img.edit'),
   };
   const ACT_TIP = {
     restore: () => tr('bk.act.restoreTip'), delete: () => tr('bk.act.deleteTip'),
     suspend: () => tr('bk.act.suspendTip'), resume: () => tr('bk.act.resumeTip'),
     default: () => tr('of.act.defaultTip'), configure: () => tr('of.act.configureTip'),
-    yaml: () => tr('yw.act.yamlTip'), more: () => tr('sta.act.moreTip'),
+    yaml: () => tr('yw.act.yamlTip'), more: () => tr('sta.act.moreTip'), edit: () => tr('sec.t.edit'),
   };
   const act = (a, disabled, why, admin) => `<button type="button" class="btn btn-sm ${a === 'delete' ? 'btn-danger' : 'btn-secondary'} res-act tip${admin ? ' needs-admin' : ''}"
       data-act="${a}" data-tip="${esc(disabled && why ? why : ACT_TIP[a]())}" ${disabled ? 'disabled' : ''}>${esc(ACT_LABEL[a]())}</button>`;
@@ -126,6 +126,9 @@ const ResourceViews = (() => {
     if (a === 'delete') ObjectForms.remove(OBJ_KIND[cur.kind], cur.cluster, row).then(done).catch(fail);
     else if (a === 'default') ObjectForms.setDefaultClass(cur.cluster, row.name).then(done).catch(fail);
     else if (a === 'configure') ObjectForms.openAddonValues(cur.cluster, row, () => load(cur));
+    // v1.64.0 : modifier un secret (nouvelles valeurs) ou une clé SSH
+    else if (a === 'edit' && cur.kind === 'secrets') ObjectForms.editSecret(cur.cluster, row, () => load(cur));
+    else if (a === 'edit' && cur.kind === 'sshkeys') ObjectForms.editSshKey(cur.cluster, row, () => load(cur));
   }
 
   const VIEWS = {
@@ -171,7 +174,7 @@ const ResourceViews = (() => {
         `<strong>${esc(r.name)}</strong><div class="res-dim">${esc(r.namespace)}</div>`,
         `<code>${esc(r.fingerprint || '–')}</code>`,
         r.validated ? badge('ok', tr('res.key.valid')) : badge('warn', tr('res.key.pending')),
-        vms(r.used_by), age(r.created), act('delete') + yamlAct('sshkeys')],
+        vms(r.used_by), age(r.created), act('edit') + act('delete') + yamlAct('sshkeys')],
       details: (r) => [[tr('res.d.publicKey'), `<code class="res-wrap">${esc(r.public_key || '')}</code>`]],
       text: (r) => `${r.namespace}/${r.name} ${r.fingerprint || ''}`,
       sort: [(r) => r.name, (r) => r.fingerprint, (r) => (r.validated ? 1 : 0), (r) => (r.used_by || []).length,
@@ -186,7 +189,8 @@ const ResourceViews = (() => {
         `<code>${esc(r.type)}</code>`,
         (r.keys || []).map(k => `<code class="res-key">${esc(k)}</code>`).join(' ') || '–',
         vms(r.used_by), age(r.created),
-        act('delete', (r.used_by || []).length > 0 || r.system, r.system ? tr('of.t.system') : tr('of.t.inUse')) + yamlAct('secrets')],
+        (r.system ? '' : act('edit', false, '', true))
+        + act('delete', (r.used_by || []).length > 0 || r.system, r.system ? tr('of.t.system') : tr('of.t.inUse')) + yamlAct('secrets')],
       details: null,
       text: (r) => `${r.namespace}/${r.name} ${r.type} ${(r.keys || []).join(' ')}`,
       sort: [(r) => `${r.name} ${r.namespace}`, (r) => r.type, (r) => (r.keys || []).length,

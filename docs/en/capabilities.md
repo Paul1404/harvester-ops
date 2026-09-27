@@ -779,6 +779,34 @@ encrypted then decrypted with a throwaway encrypted class, a CirrOS image
 uploaded from the browser (22 s), a VM creation opened from an image; the
 cancel of a frozen expansion on the three-node bench.
 
+### Templates, cloud configurations, storage classes, secrets, SSH keys (1.64.0)
+
+- **Templates** (next to the namespace selector of the Virtual machines tab):
+  each VM template with its versions, newest first, marked ready or not (its
+  images imported) and default. **Launch** opens the VM creation from a
+  version (its cloud-init is copied into a Secret of the new VM, never
+  shared with the template, as Harvester does); **make default**; **delete
+  a version** (not the default one) or the whole template; YAML. A version
+  never changes: a new one is made from a VM's menu (Generate template).
+- **Cloud configs**: Harvester's cloud-init templates (user-data and
+  network-data, kept as labelled ConfigMaps): create, edit the text and the
+  description, delete, YAML.
+- **Storage classes**: the creation form offers the engine (Longhorn v1;
+  Longhorn v2 when its data engine is enabled; LVM when its add-on is
+  installed, with the node, the volume group and the type), **encryption**
+  with the secret holding the passphrase (and online expansion of encrypted
+  volumes), an allowed topology, the binding mode, the reclaim policy and a
+  description. Encrypted Longhorn v1 classes were tried for real (a volume
+  written and read by a pod); the LVM and Longhorn v2 choices were not, as
+  neither is enabled on the test clusters.
+- **Secrets**: created by type (Opaque, basic authentication, SSH key, TLS
+  certificate, registry, and the **encryption** secret of the storage
+  classes); **new values** for an existing secret (values are never shown;
+  an empty field keeps the current one; an Opaque secret can lose a key).
+  Values travel through a private file, never on a command line.
+- **SSH keys**: **edit** the public key and the description; Harvester
+  computes the new fingerprint.
+
 ## 4. Cluster API: downstream RKE2 clusters (console + CLI)
 
 Create and operate Kubernetes clusters whose nodes are Harvester VMs,

@@ -74,6 +74,14 @@ il s'utilise aussi seul.
   harvester-resources image encrypt|decrypt --cluster harv1 --namespace default --name image-x --display-name enc --storage-class enc-sc
   harvester-resources image download --cluster harv1 --namespace default --name image-x --out image.gz
   harvester-resources image upload --cluster harv1 --namespace default --file disk.qcow2 --display-name disk [--storage-class sc] [--checksum SHA512] [--port 8092]
+  harvester-resources image download --cluster harv1 --namespace default --name image-x --out f.qcow2   (CDI images: through a downloader)
+
+  harvester-resources template set-default|delete-version --cluster harv1 --namespace default --name web --version default/web-2
+  harvester-resources template delete --cluster harv1 --namespace default --name web
+  harvester-resources cloudtpl create|update|delete --cluster harv1 --namespace default --name base [--type user|network] [--file t.yaml] [--description ..]
+  harvester-resources storageclass --cluster harv1 --spec sc.json        (Longhorn v1/v2, encryption, LVM, topologies)
+  harvester-resources secret create|update --cluster harv1 --namespace default --name reg --spec s.json
+  harvester-resources sshkey update --cluster harv1 --namespace default --name ops --public-key-file k.pub [--description ..]
 
 Sorties : 0 fait, 1 échec, 2 refusé par le contrôle, 3 annulé. Les étapes
 s'écrivent sur stderr en `STEP_EVENT|étape|statut|message`, que la console
@@ -97,6 +105,7 @@ import hv_vm as hv  # noqa: E402
 import hv_host as hh  # noqa: E402
 import hv_ns as hn  # noqa: E402
 import hv_storage as hs  # noqa: E402
+import hv_advanced as hadv  # noqa: E402
 
 EXIT_OK, EXIT_FAIL, EXIT_BLOCKED, EXIT_CANCELLED = 0, 1, 2, 3
 K_ADDON = "addons.harvesterhci.io"
@@ -1949,6 +1958,135 @@ def cmd_image(args):
     return IMAGE_ACTIONS[args.action](kube, args)
 
 
+# ---------------------------------------------------------------------------
+# « Advanced » (v1.64.0) : modèles et leurs versions, modèles cloud-init,
+# classes de stockage complètes, secrets typés, clés SSH modifiables.
+# ---------------------------------------------------------------------------
+
+def cmd_template(args):
+    kube = kube_from(args)
+    ns, name = args.namespace, args.name
+    tpl = kube.get(hadv.K_TEMPLATE, ns, name)
+    if tpl is None:
+        raise ValueError(f"no template {ns}/{name}")
+    if args.action == "set-default":
+        patch = hadv.set_default_patch(args.version)
+        vns, vname = args.version.split("/", 1)
+        v = kube.get(hadv.K_VERSION, vns, vname)
+        if v is None or ((v.get("spec") or {}).get("templateId")) != f"{ns}/{name}":
+            raise ValueError(f"{args.version} is not a version of {ns}/{name}")
+        step("template", "running", f"{args.version} becomes the default version of {ns}/{name}")
+        kube.patch(hadv.K_TEMPLATE, ns, name, patch)
+        step("template", "done", "saved")
+        return EXIT_OK
+    if args.action == "delete-version":
+        hadv.delete_version_check(tpl, args.version)
+        vns, vname = args.version.split("/", 1)
+        step("template", "running", f"version {args.version} deleted")
+        kube.delete(hadv.K_VERSION, vns, vname)
+        step("template", "done", "deleted")
+        return EXIT_OK
+    step("template", "running", f"template {ns}/{name} and its versions deleted")
+    kube.delete(hadv.K_TEMPLATE, ns, name)
+
+    def done(o):
+        return (True, f"{ns}/{name} is gone") if o is None else (None, "deleting")
+    return _wait(kube, hadv.K_TEMPLATE, ns, name, done, args.timeout, label="template")
+
+
+def cmd_cloudtpl(args):
+    kube = kube_from(args)
+    ns, name = args.namespace, args.name
+    cur = kube.get(hadv.K_CM, ns, name)
+    if args.action == "delete":
+        if cur is None or ((cur.get("metadata") or {}).get("labels") or {}).get(hadv.CLOUD_LABEL) not in ("user", "network"):
+            raise ValueError(f"no cloud-init template {ns}/{name}")
+        kube.delete(hadv.K_CM, ns, name)
+        step("cloudtpl", "done", f"{ns}/{name} deleted")
+        return EXIT_OK
+    text = Path(args.file).read_text() if args.file else ""
+    if args.action == "create":
+        if cur is not None:
+            raise ValueError(f"{ns}/{name} already exists")
+        obj = hadv.cloud_template(name, ns, args.type or "user", text, args.description or "")
+        kube.create(obj)
+    else:
+        if cur is None:
+            raise ValueError(f"no cloud-init template {ns}/{name}")
+        kind = ((cur.get("metadata") or {}).get("labels") or {}).get(hadv.CLOUD_LABEL)
+        obj = hadv.cloud_template(name, ns, kind, text or (cur.get("data") or {}).get("cloudInit", ""),
+                                  args.description if args.description is not None else "")
+        cur["data"] = obj["data"]
+        ann = (cur["metadata"].setdefault("annotations", {}))
+        if args.description is not None:
+            if args.description:
+                ann[hadv.DESC] = args.description[:1000]
+            else:
+                ann.pop(hadv.DESC, None)
+        kube.replace(cur)
+    step("cloudtpl", "done", f"{ns}/{name} saved")
+    return EXIT_OK
+
+
+def cmd_storageclass(args):
+    kube = kube_from(args)
+    spec = _read_json(args.spec)
+    obj = hadv.storage_class(spec)
+    if kube.get(hs.K_SC, None, obj["metadata"]["name"]) is not None:
+        raise ValueError(f"the storage class {obj['metadata']['name']} already exists")
+    if spec.get("encrypted"):
+        sns, sname = str(spec.get("secret")).split("/", 1)
+        sec = kube.get("secrets", sns, sname)
+        if sec is None or not hadv.crypto_secret_ok(sec):
+            raise ValueError(f"{sns}/{sname} is not an encryption secret (CRYPTO_KEY_* keys)")
+    step("storageclass", "running", f"storage class {obj['metadata']['name']} ({obj['provisioner']})")
+    kube.create(obj)
+    step("storageclass", "done", "created")
+    return EXIT_OK
+
+
+def cmd_secret(args):
+    kube = kube_from(args)
+    spec = _read_json(args.spec)
+    ns, name = args.namespace, args.name
+    if args.action == "create":
+        if kube.get("secrets", ns, name) is not None:
+            raise ValueError(f"the secret {ns}/{name} already exists")
+        if spec.get("type") == "crypto":
+            obj = hadv.crypto_secret(name, ns, spec.get("passphrase") or "", spec.get("cipher") or "aes-xts-plain64",
+                                     spec.get("hash") or "sha256", spec.get("size") or "256", spec.get("pbkdf") or "argon2i")
+        else:
+            obj = hadv.typed_secret(name, ns, spec.get("type") or "Opaque", spec.get("fields") or {})
+        step("secret", "running", f"secret {ns}/{name} ({obj['type']})")
+        kube.create(obj)
+    else:
+        cur = kube.get("secrets", ns, name)
+        if cur is None:
+            raise ValueError(f"no secret {ns}/{name}")
+        obj = hadv.secret_update(cur, spec.get("fields") or {})
+        step("secret", "running", f"new values for {ns}/{name}")
+        kube.replace(obj)
+    step("secret", "done", "saved")
+    return EXIT_OK
+
+
+def cmd_sshkey(args):
+    kube = kube_from(args)
+    kp = kube.get("keypairs.harvesterhci.io", args.namespace, args.name)
+    if kp is None:
+        raise ValueError(f"no SSH key {args.namespace}/{args.name}")
+    key = Path(args.public_key_file).read_text() if args.public_key_file else (kp.get("spec") or {}).get("publicKey")
+    obj = hadv.keypair_update(kp, key, args.description)
+    step("sshkey", "running", f"SSH key {args.namespace}/{args.name} changed")
+    kube.replace(obj)
+
+    def done(o):
+        st = (o or {}).get("status") or {}
+        fp = st.get("fingerPrint")
+        return (True, f"fingerprint {fp}") if fp else (None, "Harvester computes the fingerprint")
+    return _wait(kube, "keypairs.harvesterhci.io", args.namespace, args.name, done, 120, label="sshkey")
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(prog="harvester-resources", description=__doc__.split("\n\n")[0])
     sub = ap.add_subparsers(dest="cmd", required=True)
@@ -2175,6 +2313,51 @@ def main(argv=None):
     sp.add_argument("--port", default=8092, help="upload: port the cluster downloads from (8092)")
     sp.add_argument("--advertise", help="upload: address the cluster reaches this machine at")
     sp.add_argument("--timeout", type=int, default=7200)
+    sp = sub.add_parser("template", help="a VM template's versions, as in Harvester")
+    sp.set_defaults(fn=cmd_template)
+    sp.add_argument("action", choices=("set-default", "delete-version", "delete"))
+    sp.add_argument("--cluster")
+    sp.add_argument("--kubeconfig")
+    sp.add_argument("--namespace", required=True)
+    sp.add_argument("--name", required=True)
+    sp.add_argument("--version", help="set-default/delete-version: namespace/name of the version")
+    sp.add_argument("--timeout", type=int, default=300)
+
+    sp = sub.add_parser("cloudtpl", help="cloud-init templates (user-data, network-data)")
+    sp.set_defaults(fn=cmd_cloudtpl)
+    sp.add_argument("action", choices=("create", "update", "delete"))
+    sp.add_argument("--cluster")
+    sp.add_argument("--kubeconfig")
+    sp.add_argument("--namespace", required=True)
+    sp.add_argument("--name", required=True)
+    sp.add_argument("--type", choices=("user", "network"))
+    sp.add_argument("--file", help="the template text")
+    sp.add_argument("--description")
+
+    sp = sub.add_parser("storageclass", help="a storage class from Harvester's form (Longhorn v1/v2, encryption, LVM)")
+    sp.set_defaults(fn=cmd_storageclass)
+    sp.add_argument("--cluster")
+    sp.add_argument("--kubeconfig")
+    sp.add_argument("--spec", required=True, help="JSON request, '-' for stdin")
+
+    sp = sub.add_parser("secret", help="create a typed secret, or give an existing one new values")
+    sp.set_defaults(fn=cmd_secret)
+    sp.add_argument("action", choices=("create", "update"))
+    sp.add_argument("--cluster")
+    sp.add_argument("--kubeconfig")
+    sp.add_argument("--namespace", required=True)
+    sp.add_argument("--name", required=True)
+    sp.add_argument("--spec", required=True, help="JSON file (values never on the command line)")
+
+    sp = sub.add_parser("sshkey", help="change an SSH key pair's public key or description")
+    sp.set_defaults(fn=cmd_sshkey)
+    sp.add_argument("action", choices=("update",))
+    sp.add_argument("--cluster")
+    sp.add_argument("--kubeconfig")
+    sp.add_argument("--namespace", required=True)
+    sp.add_argument("--name", required=True)
+    sp.add_argument("--public-key-file")
+    sp.add_argument("--description")
     args = ap.parse_args(argv)
     signal.signal(signal.SIGTERM, _on_signal)
     try:

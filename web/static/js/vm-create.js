@@ -128,6 +128,8 @@ const VMCreate = (() => {
     }
     const existing = document.getElementById('fp-' + PANEL_ID);
     if (existing) {
+      // v1.64.0 : une fenêtre déjà ouverte reprend la version demandée
+      if (opts.template && existing.__vmcTemplate) existing.__vmcTemplate(opts.template, opts.version);
       return FloatingPanels.open({ id: PANEL_ID, icon: 'vm',
         title: tr('vm.create.title', 'Create a virtual machine') });
     }
@@ -219,6 +221,7 @@ const VMCreate = (() => {
     // Une seule instance de squelette pour toute la vie du panneau : les
     // sections déjà visitées y ont écrit, on ne doit pas la recréer.
     let vm = withImageDisk(skeleton('vm-01', namespace), opts.image);
+    let templateCloudInit = null;       // v1.64.0 : cloud-init d'une version de modèle
     const rendered = new Map();          // id -> élément de section
 
     head.querySelector('[name="namespace"]').addEventListener('change', (e) => {
@@ -278,17 +281,30 @@ const VMCreate = (() => {
         });
       } catch { /* pas de template : le choix « depuis zéro » suffit */ }
       sel.addEventListener('change', () => applyTemplate(sel.value));
+      // v1.64.0 : lancée depuis la fenêtre des modèles, sur une version choisie
+      if (opts.template) {
+        sel.value = opts.template;
+        applyTemplate(opts.template, opts.version);
+      }
     })();
+    root.__vmcTemplate = (id, version) => {
+      head.querySelector('[name="template"]').value = id;
+      applyTemplate(id, version);
+    };
 
-    async function applyTemplate(id) {
+    async function applyTemplate(id, version) {
       const name = nameInput.value.trim() || 'vm-01';
       const ns = head.querySelector('[name="namespace"]').value || namespace;
+      templateCloudInit = null;
       if (!id) { vm = skeleton(name, ns); resetSections(); return; }
       say(esc(tr('vm.create.loadingTemplate', 'Loading the template…')));
       try {
         const [ns, tpl] = id.split('/');
         const d = await fetch(`/api/vmtemplates/${encodeURIComponent(cluster)}`
-          + `/${encodeURIComponent(ns)}/${encodeURIComponent(tpl)}`).then(r => r.json());
+          + `/${encodeURIComponent(ns)}/${encodeURIComponent(tpl)}`
+          + (version ? `?version=${encodeURIComponent(version)}` : '')).then(r => r.json());
+        // v1.64.0 : le cloud-init de la version, recopié (jamais partagé)
+        templateCloudInit = d.cloudinit || null;
         if (d.error) { say(esc(d.error), true); return; }
         // On repart du squelette et on y fusionne la spec du template : le
         // template ne porte ni nom ni namespace, et il peut lui manquer des
@@ -331,6 +347,13 @@ const VMCreate = (() => {
       try {
         VMEdit.wireSection(wrap, id, cluster, namespace, vm.metadata.name,
                            () => vm, { createMode: true });
+        // v1.64.0 : le cloud-init de la version de modèle, modifiable avant création
+        if (id === 'cloudinit' && templateCloudInit) {
+          const u = wrap.querySelector('[data-ci="userData"]');
+          const n = wrap.querySelector('[data-ci="networkData"]');
+          if (u) u.value = templateCloudInit.user_data || '';
+          if (n) n.value = templateCloudInit.network_data || '';
+        }
       } catch (e) {
         console.warn('wireSection', id, e);
       }
@@ -380,7 +403,7 @@ const VMCreate = (() => {
       const cloudinit = ciEl ? {
         user_data: ciEl.querySelector('[data-ci="userData"]')?.value || '',
         network_data: ciEl.querySelector('[data-ci="networkData"]')?.value || '',
-      } : null;
+      } : templateCloudInit;
       const sshKeys = [...head.querySelectorAll('[name="ssh_keys"] option')].filter(o => o.selected).map(o => o.value);
       // v1.62.0 : fichier de réponses Windows et volumes virtiofs
       const sysprep = ciEl ? (ciEl.querySelector('[data-sysprep]')?.value || '') : '';

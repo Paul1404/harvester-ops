@@ -437,6 +437,13 @@
         <button class="btn btn-sm btn-secondary btn-ico tip" id="btn-vm-backups"
                 data-tip-i18n="vms.backupsTip" data-i18n-title="vms.backupsTip"
                 title="Backups, snapshots and their schedules for this namespace, in a window"><span data-icon="snapshot"></span> <span data-i18n="vms.backups">Backups</span></button>
+        <!-- v1.64.0 : les modèles de VM et les modèles cloud-init de Harvester -->
+        <button class="btn btn-sm btn-secondary btn-ico tip" id="btn-vm-templates"
+                data-tip-i18n="tpl.tip.open" data-i18n-title="tpl.tip.open"
+                title="The VM templates of this cluster and their versions, in a window"><span data-icon="doc"></span> <span data-i18n="tpl.open">Templates</span></button>
+        <button class="btn btn-sm btn-secondary btn-ico tip" id="btn-vm-cloudtpl"
+                data-tip-i18n="ct.tip.open" data-i18n-title="ct.tip.open"
+                title="Reusable cloud-init user-data and network-data, in a window"><span data-icon="cloud"></span> <span data-i18n="ct.open">Cloud configs</span></button>
         <!-- v1.62.0 : le menu Namespaces de Harvester, en fenêtre -->
         <button class="btn btn-sm btn-secondary btn-ico tip" id="btn-vm-namespaces"
                 data-tip-i18n="nsw.tip.open" data-i18n-title="nsw.tip.open"
@@ -999,6 +1006,7 @@
   <script src="/static/js/namespaces.js"></script>
   <script src="/static/js/events.js"></script>
   <script src="/static/js/storage-actions.js"></script>
+  <script src="/static/js/templates.js"></script>
 <script src="/static/js/versions.js"></script>
 <script src="/static/js/console-accounts.js"></script>
 <script src="/static/js/user-menu.js"></script>

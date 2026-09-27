@@ -3,7 +3,7 @@
 # Statuts : ok (fait), part (partiel), todo (manquant), plus (console seulement), na (hors périmètre).
 # v : version où c'est arrivé (ok/part) ou prévue (todo).
 
-AS_OF = "1.63.0"
+AS_OF = "1.64.0"
 DATE = "2026-09-27"
 
 S = []  # sections
@@ -112,7 +112,7 @@ r("ok", "1.59", "Créer depuis une URL", "Create from a URL")
 r("ok", "1.63", "Envoyer un fichier depuis le navigateur", "Upload a file from the browser", "la console le sert au cluster (port 8092)", "the console serves it to the cluster (port 8092)")
 r("ok", "1.63", "Somme de contrôle SHA512", "SHA512 checksum")
 r("ok", "1.63", "Chiffrer / déchiffrer", "Encrypt / decrypt")
-r("part", "1.63", "Télécharger l'image", "Download the image", "images Longhorn v1 ; images CDI en 1.64", "Longhorn v1 images; CDI images in 1.64")
+r("part", "1.63", "Télécharger l'image", "Download the image", "images Longhorn v1 ; images CDI : aucun stockage tiers sur les bancs pour les essayer", "Longhorn v1 images; CDI images: no third-party storage on the test benches to try them")
 r("ok", "1.63", "Cloner, modifier (description, labels)", "Clone, edit (description, labels)", "le nom est figé par Harvester", "the name is fixed by Harvester")
 r("ok", "1.63", "Créer une VM depuis l'image", "Create a VM from the image")
 r("ok", "1.59", "Supprimer (si rien ne s'en sert)", "Delete (when unused)")
@@ -157,16 +157,16 @@ r("todo", "1.67", "Configurations Alertmanager (récepteurs)", "Alertmanager con
 r("todo", "1.67", "Flows, cluster flows, outputs, cluster outputs", "Flows, cluster flows, outputs, cluster outputs")
 
 sec("advanced", "Avancé", "Advanced", "Advanced", "Advanced")
-r("part", "1.28", "Templates : créer, lancer une VM", "Templates: create, launch a VM", "versions, version par défaut, suppression en 1.64", "versions, default version, delete in 1.64")
-r("part", "1.59", "Clés SSH (créer, lire depuis un fichier, supprimer)", "SSH keys (create, read from file, delete)", "modifier en 1.64", "edit in 1.64")
-r("todo", "1.64", "Modèles de configuration cloud (user / network data)", "Cloud configuration templates (user / network data)")
-r("part", "1.59", "Classes de stockage (Longhorn v1, par défaut, supprimer)", "Storage classes (Longhorn v1, default, delete)", "chiffrement, LVM, v2 et topologies en 1.64", "encryption, LVM, v2 and topologies in 1.64")
+r("ok", "1.64", "Templates : versions, par défaut, lancer une version, supprimer", "Templates: versions, default, launch a version, delete")
+r("ok", "1.64", "Clés SSH (créer, lire depuis un fichier, modifier, supprimer)", "SSH keys (create, read from file, edit, delete)")
+r("ok", "1.64", "Modèles de configuration cloud (user / network data)", "Cloud configuration templates (user / network data)")
+r("part", "1.64", "Classes de stockage (Longhorn v1, chiffrement, topologies, par défaut, supprimer)", "Storage classes (Longhorn v1, encryption, topologies, default, delete)", "LVM et Longhorn v2 proposés mais pas vérifiés en réel (absents des bancs)", "LVM and Longhorn v2 offered but not verified for real (absent from the benches)")
 r("part", "1.15", "Périphériques PCI", "PCI devices", "liste et attache aux VMs ; activer le passthrough en 1.66", "list and attach to VMs; enable passthrough in 1.66")
 r("todo", "1.66", "SR-IOV réseau (nombre de VF)", "SR-IOV network devices (VF count)")
 r("todo", "1.66", "GPU SR-IOV, vGPU, configurations MIG", "SR-IOV GPU, vGPU, MIG configurations", "à documenter comme non vérifié : aucun GPU compatible sous Harvester", "to be documented as unverified: no compatible GPU under Harvester")
 r("todo", "1.66", "Périphériques USB (passthrough)", "USB devices (passthrough)")
 r("ok", "1.57", "Add-ons : activer, désactiver, configurer", "Add-ons: enable, disable, configure")
-r("part", "1.59", "Secrets (Opaque : créer, supprimer)", "Secrets (Opaque: create, delete)", "types TLS, Basic, Registry, SSH et modification en 1.64", "TLS, Basic, Registry, SSH types and edit in 1.64")
+r("ok", "1.64", "Secrets (Opaque, TLS, Basic, Registry, SSH, chiffrement : créer, nouvelles valeurs, supprimer)", "Secrets (Opaque, TLS, Basic, Registry, SSH, encryption: create, new values, delete)")
 r("todo", "1.66", "Réglages de Harvester (les 40 : NTP, proxy, CA, TLS, overcommit…)", "Harvester settings (all 40: NTP, proxy, CA, TLS, overcommit…)")
 
 sec("upgrade", "Mise à jour de Harvester", "Harvester upgrade", "Upgrade", "Upgrade")

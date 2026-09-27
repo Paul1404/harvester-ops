@@ -76,15 +76,31 @@ const ObjectForms = (() => {
         + field('description', tr('of.f.description'), `<input name="description">`, tr('of.t.description'));
     }
     if (kind === 'storageclass') {
+      // v1.64.0 : le formulaire de Harvester : moteur (Longhorn v1, v2, LVM),
+      // chiffrement, topologies, description
+      const o = await getJSON(`/api/storage-options/${enc(cluster)}`) || {};
+      const nodes = [...new Set((o.lvm_groups || []).map(g => g.node))];
       return name(tr('of.t.scName'))
+        + field('engine', tr('sc.f.engine'), `<select name="engine">${[['longhorn-v1', 'Longhorn v1'],
+            ['longhorn-v2', 'Longhorn v2' + (o.longhorn_v2 ? '' : ` (${tr('sc.off')})`)],
+            ['lvm', 'LVM' + (o.lvm ? '' : ` (${tr('sc.off')})`)]].map(([v, l]) =>
+            `<option value="${v}" ${(v === 'longhorn-v2' && !o.longhorn_v2) || (v === 'lvm' && !o.lvm) ? 'disabled' : ''}>${esc(l)}</option>`).join('')}</select>`, tr('sc.t.engine'))
         + field('replicas', tr('res.col.replicas'), `<select name="replicas">${opts(['1', '2', '3'], '3')}</select>`, tr('of.t.replicas'))
         + field('stale_timeout', tr('of.f.stale'), `<input name="stale_timeout" type="number" min="1" max="10080" value="30">`, tr('of.t.stale'))
-        + field('data_locality', tr('of.f.locality'), `<select name="data_locality">${opts([['disabled', tr('of.loc.disabled')], ['best-effort', tr('of.loc.best')], ['strict-local', tr('of.loc.strict')]], 'disabled')}</select>`, tr('of.t.locality'))
+        + field('data_locality', tr('of.f.locality'), `<select name="data_locality">${opts([['disabled', tr('of.loc.disabled')], ['best-effort', tr('of.loc.best')]], 'disabled')}</select>`, tr('of.t.locality'))
         + field('disk_selector', tr('of.f.diskSelector'), `<input name="disk_selector" placeholder="ssd, nvme">`, tr('of.t.diskSelector'))
         + field('node_selector', tr('of.f.nodeSelector'), `<input name="node_selector" placeholder="storage">`, tr('of.t.nodeSelector'))
+        + `<label class="bk-check tip" data-f="encrypted" data-tip="${esc(tr('sc.t.encrypted'))}"><input type="checkbox" name="encrypted"> <span>${esc(tr('sc.f.encrypted'))}</span></label>`
+        + field('secret', tr('sc.f.secret'), `<select name="secret">${opts(o.crypto_secrets || [])}</select>`, tr('sc.t.secret'))
+        + `<label class="bk-check tip" data-f="expand_online" data-tip="${esc(tr('sc.t.expandOnline'))}"><input type="checkbox" name="expand_online"> <span>${esc(tr('sc.f.expandOnline'))}</span></label>`
+        + field('node', tr('sc.f.node'), `<select name="node">${opts(nodes)}</select>`, tr('sc.t.node'))
+        + field('vg', tr('sc.f.vg'), `<select name="vg">${opts((o.lvm_groups || []).map(g => g.vg))}</select>`, tr('sc.t.vg'))
+        + field('lvm_type', tr('sc.f.lvmType'), `<select name="lvm_type">${opts(['striped', 'dm-thin'], 'striped')}</select>`, tr('sc.t.lvmType'))
         + field('reclaim', tr('res.col.reclaim'), `<select name="reclaim">${opts(['Delete', 'Retain'], 'Delete')}</select>`, tr('of.t.reclaim'))
         + field('binding', tr('res.col.binding'), `<select name="binding">${opts(['Immediate', 'WaitForFirstConsumer'], 'Immediate')}</select>`, tr('of.t.binding'))
-        + `<label class="bk-check tip" data-tip="${esc(tr('of.t.migratable'))}"><input type="checkbox" name="migratable" checked> <span>${esc(tr('of.f.migratable'))}</span></label>`
+        + field('topology', tr('sc.f.topology'), `<input name="topology" placeholder="topology.kubernetes.io/zone=zone-a,zone-b">`, tr('sc.t.topology'))
+        + field('description', tr('of.f.description'), `<input name="description">`, tr('of.t.description'))
+        + `<label class="bk-check tip" data-f="migratable" data-tip="${esc(tr('of.t.migratable'))}"><input type="checkbox" name="migratable" checked> <span>${esc(tr('of.f.migratable'))}</span></label>`
         + `<label class="bk-check tip" data-tip="${esc(tr('of.t.expansion'))}"><input type="checkbox" name="expansion" checked> <span>${esc(tr('res.col.expansion'))}</span></label>`;
     }
     if (kind === 'sshkey') {
@@ -93,10 +109,23 @@ const ObjectForms = (() => {
         + `<label class="bk-field"><span>${esc(tr('of.f.keyFile'))}</span><input type="file" name="key_file" accept=".pub,text/plain" class="tip" data-tip="${esc(tr('of.t.keyFile'))}"></label>`;
     }
     if (kind === 'secret') {
+      // v1.64.0 : les types de secrets que l'interface de Rancher édite, et
+      // le secret de chiffrement des classes de stockage
       return ns + name()
-        + `<div class="of-kv" data-kv><div class="of-kv-head"><span>${esc(tr('res.col.keys'))}</span>
+        + field('type', tr('res.col.type'), `<select name="type">${opts([['Opaque', 'Opaque'], ['kubernetes.io/basic-auth', tr('sec.basic')],
+            ['kubernetes.io/ssh-auth', tr('sec.ssh')], ['kubernetes.io/tls', tr('sec.tls')],
+            ['kubernetes.io/dockerconfigjson', tr('sec.registry')], ['crypto', tr('sec.crypto')]], 'Opaque')}</select>`, tr('sec.t.type'))
+        + `<div class="of-kv" data-kv data-f="kv"><div class="of-kv-head"><span>${esc(tr('res.col.keys'))}</span>
             <button type="button" class="btn btn-sm btn-secondary tip" data-kv-add data-tip="${esc(tr('of.t.kvAdd'))}">${icon('add')} ${esc(tr('of.kvAdd'))}</button></div>
-            <div class="of-kv-rows"></div></div>`;
+            <div class="of-kv-rows"></div></div>`
+        + field('server', tr('sec.f.server'), `<input name="server" placeholder="quay.io">`, tr('sec.t.server'))
+        + field('username', tr('sec.f.username'), `<input name="username" autocomplete="off">`, tr('sec.t.username'))
+        + field('password', tr('sec.f.password'), `<input name="password" type="password" autocomplete="new-password">`, tr('sec.t.password'))
+        + field('ssh_privatekey', tr('sec.f.sshKey'), `<textarea name="ssh_privatekey" rows="5"></textarea>`, tr('sec.t.sshKey'))
+        + field('tls_crt', tr('sec.f.crt'), `<textarea name="tls_crt" rows="5"></textarea>`, tr('sec.t.crt'))
+        + field('tls_key', tr('sec.f.key'), `<textarea name="tls_key" rows="5"></textarea>`, tr('sec.t.key'))
+        + field('passphrase', tr('sec.f.passphrase'), `<input name="passphrase" type="password" autocomplete="new-password" minlength="8">`, tr('sec.t.passphrase'))
+        + field('cipher', 'Cipher', `<select name="cipher">${opts(['aes-xts-plain64', 'aes-xts-plain', 'aes-cbc-plain64', 'aes-cbc-plain', 'aes-cbc-essiv:sha256'], 'aes-xts-plain64')}</select>`, tr('sec.t.cipher'));
     }
     if (kind === 'network') {
       const fab = await getJSON(`/api/network-fabric/${enc(cluster)}`);
@@ -141,6 +170,28 @@ const ObjectForms = (() => {
       show('storage_class', val('source') === 'empty');
       show('image', val('source') === 'image');
     }
+    if (kind === 'storageclass') {
+      const eng = val('engine') || 'longhorn-v1';
+      const lh = eng !== 'lvm';
+      ['replicas', 'stale_timeout', 'data_locality', 'disk_selector', 'node_selector', 'encrypted', 'migratable'].forEach(n => show(n, lh));
+      const enc2 = lh && form.querySelector('[name="encrypted"]')?.checked;
+      show('secret', enc2);
+      show('expand_online', enc2);
+      ['node', 'vg', 'lvm_type'].forEach(n => show(n, eng === 'lvm'));
+      show('topology', lh);
+    }
+    if (kind === 'secret') {
+      const t = val('type') || 'Opaque';
+      show('kv', t === 'Opaque');
+      show('server', t === 'kubernetes.io/dockerconfigjson');
+      show('username', t === 'kubernetes.io/basic-auth' || t === 'kubernetes.io/dockerconfigjson');
+      show('password', t === 'kubernetes.io/basic-auth' || t === 'kubernetes.io/dockerconfigjson');
+      show('ssh_privatekey', t === 'kubernetes.io/ssh-auth');
+      show('tls_crt', t === 'kubernetes.io/tls');
+      show('tls_key', t === 'kubernetes.io/tls');
+      show('passphrase', t === 'crypto');
+      show('cipher', t === 'crypto');
+    }
   }
 
   function request(kind, form) {
@@ -150,8 +201,26 @@ const ObjectForms = (() => {
     if (kind === 'storageclass') { o.migratable = !!f.get('migratable'); o.expansion = !!f.get('expansion'); }
     if (kind === 'secret') {
       const keys = f.getAll('kv-key'), vals = f.getAll('kv-value');
-      o.data = {};
-      keys.forEach((k, i) => { if (String(k).trim()) o.data[String(k).trim()] = vals[i]; });
+      const data = {};
+      keys.forEach((k, i) => { if (String(k).trim()) data[String(k).trim()] = vals[i]; });
+      const t = o.type || 'Opaque';
+      if (t === 'crypto') return { name: o.name, namespace: o.namespace, type: 'crypto', passphrase: o.passphrase, cipher: o.cipher };
+      const fields = t === 'Opaque' ? { data }
+        : t === 'kubernetes.io/basic-auth' ? { username: o.username, password: o.password }
+        : t === 'kubernetes.io/ssh-auth' ? { 'ssh-privatekey': o.ssh_privatekey }
+        : t === 'kubernetes.io/tls' ? { 'tls.crt': o.tls_crt, 'tls.key': o.tls_key }
+        : { server: o.server, username: o.username, password: o.password };
+      return { name: o.name, namespace: o.namespace, type: t, fields };
+    }
+    if (kind === 'storageclass') {
+      o.encrypted = !!f.get('encrypted');
+      o.expand_online = !!f.get('expand_online');
+      const topo = String(o.topology || '').trim();
+      delete o.topology;
+      if (topo.includes('=')) {
+        const [key, values] = topo.split('=');
+        o.topologies = [{ key: key.trim(), values: values.trim() }];
+      }
     }
     if (kind === 'volume') {
       if (o.source === 'image') delete o.storage_class; else delete o.image;
@@ -217,7 +286,11 @@ const ObjectForms = (() => {
       btn.disabled = true;
       const spec = request(kind, form);
       try {
-        const out = await call('POST', `/api/objects/${enc(cluster)}/${kind}`, { spec });
+        // v1.64.0 : classe de stockage et secret typé ont leurs routes (les valeurs
+        // d'un secret passent par un fichier privé, jamais une ligne de commande)
+        const out = kind === 'storageclass' ? await call('POST', `/api/storageclass/${enc(cluster)}`, spec)
+          : kind === 'secret' ? await call('POST', `/api/secret/${enc(cluster)}/${enc(spec.namespace || 'default')}/${enc(spec.name)}/do/create`, spec)
+          : await call('POST', `/api/objects/${enc(cluster)}/${kind}`, { spec });
         followInto(root, out.action_id, DONE[kind](spec.name || spec.display_name || ''), (ok) => {
           btn.disabled = false;
           if (ok && ctx.onDone) ctx.onDone();
@@ -288,6 +361,70 @@ const ObjectForms = (() => {
     return out.action_id;
   }
 
-  return { openNew, remove, openAddonValues, expandVolume, setDefaultClass };
+  /** v1.64.0 : de nouvelles valeurs pour un secret (vide = garder). */
+  function editSecret(cluster, row, onDone) {
+    const panel = FloatingPanels.open({
+      id: `edit-secret-${cluster}-${row.namespace}-${row.name}`, icon: 'lock', width: 520, height: 480,
+      title: `${tr('sec.edit')} · ${row.namespace}/${row.name}`,
+      bodyHtml: `<form class="of-form" autocomplete="off"><p class="form-hint">${esc(tr('sec.editHint', { type: row.type }))}</p>
+        ${row.type === 'kubernetes.io/dockerconfigjson'
+          ? field('server', tr('sec.f.server'), '<input name="server">', tr('sec.t.server'))
+            + field('username', tr('sec.f.username'), '<input name="username">', tr('sec.t.username'))
+            + field('password', tr('sec.f.password'), '<input name="password" type="password" autocomplete="new-password">', tr('sec.t.password'))
+          : (row.keys || []).map(k => `<label class="bk-field"><span>${esc(k)}</span>
+              <div class="sec-edit-row"><textarea data-sec-key="${esc(k)}" rows="2" placeholder="${esc(tr('sec.unchanged'))}" class="tip" data-tip="${esc(tr('sec.t.value'))}"></textarea>
+              ${row.type === 'Opaque' ? `<label class="bk-check tip" data-tip="${esc(tr('sec.t.remove'))}"><input type="checkbox" data-sec-remove="${esc(k)}"> <span>${esc(tr('sec.remove'))}</span></label>` : ''}</div></label>`).join('')}
+        <div class="bk-form-actions"><button type="submit" class="btn btn-sm btn-primary tip" data-tip="${esc(tr('bk.submitTip'))}">${icon('save')} ${esc(tr('hs.save'))}</button></div>
+        <div class="of-msg"></div></form>`,
+    });
+    const root = panel.el;
+    if (root.dataset.ofReady) return;
+    root.dataset.ofReady = '1';
+    const form = root.querySelector('form');
+    form.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const fields = {};
+      form.querySelectorAll('[data-sec-key]').forEach(t => { if (t.value) fields[t.dataset.secKey] = t.value; });
+      const remove = [...form.querySelectorAll('[data-sec-remove]:checked')].map(c => c.dataset.secRemove);
+      if (remove.length) fields.remove = remove;
+      ['server', 'username', 'password'].forEach(n => { const el = form.querySelector(`[name="${n}"]`); if (el && el.value) fields[n] = el.value; });
+      try {
+        const out = await call('POST', `/api/secret/${enc(cluster)}/${enc(row.namespace)}/${enc(row.name)}/do/update`, { fields });
+        form.querySelectorAll('textarea, input[type=password]').forEach(el => { el.value = ''; });
+        followInto(root, out.action_id, tr('sec.done.saved'), (ok) => { if (ok && onDone) onDone(); });
+      } catch (err) {
+        root.querySelector('.of-msg').innerHTML = `<span class="res-error">${esc(err.message)}</span>`;
+      }
+    });
+  }
+
+  /** v1.64.0 : changer la clé publique et la description d'une clé SSH. */
+  function editSshKey(cluster, row, onDone) {
+    const panel = FloatingPanels.open({
+      id: `edit-sshkey-${cluster}-${row.namespace}-${row.name}`, icon: 'key', width: 520, height: 420,
+      title: `${tr('key.edit')} · ${row.namespace}/${row.name}`,
+      bodyHtml: `<form class="of-form" autocomplete="off">
+        ${field('public_key', tr('res.d.publicKey'), `<textarea name="public_key" rows="4" required>${esc(row.public_key || '')}</textarea>`, tr('of.t.publicKey'))}
+        ${field('description', tr('of.f.description'), `<input name="description" value="${esc(row.description || '')}">`, tr('of.t.description'))}
+        <div class="bk-form-actions"><button type="submit" class="btn btn-sm btn-primary tip" data-tip="${esc(tr('bk.submitTip'))}">${icon('save')} ${esc(tr('hs.save'))}</button></div>
+        <div class="of-msg"></div></form>`,
+    });
+    const root = panel.el;
+    if (root.dataset.ofReady) return;
+    root.dataset.ofReady = '1';
+    const form = root.querySelector('form');
+    form.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      try {
+        const out = await call('POST', `/api/sshkey/${enc(cluster)}/${enc(row.namespace)}/${enc(row.name)}/do/update`,
+          { public_key: form.public_key.value, description: form.description.value });
+        followInto(root, out.action_id, tr('key.done.saved'), (ok) => { if (ok && onDone) onDone(); });
+      } catch (err) {
+        root.querySelector('.of-msg').innerHTML = `<span class="res-error">${esc(err.message)}</span>`;
+      }
+    });
+  }
+
+  return { openNew, editSecret, editSshKey, remove, openAddonValues, expandVolume, setDefaultClass };
 })();
 window.ObjectForms = ObjectForms;

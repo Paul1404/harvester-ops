@@ -1745,6 +1745,9 @@ const App = (() => {
     $('#btn-vm-backups')?.addEventListener('click', () => {
       if (window.Backups) Backups.open(currentCluster, currentNamespace || $('#ns-dropdown')?.value || '');
     });
+    // v1.64.0 : modèles de VM et modèles cloud-init, en fenêtres
+    $('#btn-vm-templates')?.addEventListener('click', () => { if (window.Templates) Templates.open(currentCluster); });
+    $('#btn-vm-cloudtpl')?.addEventListener('click', () => { if (window.Templates) Templates.openCloud(currentCluster); });
     // v1.62.0 : le menu Namespaces, en fenêtre
     $('#btn-vm-namespaces')?.addEventListener('click', () => {
       if (window.Namespaces) Namespaces.open(currentCluster);

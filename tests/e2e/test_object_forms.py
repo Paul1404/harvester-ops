@@ -60,6 +60,7 @@ def ui(context, flask_server):
     page.route("**/api/network-fabric/harv-fake", lambda r, q: fulfill(r, {"cluster_networks": ["mgmt", "data"]}))
     page.route("**/api/objects/**", writes)
     page.route("**/api/storageclasses/harv-fake/**", writes)
+    page.route("**/api/secret/harv-fake/**", writes)          # v1.64.0 : secrets par type
     page.route("**/api/addons/harv-fake/**/values", values)
     page.route("**/api/stream/of0000000001", lambda r, q: r.fulfill(
         status=200, content_type="text/event-stream", body='event: end\ndata: {"status": "done"}\n\n'))
@@ -120,8 +121,10 @@ def test_a_secret_with_several_keys(ui):
     w.locator('[name="kv-value"]').nth(1).fill("version: 2")
     w.locator('button[type="submit"]').click()
     expect(w.locator(".of-msg")).to_contain_text("créé", timeout=5000)
-    assert sent[-1][2]["spec"] == {"namespace": "default", "name": "web-ci",
-                                   "data": {"userdata": "#cloud-config", "networkdata": "version: 2"}}
+    # v1.64.0 : un Opaque passe par la route des secrets par type
+    assert sent[-1][:2] == ("POST", "api/secret/harv-fake/default/web-ci/do/create")
+    assert sent[-1][2] == {"namespace": "default", "name": "web-ci", "type": "Opaque",
+                           "fields": {"data": {"userdata": "#cloud-config", "networkdata": "version: 2"}}}
 
 
 def test_a_vm_network_form_follows_its_type(ui):

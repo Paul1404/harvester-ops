@@ -1,8 +1,8 @@
 # Parité avec l'interface de Harvester
 
-État au 2026-09-27, console **v1.63.0**, comparée à l'interface de **Harvester v1.9** (menus relevés dans le code de harvester-ui-extension v1.9.0 et la documentation v1.9).
+État au 2026-09-27, console **v1.64.0**, comparée à l'interface de **Harvester v1.9** (menus relevés dans le code de harvester-ui-extension v1.9.0 et la documentation v1.9).
 
-Sur 135 fonctions de l'interface de Harvester : **96 faites**, **14 partielles**, **25 manquantes** ; 2 hors périmètre. Une fonction manquante porte la version où elle est prévue.
+Sur 135 fonctions de l'interface de Harvester : **100 faites**, **11 partielles**, **24 manquantes** ; 2 hors périmètre. Une fonction manquante porte la version où elle est prévue.
 
 Statuts : Fait, Partiel (ce qui manque est dit), Manquant (version prévue), Console seulement (ce que Harvester n'a pas), Hors périmètre.
 
@@ -131,7 +131,7 @@ Menu Harvester : *Images*
 | Envoyer un fichier depuis le navigateur | Fait | 1.63 | la console le sert au cluster (port 8092) |
 | Somme de contrôle SHA512 | Fait | 1.63 |  |
 | Chiffrer / déchiffrer | Fait | 1.63 |  |
-| Télécharger l'image | Partiel | 1.63 | images Longhorn v1 ; images CDI en 1.64 |
+| Télécharger l'image | Partiel | 1.63 | images Longhorn v1 ; images CDI : aucun stockage tiers sur les bancs pour les essayer |
 | Cloner, modifier (description, labels) | Fait | 1.63 | le nom est figé par Harvester |
 | Créer une VM depuis l'image | Fait | 1.63 |  |
 | Supprimer (si rien ne s'en sert) | Fait | 1.59 |  |
@@ -206,16 +206,16 @@ Menu Harvester : *Advanced*
 
 | Fonction | Statut | Version | Précision |
 |---|---|---|---|
-| Templates : créer, lancer une VM | Partiel | 1.28 | versions, version par défaut, suppression en 1.64 |
-| Clés SSH (créer, lire depuis un fichier, supprimer) | Partiel | 1.59 | modifier en 1.64 |
-| Modèles de configuration cloud (user / network data) | Manquant | prévue 1.64 |  |
-| Classes de stockage (Longhorn v1, par défaut, supprimer) | Partiel | 1.59 | chiffrement, LVM, v2 et topologies en 1.64 |
+| Templates : versions, par défaut, lancer une version, supprimer | Fait | 1.64 |  |
+| Clés SSH (créer, lire depuis un fichier, modifier, supprimer) | Fait | 1.64 |  |
+| Modèles de configuration cloud (user / network data) | Fait | 1.64 |  |
+| Classes de stockage (Longhorn v1, chiffrement, topologies, par défaut, supprimer) | Partiel | 1.64 | LVM et Longhorn v2 proposés mais pas vérifiés en réel (absents des bancs) |
 | Périphériques PCI | Partiel | 1.15 | liste et attache aux VMs ; activer le passthrough en 1.66 |
 | SR-IOV réseau (nombre de VF) | Manquant | prévue 1.66 |  |
 | GPU SR-IOV, vGPU, configurations MIG | Manquant | prévue 1.66 | à documenter comme non vérifié : aucun GPU compatible sous Harvester |
 | Périphériques USB (passthrough) | Manquant | prévue 1.66 |  |
 | Add-ons : activer, désactiver, configurer | Fait | 1.57 |  |
-| Secrets (Opaque : créer, supprimer) | Partiel | 1.59 | types TLS, Basic, Registry, SSH et modification en 1.64 |
+| Secrets (Opaque, TLS, Basic, Registry, SSH, chiffrement : créer, nouvelles valeurs, supprimer) | Fait | 1.64 |  |
 | Réglages de Harvester (les 40 : NTP, proxy, CA, TLS, overcommit…) | Manquant | prévue 1.66 |  |
 
 ## Mise à jour de Harvester

@@ -250,6 +250,26 @@ or a label (`key=value`). The settings window writes Harvester's own fields:
 display name, description (the key Harvester reads), operating system,
 maintenance strategy, reserved memory.
 
+### More when creating and editing a VM (1.62.0)
+
+- **Static IP** per network interface, written where Harvester reads it
+  (`static-ip.harvesterhci.io/<interface>`); the VM list shows it first. On
+  an overlay (kube-ovn) network Harvester turns it into the interface's
+  kube-ovn address, and the guest receives it by DHCP when the subnet serves
+  it (verified on harv1: 10.62.0.50 in the guest 41 s after the start); on a
+  VLAN network it is only shown and must be set in the guest.
+- **Labels, instance labels and annotations** in the settings window, each
+  as key and value rows; the keys Harvester, KubeVirt and Kubernetes manage
+  are hidden and left untouched.
+- **Windows answer file** (autounattend.xml) at creation: kept in a Secret
+  and given to Windows Setup on a SATA CD-ROM named `sysprep`, as Harvester
+  does.
+- **Filesystem volumes (virtiofs)** at creation: a ConfigMap, a Secret or a
+  ServiceAccount of the namespace shared with the guest (one of each at
+  most), mounted with `mount -t virtiofs <name> /mnt/<name>`. The guest
+  kernel needs virtiofs (verified with a Tumbleweed image; a minimal Leap
+  image lacks it).
+
 ### Edit YAML, Download YAML (1.60.0)
 
 Every object Harvester lets you edit as YAML can be, from its row: VMs,
@@ -661,6 +681,70 @@ changed and restored.
   kubectl call outcomes **broken down by cluster**.
 - **`/healthz/ready`** — readiness probe returning 503 when config,
   clusters, or the action DB are unhealthy (`/healthz` for liveness).
+
+### Hosts, as in Harvester (1.62.0)
+
+In the Cluster view, a host's detail panel has **Configure...**, which opens
+Harvester's host settings in a window, one tab per topic. Every change is a
+tracked action run by `harvester-resources host <action>` (administrators).
+
+- **General**: the name shown for the host, its console address (a link
+  opens it), its labels (the system ones, including `cpumanager`, Rancher's
+  and Longhorn's, are hidden and never touched) and its **host tags**, which
+  storage classes use to place replicas.
+- **Disks**: the disks Harvester's disk manager found. A whole, active,
+  unmounted disk can be **added** to the storage (formatted unless it already
+  holds ext4 or XFS; Longhorn V1, V2 or an LVM volume group); a storage disk
+  shows its free, maximum and promised space, takes **disk tags** and can
+  stop accepting replicas; **removing** one lets Longhorn move its replicas
+  away first (Harvester refuses when it holds the only healthy copy).
+- **Huge pages**: transparent huge pages of the host kernel (enabled, shared
+  memory, defragmentation).
+- **KSM**: merging of identical memory pages between VMs (stop, run, prune;
+  standard, high or customized parameters; free memory threshold; merge
+  across NUMA nodes). ksmtuned starts merging only when free memory falls
+  under the threshold.
+- **Out-of-band**: the host's BMC through the harvester-seeder add-on
+  (address, port, user and password kept in a Secret, certificate check,
+  hardware events). As in Harvester, **power off, power on and reboot**
+  through the BMC are offered only for a host in maintenance.
+- **Actions**: **enable or disable the CPU manager** (the static policy,
+  needed for dedicated CPUs; Harvester restarts the node's Kubernetes agent,
+  the VMs keep running; refused while a VM with dedicated CPUs runs there),
+  and **delete the host** after typing its name (never the last node).
+
+The seeder reaches a BMC's **Redfish on port 443** whatever the port given
+(that port is IPMI's, 623), and **IPMI accepts passwords of 20 bytes at
+most**; the window says both, and shows the seeder's connection error when
+it cannot reach the BMC.
+
+Verified on the three-node test cluster: names, labels and tags; a virtual
+disk added, tagged, taken out of scheduling and removed; huge pages; KSM
+running; the CPU manager enabled then disabled; the out-of-band access
+through an IPMI emulator (virtualbmc), the host powered off and on through
+it while in maintenance; a host deleted, then installed again into the
+cluster. A physical BMC (iLO, iDRAC) has not been tried through the seeder
+yet.
+
+### Namespaces (1.62.0)
+
+**Namespaces**, next to the namespace selector of the Virtual machines tab,
+opens a window with the namespaces of the cluster: description, VMs,
+volumes, snapshot quota, age. System namespaces are hidden by default and
+cannot be deleted. **New namespace** (name, description, labels); **edit**
+(description, labels, annotations, and the **snapshot quota** of the whole
+namespace, kept in Harvester's `default-resource-quota`); **YAML**;
+**delete** after typing the name, the window saying what goes with it.
+
+### Dashboard events and usage (1.62.0)
+
+The Overview has an **Events** tab: the cluster events, grouped as on
+Harvester's dashboard (hosts, VMs, volumes, images), with counts, warnings
+marked, a "warnings only" filter and a search; refreshed every 20 seconds.
+The Metrics tab shows **usage** gauges: CPU and memory measured now
+(metrics.k8s.io) against the hosts' capacity, with what the pods and VMs
+reserved; the Longhorn storage written, and what is promised to volumes
+against what may be promised (over-provisioning included).
 
 ## 4. Cluster API: downstream RKE2 clusters (console + CLI)
 

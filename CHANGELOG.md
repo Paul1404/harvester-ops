@@ -4,6 +4,93 @@ All notable changes to this project will be documented here.
 Format inspired by [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 This file summarises each minor release; per-patch detail lives in `git log`.
 
+## [1.62.0] - 2026-09-27 - Hosts, namespaces and the dashboard, as in Harvester
+
+### Added
+- **Host settings window** (Cluster view, a host's **Configure...**), one tab
+  per topic as in Harvester: name shown, console address, labels and host
+  tags; disks (the Longhorn default disk with its tags and scheduling; add
+  a whole disk to the storage, formatted or not, Longhorn
+  V1, V2 or LVM; disk tags; stop scheduling; remove, Longhorn moving the
+  replicas first); transparent huge pages; KSM (ksmtuned); out-of-band
+  access through the harvester-seeder add-on, with power off, power on and
+  reboot through the BMC for a host in maintenance; enable or disable the
+  CPU manager; delete a host by typing its name.
+- **Namespaces window** next to the namespace selector: list with VMs,
+  volumes and snapshot quota; create, edit (description, labels,
+  annotations, snapshot quota of the namespace), YAML, delete by typing the
+  name. System namespaces are hidden and never deleted.
+- **Events** tab in the Overview: the cluster events grouped as on
+  Harvester's dashboard (hosts, VMs, volumes, images), warnings marked, a
+  filter and a search. **Usage** gauges in Metrics: CPU and memory measured
+  now against capacity and reservations, Longhorn storage written and
+  promised.
+- VM creation and settings: **static IP** of an interface (on an overlay
+  network kube-ovn gives it to the interface), **labels,
+  instance labels and annotations**, a **Windows answer file** (sysprep
+  drive) and **virtiofs filesystem volumes** at creation.
+- `harvester-resources host basics|tags|disk-add|disk-remove|disk-set|
+  hugepages|ksmtuned|cpu-manager|oob|power|delete` and
+  `harvester-resources namespace create|update|quota|delete`.
+
+### Changed
+- The Cluster view shows a host's display name.
+
+### Fixed (found by the real tests)
+- A BlockDevice replaced without its `status` is refused by its CRD; the
+  console keeps it.
+- kube-ovn annotates every namespace (`ovn.kubernetes.io/*`); the namespace
+  editor showed those keys and would have removed them. Every key under the
+  Kubernetes, Rancher, Harvester, KubeVirt and Longhorn domains is now hidden
+  and left alone, as are the `cpumanager`, Rancher and Longhorn labels of a
+  host.
+- The host window read its nine objects one after the other (12.8 s on the
+  three-node bench); it now reads them together.
+- A power action is sent the way Harvester's own action sends it: the
+  request, then the last job name cleared, which is what makes the seeder
+  start a new BMC job; the console then waits for that job, not the
+  previous one (a power on was otherwise never run, and reported done).
+- The host window now re-reads the host when a tab is chosen and every
+  20 seconds, without wiping a form being typed in (it missed a maintenance
+  started elsewhere and kept the power buttons greyed out).
+- The VM editor hid a network interface on an overlay network: Harvester 1.9
+  turns its `bridge` into KubeVirt's `managedtap` binding when the subnet
+  serves DHCP. The editor shows it as a bridge interface again, with its
+  static IP.
+- The host tool refused a node named like a DNS name (`harv1.home.lo`); a
+  node name is now checked as a subdomain. kube-ovn's `kube-ovn/role` node
+  label is protected like the system ones.
+- A VM created with only a Windows answer file or filesystem volumes got an
+  empty cloud-init disk; it now gets one only with user-data or
+  network-data.
+
+### Tests
+- Library, command line and routes for hosts, namespaces and the dashboard
+  (formats of Harvester 1.9, webhook rules said before acting, a BMC
+  password that only travels in a private file, admin-only writes).
+- In Chromium: the host window's six tabs and what each sends, power offered
+  only in maintenance, a tab switch that re-reads the host, host deletion by
+  typed name; the namespaces window; the events board and the gauges; the
+  answer file and virtiofs volumes sent at creation; labels and annotations
+  as key/value rows with the system keys never sent; an overlay interface
+  whose static IP stays editable.
+- Real, on harvlab (three nodes): name, console URL, labels and tags; a
+  virtual disk hot-plugged into a node, added to the storage (4 s), tagged,
+  taken out of scheduling and removed; huge pages; KSM running with a 100 %
+  threshold; the CPU manager enabled (72 s) and disabled (109 s); the
+  out-of-band access through an IPMI emulator (virtualbmc on node2), the
+  host powered off and on through it (back Ready in 81 s), the access
+  removed; a host deleted (its Cluster API machine, 85 s) then re-installed
+  into the cluster.
+- Real, on harv1: the default disk tagged then restored; a namespace
+  created, edited (quota of 5 GiB, kube-ovn
+  annotations kept) and deleted; the usage gauges; the events; a VM on the
+  overlay network with a static IP, which Harvester's webhook gave to
+  kube-ovn and the guest received by DHCP (10.62.0.50, 41 s).
+- Learned on the way: the seeder reaches Redfish only on port 443 (the port
+  of the access is IPMI's) and IPMI refuses passwords over 20 bytes; both
+  are said in the window, which also shows the seeder's connection error.
+
 ## [1.61.0] - 2026-09-27 - A running VM changed as in Harvester: CPU, memory, disks, network, console
 
 ### Added

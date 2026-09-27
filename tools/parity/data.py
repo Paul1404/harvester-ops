@@ -3,7 +3,7 @@
 # Statuts : ok (fait), part (partiel), todo (manquant), plus (console seulement), na (hors périmètre).
 # v : version où c'est arrivé (ok/part) ou prévue (todo).
 
-AS_OF = "1.61.0"
+AS_OF = "1.62.0"
 DATE = "2026-09-27"
 
 S = []  # sections
@@ -19,8 +19,8 @@ def r(status, v, fr, en, nfr="", nen=""):
 
 sec("dashboard", "Tableau de bord", "Dashboard", "Dashboard", "Dashboard")
 r("ok", "1.2", "Compteurs nœuds, VMs, volumes", "Host, VM and volume counts", "Vue d'ensemble", "Overview tiles")
-r("part", "1.43", "Capacité CPU, mémoire, stockage", "CPU, memory and storage capacity", "alloué par nœud et allouable Longhorn ; pas l'usage réel", "allocated per node and Longhorn allocatable; not live usage")
-r("todo", "1.62", "Événements du cluster (hôtes, VMs)", "Cluster events (hosts, VMs)", "", "")
+r("ok", "1.62", "Capacité CPU, mémoire, stockage", "CPU, memory and storage capacity", "usage réel (metrics.k8s.io), réservé, stockage écrit et promis", "live usage (metrics.k8s.io), reserved, storage written and promised")
+r("ok", "1.62", "Événements du cluster (hôtes, VMs, volumes, images)", "Cluster events (hosts, VMs, volumes, images)", "onglet Événements de l'aperçu, filtre avertissements", "Overview Events tab, warnings filter")
 r("todo", "1.66", "Métriques du cluster et des VMs (rancher-monitoring)", "Cluster and VM metrics (rancher-monitoring)", "", "")
 r("todo", "1.66", "Bouton Mettre à jour Harvester", "Upgrade Harvester button", "", "")
 
@@ -28,14 +28,14 @@ sec("hosts", "Hôtes", "Hosts", "Hosts", "Hosts")
 r("ok", "1.0", "Liste des hôtes, état, rôles", "Host list, state, roles")
 r("ok", "1.43", "Mode maintenance (avec forçage)", "Maintenance mode (with force)", "pré-contrôle : ce qui migre, ce qui s'arrête", "pre-check: what migrates, what stops")
 r("ok", "1.27", "Cordon / uncordon", "Cordon / uncordon")
-r("todo", "1.62", "Modifier : nom affiché, URL de console, labels", "Edit: display name, console URL, labels")
-r("todo", "1.62", "Disques : ajouter, retirer, étiquettes (host/disk tags)", "Disks: add, remove, host and disk tags")
-r("todo", "1.62", "Hugepages", "Hugepages")
-r("todo", "1.62", "Ksmtuned (stratégie, mode, seuils)", "Ksmtuned (strategy, mode, thresholds)")
-r("todo", "1.62", "Activer / désactiver le CPU manager", "Enable / disable CPU manager")
-r("part", "1.17", "Alimentation (éteindre, allumer, redémarrer)", "Power (shut down, power on, reboot)", "par Redfish dans l'onglet Bare-metal ; pas encore par harvester-seeder", "through Redfish in the Bare-metal tab; not yet through harvester-seeder")
-r("todo", "1.62", "Accès hors bande (seeder)", "Out-of-band access (seeder)")
-r("todo", "1.62", "Supprimer un hôte (cluster à plusieurs nœuds)", "Delete a host (multi-node cluster)")
+r("ok", "1.62", "Modifier : nom affiché, URL de console, labels", "Edit: display name, console URL, labels", "labels système protégés", "system labels protected")
+r("ok", "1.62", "Disques : ajouter, retirer, étiquettes (host/disk tags)", "Disks: add, remove, host and disk tags", "Longhorn V1, V2 ou LVM ; planification par disque", "Longhorn V1, V2 or LVM; per-disk scheduling")
+r("ok", "1.62", "Hugepages", "Hugepages")
+r("ok", "1.62", "Ksmtuned (stratégie, mode, seuils)", "Ksmtuned (strategy, mode, thresholds)")
+r("ok", "1.62", "Activer / désactiver le CPU manager", "Enable / disable CPU manager")
+r("ok", "1.62", "Alimentation (éteindre, allumer, redémarrer)", "Power (shut down, power on, reboot)", "par harvester-seeder en maintenance, comme Harvester ; aussi par Redfish dans Bare-metal", "through harvester-seeder in maintenance, as Harvester; also through Redfish in Bare-metal")
+r("ok", "1.62", "Accès hors bande (seeder)", "Out-of-band access (seeder)", "vérifié par IPMI (virtualbmc) ; Redfish sur 443 seulement", "verified over IPMI (virtualbmc); Redfish on 443 only")
+r("ok", "1.62", "Supprimer un hôte (cluster à plusieurs nœuds)", "Delete a host (multi-node cluster)", "nom tapé pour confirmer", "typed name to confirm")
 r("part", "1.39", "Détail : réseau, stockage, VMs de l'hôte", "Detail: host network, storage, VMs", "vues Fabrique et Stockage", "Fabric and Storage views")
 
 sec("vms", "Machines virtuelles : liste et actions", "Virtual machines: list and actions", "Virtual Machines", "Virtual Machines")
@@ -76,21 +76,21 @@ r("ok", "1.12", "CPU, mémoire, modèle de CPU, épinglage, NUMA", "CPU, memory,
 r("ok", "1.61", "Plafonds du branchement à chaud CPU / mémoire", "CPU and memory hotplug ceilings", "case de Harvester : un cœur par socket, limites = maximums", "Harvester's checkbox: one core per socket, limits = maximums")
 r("ok", "1.8", "Volumes : image, vide, existant, conteneur ; ordre de boot", "Volumes: image, blank, existing, container; boot order")
 r("ok", "1.8", "Cartes réseau (modèle, type, MAC)", "Network interfaces (model, type, MAC)")
-r("todo", "1.62", "IP statique d'une carte (v1.9)", "Static IP of an interface (v1.9)", "Harvester l'écrit en annotation et la montre ; rien ne l'applique côté serveur : à vérifier", "Harvester writes it as an annotation and shows it; nothing applies it server side: to verify")
+r("ok", "1.62", "IP statique d'une carte (v1.9)", "Static IP of an interface (v1.9)", "appliquée par kube-ovn sur un réseau overlay (DHCP vers l'invité) ; seulement montrée sur un VLAN", "applied by kube-ovn on an overlay network (DHCP to the guest); only shown on a VLAN")
 r("ok", "1.13", "Placement sur les nœuds (sélecteur, règles)", "Node scheduling (selector, rules)")
 r("ok", "1.13", "Affinité / anti-affinité entre VMs", "VM affinity / anti-affinity")
 r("ok", "1.15", "Périphériques PCI", "PCI devices")
 r("todo", "1.65", "Périphériques USB", "USB devices")
 r("ok", "1.61", "Access credentials (mot de passe, clés par l'agent)", "Access credentials (password, keys through the agent)", "appliqués au prochain redémarrage", "applied at the next restart")
-r("todo", "1.62", "Volume de système de fichiers (virtiofs, v1.9)", "Filesystem volume (virtiofs, v1.9)")
-r("part", "1.12", "Labels, labels d'instance, annotations", "Labels, instance labels, annotations", "étiquettes ; labels d'instance et annotations en 1.62 (et par le YAML dès 1.60)", "tags; instance labels and annotations in 1.62 (and through YAML since 1.60)")
+r("ok", "1.62", "Volume de système de fichiers (virtiofs, v1.9)", "Filesystem volume (virtiofs, v1.9)", "à la création ; le noyau invité doit connaître virtiofs", "at creation; the guest kernel needs virtiofs")
+r("ok", "1.62", "Labels, labels d'instance, annotations", "Labels, instance labels, annotations")
 r("ok", "1.2", "Stratégie d'exécution", "Run strategy")
 r("ok", "1.61", "Type d'OS, mémoire réservée, stratégie de maintenance", "OS type, reserved memory, maintenance strategy", "et nom affiché, description à la clé de Harvester", "plus display name, description under Harvester's key")
 r("ok", "1.12", "Nom d'hôte, délai d'arrêt", "Hostname, termination grace period")
 r("ok", "1.60", "Cloud-init (user-data, network-data)", "Cloud configuration (user data, network data)", "perdu à la création jusqu'à 1.59 ; en Secret, créé ou converti à l'enregistrement", "lost at creation until 1.59; in a Secret, created or converted on save")
 r("ok", "1.60", "Clés SSH à la création", "SSH keys at creation")
 r("ok", "1.60", "Installer l'agent invité", "Install guest agent")
-r("todo", "1.62", "Windows : unattend et sysprep", "Windows unattend and sysprep")
+r("ok", "1.62", "Windows : unattend et sysprep", "Windows unattend and sysprep", "fichier de réponses à la création, lecteur sysprep", "answer file at creation, sysprep drive")
 r("ok", "1.12", "TPM, EFI, Secure Boot, tablette USB", "TPM, EFI, Secure Boot, USB tablet")
 
 sec("volumes", "Volumes", "Volumes", "Volumes", "Volumes")
@@ -119,9 +119,9 @@ r("ok", "1.59", "Supprimer (si rien ne s'en sert)", "Delete (when unused)")
 r("ok", "1.60", "Modifier / télécharger le YAML", "Edit / download YAML")
 
 sec("namespaces", "Namespaces", "Namespaces", "Namespaces", "Namespaces")
-r("part", "1.2", "Liste", "List", "sélecteur seulement", "selector only")
-r("todo", "1.62", "Créer / supprimer", "Create / delete")
-r("todo", "1.62", "Quota d'instantanés du namespace", "Namespace snapshot quota")
+r("ok", "1.62", "Liste", "List", "fenêtre Namespaces : VMs, volumes, quota ; système caché", "Namespaces window: VMs, volumes, quota; system hidden")
+r("ok", "1.62", "Créer / modifier / supprimer", "Create / edit / delete", "suppression par nom tapé", "delete by typed name")
+r("ok", "1.62", "Quota d'instantanés du namespace", "Namespace snapshot quota")
 
 sec("networks", "Réseaux", "Networks", "Networks", "Networks")
 r("part", "1.39", "Réseaux de cluster et configurations (liaisons, bond, MTU)", "Cluster networks and configs (uplinks, bond, MTU)", "vue Fabrique en lecture ; création en 1.64", "read-only Fabric view; creation in 1.64")
@@ -187,7 +187,7 @@ r("part", "1.50", "Rôles de virtualisation (chart Harvester RBAC, Rancher 2.14.
   "Virtualization roles (Harvester RBAC chart, Rancher 2.14.1, experimental)",
   "appliqués d'office par le jeton Rancher ; vérifié avec un membre du cluster, pas encore avec les rôles de ce chart",
   "applied by the Rancher token; checked with a cluster member, not yet with this chart's roles")
-r("todo", "1.62", "Projets Rancher : namespaces rangés par projet, quotas de ressources",
+r("todo", "1.66", "Projets Rancher : namespaces rangés par projet, quotas de ressources",
   "Rancher projects: namespaces grouped by project, resource quotas")
 r("part", "1.31", "Membres du cluster", "Cluster members", "comptes du cluster : activer, désactiver, admin ; pas encore les rôles Rancher", "cluster accounts: enable, disable, admin; Rancher roles not yet")
 r("plus", "1.57", "Connexion obligatoire, comptes et rôles propres à la console",

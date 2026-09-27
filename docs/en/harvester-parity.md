@@ -1,8 +1,8 @@
 # Parity with the Harvester UI
 
-Status on 2026-09-27, console **v1.61.0**, compared with the **Harvester v1.9** UI (menus taken from the harvester-ui-extension v1.9.0 source and the v1.9 documentation).
+Status on 2026-09-27, console **v1.62.0**, compared with the **Harvester v1.9** UI (menus taken from the harvester-ui-extension v1.9.0 source and the v1.9 documentation).
 
-Of 135 functions of the Harvester UI: **68 done**, **18 partial**, **49 missing**; 2 out of scope. A missing function shows the version it is planned for.
+Of 135 functions of the Harvester UI: **85 done**, **14 partial**, **36 missing**; 2 out of scope. A missing function shows the version it is planned for.
 
 Statuses: Done, Partial (what is missing is said), Missing (planned version), Console only (what Harvester does not have), Out of scope.
 
@@ -13,8 +13,8 @@ Harvester menu: *Dashboard*
 | Function | Status | Version | Note |
 |---|---|---|---|
 | Host, VM and volume counts | Done | 1.2 | Overview tiles |
-| CPU, memory and storage capacity | Partial | 1.43 | allocated per node and Longhorn allocatable; not live usage |
-| Cluster events (hosts, VMs) | Missing | planned 1.62 |  |
+| CPU, memory and storage capacity | Done | 1.62 | live usage (metrics.k8s.io), reserved, storage written and promised |
+| Cluster events (hosts, VMs, volumes, images) | Done | 1.62 | Overview Events tab, warnings filter |
 | Cluster and VM metrics (rancher-monitoring) | Missing | planned 1.66 |  |
 | Upgrade Harvester button | Missing | planned 1.66 |  |
 
@@ -27,14 +27,14 @@ Harvester menu: *Hosts*
 | Host list, state, roles | Done | 1.0 |  |
 | Maintenance mode (with force) | Done | 1.43 | pre-check: what migrates, what stops |
 | Cordon / uncordon | Done | 1.27 |  |
-| Edit: display name, console URL, labels | Missing | planned 1.62 |  |
-| Disks: add, remove, host and disk tags | Missing | planned 1.62 |  |
-| Hugepages | Missing | planned 1.62 |  |
-| Ksmtuned (strategy, mode, thresholds) | Missing | planned 1.62 |  |
-| Enable / disable CPU manager | Missing | planned 1.62 |  |
-| Power (shut down, power on, reboot) | Partial | 1.17 | through Redfish in the Bare-metal tab; not yet through harvester-seeder |
-| Out-of-band access (seeder) | Missing | planned 1.62 |  |
-| Delete a host (multi-node cluster) | Missing | planned 1.62 |  |
+| Edit: display name, console URL, labels | Done | 1.62 | system labels protected |
+| Disks: add, remove, host and disk tags | Done | 1.62 | Longhorn V1, V2 or LVM; per-disk scheduling |
+| Hugepages | Done | 1.62 |  |
+| Ksmtuned (strategy, mode, thresholds) | Done | 1.62 |  |
+| Enable / disable CPU manager | Done | 1.62 |  |
+| Power (shut down, power on, reboot) | Done | 1.62 | through harvester-seeder in maintenance, as Harvester; also through Redfish in Bare-metal |
+| Out-of-band access (seeder) | Done | 1.62 | verified over IPMI (virtualbmc); Redfish on 443 only |
+| Delete a host (multi-node cluster) | Done | 1.62 | typed name to confirm |
 | Detail: host network, storage, VMs | Partial | 1.39 | Fabric and Storage views |
 
 ## Virtual machines: list and actions
@@ -85,21 +85,21 @@ Harvester menu: *Create / Edit VM*
 | CPU and memory hotplug ceilings | Done | 1.61 | Harvester's checkbox: one core per socket, limits = maximums |
 | Volumes: image, blank, existing, container; boot order | Done | 1.8 |  |
 | Network interfaces (model, type, MAC) | Done | 1.8 |  |
-| Static IP of an interface (v1.9) | Missing | planned 1.62 | Harvester writes it as an annotation and shows it; nothing applies it server side: to verify |
+| Static IP of an interface (v1.9) | Done | 1.62 | applied by kube-ovn on an overlay network (DHCP to the guest); only shown on a VLAN |
 | Node scheduling (selector, rules) | Done | 1.13 |  |
 | VM affinity / anti-affinity | Done | 1.13 |  |
 | PCI devices | Done | 1.15 |  |
 | USB devices | Missing | planned 1.65 |  |
 | Access credentials (password, keys through the agent) | Done | 1.61 | applied at the next restart |
-| Filesystem volume (virtiofs, v1.9) | Missing | planned 1.62 |  |
-| Labels, instance labels, annotations | Partial | 1.12 | tags; instance labels and annotations in 1.62 (and through YAML since 1.60) |
+| Filesystem volume (virtiofs, v1.9) | Done | 1.62 | at creation; the guest kernel needs virtiofs |
+| Labels, instance labels, annotations | Done | 1.62 |  |
 | Run strategy | Done | 1.2 |  |
 | OS type, reserved memory, maintenance strategy | Done | 1.61 | plus display name, description under Harvester's key |
 | Hostname, termination grace period | Done | 1.12 |  |
 | Cloud configuration (user data, network data) | Done | 1.60 | lost at creation until 1.59; in a Secret, created or converted on save |
 | SSH keys at creation | Done | 1.60 |  |
 | Install guest agent | Done | 1.60 |  |
-| Windows unattend and sysprep | Missing | planned 1.62 |  |
+| Windows unattend and sysprep | Done | 1.62 | answer file at creation, sysprep drive |
 | TPM, EFI, Secure Boot, USB tablet | Done | 1.12 |  |
 
 ## Volumes
@@ -143,9 +143,9 @@ Harvester menu: *Namespaces*
 
 | Function | Status | Version | Note |
 |---|---|---|---|
-| List | Partial | 1.2 | selector only |
-| Create / delete | Missing | planned 1.62 |  |
-| Namespace snapshot quota | Missing | planned 1.62 |  |
+| List | Done | 1.62 | Namespaces window: VMs, volumes, quota; system hidden |
+| Create / edit / delete | Done | 1.62 | delete by typed name |
+| Namespace snapshot quota | Done | 1.62 |  |
 
 ## Networks
 
@@ -245,7 +245,7 @@ Harvester menu: *Authentication / Rancher*
 |---|---|---|---|
 | Sign-in through Rancher (its identity providers), the person's own rights | Done | 1.50 | as Harvester imported into Rancher (Virtualization Management): calls carry the person's token, Rancher's cluster and project rights apply |
 | Virtualization roles (Harvester RBAC chart, Rancher 2.14.1, experimental) | Partial | 1.50 | applied by the Rancher token; checked with a cluster member, not yet with this chart's roles |
-| Rancher projects: namespaces grouped by project, resource quotas | Missing | planned 1.62 |  |
+| Rancher projects: namespaces grouped by project, resource quotas | Missing | planned 1.66 |  |
 | Cluster members | Partial | 1.31 | cluster accounts: enable, disable, admin; Rancher roles not yet |
 | Mandatory sign-in, the console's own accounts and roles | Console only | 1.57 | without Rancher; standalone Harvester has a single admin |
 

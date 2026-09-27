@@ -60,7 +60,7 @@ const App = (() => {
   function savedOverviewMode() {
     let m = 'metrics';
     try { m = localStorage.getItem('harvester_ops_overview_subtab') || 'metrics'; } catch {}
-    return ['metrics', 'cluster'].includes(m) ? m : 'metrics';
+    return ['metrics', 'cluster', 'events'].includes(m) ? m : 'metrics';
   }
 
   function setStepStatus(panelId, stepId, status, msg) {
@@ -320,6 +320,8 @@ const App = (() => {
       // Clear any previous error banner on a successful refresh
       const old = $('#status-error-banner');
       if (old) old.remove();
+      // v1.62.0 : les jauges d'usage réel, à côté des compteurs
+      if (window.ClusterUsage) window.ClusterUsage.render(asked);
       const s = data.summary || {};
       $('#m-nodes').textContent = `${s.nodes_ready || 0} / ${s.nodes_total || 0}`;
       $('#m-vms').textContent = `${s.vms_running || 0} / ${s.vms_total || 0}`;
@@ -1743,6 +1745,10 @@ const App = (() => {
     $('#btn-vm-backups')?.addEventListener('click', () => {
       if (window.Backups) Backups.open(currentCluster, currentNamespace || $('#ns-dropdown')?.value || '');
     });
+    // v1.62.0 : le menu Namespaces, en fenêtre
+    $('#btn-vm-namespaces')?.addEventListener('click', () => {
+      if (window.Namespaces) Namespaces.open(currentCluster);
+    });
     $('#btn-vm-exports')?.addEventListener('click', () => {
       if (window.VMTransfer) window.VMTransfer.openStore(currentCluster);
     });
@@ -2094,7 +2100,7 @@ const App = (() => {
   // -------------------------------------------------------------------------
   const BOARDS = () => ({ cluster: window.ClusterMap, fabric: window.Fabric,
                           network: window.NetMap, storage: window.StorageMap,
-                          vpc: window.VpcBoard });
+                          vpc: window.VpcBoard, events: window.EventsBoard });
 
   function stopBoards(except) {
     Object.entries(BOARDS()).forEach(([m, b]) => { if (b && m !== except) b.stop(); });

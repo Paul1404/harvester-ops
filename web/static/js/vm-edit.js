@@ -341,6 +341,18 @@ const VMEdit = (() => {
             label: { en: 'MAC address', fr: 'Adresse MAC' },
             description: { en: 'Empty = auto-generated. Changing it may break DHCP leases',
                            fr: 'Vide = auto-générée. La changer peut casser les baux DHCP' } },
+          // v1.62.0 : l'IP statique de Harvester 1.9 (annotation de la VM
+          // static-ip.harvesterhci.io/<carte>, cartes en pont)
+          // vu sur harv1 : sur un réseau overlay, le webhook de Harvester en
+          // fait l'adresse kube-ovn de la carte (et le DHCP de kube-ovn la
+          // donne à l'invité) ; sur un VLAN, rien ne l'applique
+          { name: 'static_ip', type: 'text', validate: /^((25[0-5]|2[0-4]\d|1?\d?\d)\.){3}(25[0-5]|2[0-4]\d|1?\d?\d)$/,
+            label: { en: 'Static IP', fr: 'IP statique', de: 'Statische IP', es: 'IP estática', it: 'IP statico' },
+            description: { en: 'On an overlay (kube-ovn) network, kube-ovn gives this address to the interface (DHCP to the guest when the subnet has it). On a VLAN network it is only shown: set it in the guest (cloud-init network-data)',
+                           fr: 'Sur un réseau overlay (kube-ovn), kube-ovn donne cette adresse à la carte (par DHCP à l\'invité si le sous-réseau l\'a). Sur un réseau VLAN elle est seulement montrée : la configurer dans l\'invité (network-data du cloud-init)',
+                           de: 'In einem Overlay-Netz (kube-ovn) vergibt kube-ovn diese Adresse an die Karte (per DHCP an den Gast, wenn das Subnetz es hat). In einem VLAN wird sie nur angezeigt: im Gast setzen (cloud-init network-data)',
+                           es: 'En una red overlay (kube-ovn), kube-ovn da esta dirección a la tarjeta (por DHCP al invitado si la subred lo tiene). En una red VLAN solo se muestra: configurarla en el invitado (network-data de cloud-init)',
+                           it: 'Su una rete overlay (kube-ovn), kube-ovn assegna questo indirizzo alla scheda (via DHCP al guest se la subnet lo ha). Su una rete VLAN è solo mostrato: configurarlo nel guest (network-data di cloud-init)' } },
         ],
       },
     },
@@ -922,7 +934,11 @@ const VMEdit = (() => {
     interfaces.forEach(itf => {
       const net = netByName[itf.name];
       if (net) used.add(itf.name);
-      const type = itf.bridge ? 'bridge'
+      // vu sur harv1 : sur un réseau overlay dont le sous-réseau sert le DHCP,
+      // le webhook de Harvester 1.9 remplace `bridge` par le plugin KubeVirt
+      // `binding: managedtap`. C'est une carte en pont pour la personne ;
+      // réécrite en `bridge`, le webhook la reconvertit.
+      const type = (itf.bridge || (itf.binding && itf.binding.name === 'managedtap')) ? 'bridge'
         : itf.masquerade ? 'masquerade'
         : itf.macvtap ? 'macvtap'
         : itf.sriov ? 'sriov' : null;
@@ -937,6 +953,7 @@ const VMEdit = (() => {
         network: net.multus ? net.multus.networkName : '',
         model: itf.model || 'virtio',
         mac: itf.macAddress || '',
+        static_ip: ((vm.metadata || {}).annotations || {})[`static-ip.harvesterhci.io/${itf.name}`] || '',
         // v1.13.0 : ordre de boot réseau (PXE)
         boot_order: itf.bootOrder ?? 0,
       });
@@ -1102,7 +1119,7 @@ const VMEdit = (() => {
       case 'lifecycle': return renderLifecycle(template);
       case 'disks':   return renderDisksSection(vm, cluster, opts);
       case 'network': return renderNetworkSection(vm, cluster);
-      case 'cloudinit': return renderCloudInit(cluster);
+      case 'cloudinit': return renderCloudInit(cluster, opts);
       default: return '';
     }
   }
@@ -1469,6 +1486,53 @@ const VMEdit = (() => {
 
   // v1.61.0 : les champs du formulaire de Harvester 1.9 (clés relevées dans
   // harvester-ui-extension v1.9.0)
+  // v1.62.0 : labels de la VM, labels d'instance, annotations (onglets Labels,
+  // Instance Labels et Annotations de Harvester). Les clés système restent
+  // cachées et gardées, comme dans Harvester.
+  const KV_HIDDEN = {
+    labels: /^(harvesterhci\.io\/|kubevirt\.io\/|vm\.kubevirt\.io\/)/,
+    ilabels: /^(tag\.harvesterhci\.io\/|harvesterhci\.io\/|kubevirt\.io\/|vm\.kubevirt\.io\/|.*cattle\.io\/)/,
+    annots: /^(harvesterhci\.io\/|kubevirt\.io\/|kubectl\.kubernetes\.io\/|field\.cattle\.io\/|network\.harvesterhci\.io\/|static-ip\.harvesterhci\.io\/|.*cattle\.io\/)/,
+  };
+  const KV_KEY = /^([a-z0-9]([-a-z0-9.]*[a-z0-9])?\/)?[A-Za-z0-9]([-A-Za-z0-9_.]*[A-Za-z0-9])?$/;
+  function kvSource(vm, kind) {
+    const md = vm.metadata || {};
+    const tm = ((vm.spec || {}).template || {}).metadata || {};
+    const src = kind === 'labels' ? md.labels : kind === 'ilabels' ? tm.labels : md.annotations;
+    return Object.entries(src || {}).filter(([k]) => !KV_HIDDEN[kind].test(k)).sort(([a], [b]) => a.localeCompare(b));
+  }
+  function kvRowHtml(kind, k = '', v = '') {
+    return `<div class="vm-kv-row" data-kv-row="${kind}">
+      <input type="text" data-kv="key" value="${esc(k)}" placeholder="${esc(tr('vm.edit.kvKey', 'key'))}" class="tip" data-tip="${esc(tr('vm.edit.tKvKey', 'A label or annotation key, e.g. app or example.com/team'))}">
+      <input type="text" data-kv="value" value="${esc(v)}" placeholder="${esc(tr('vm.edit.kvValue', 'value'))}" class="tip" data-tip="${esc(tr('vm.edit.tKvValue', 'Its value'))}">
+      <button type="button" class="btn-icon-sm tip" data-kv-del data-tip="${esc(tr('vm.edit.tKvDel', 'Remove this entry'))}">×</button></div>`;
+  }
+  function kvBlock(vm, kind, title, hint) {
+    const rows = kvSource(vm, kind);
+    return `<details class="vm-edit-adv vm-kv" data-kv-block="${kind}" ${rows.length ? 'open' : ''}>
+      <summary>${esc(title)} <span class="res-dim">(${rows.length})</span></summary>
+      <p class="form-hint">${esc(hint)}</p>
+      <div class="vm-kv-rows">${rows.map(([k, v]) => kvRowHtml(kind, k, v)).join('')}</div>
+      <button type="button" class="btn btn-sm btn-secondary tip" data-kv-add="${kind}" data-tip="${esc(tr('vm.edit.tKvAdd', 'Add an entry'))}">${Icons.svg('add', { size: 13 })} ${esc(tr('vm.edit.kvAdd', 'Add'))}</button>
+    </details>`;
+  }
+  /** Les entrées saisies, avec null pour celles retirées (merge patch). */
+  function kvRead(sectionEl, vm, kind) {
+    const out = {};
+    const seen = new Set();
+    sectionEl.querySelectorAll(`[data-kv-row="${kind}"]`).forEach(row => {
+      const k = row.querySelector('[data-kv="key"]').value.trim();
+      const v = row.querySelector('[data-kv="value"]').value;
+      if (!k) return;
+      if (!KV_KEY.test(k) || KV_HIDDEN[kind].test(k)) throw new Error(`${tr('vm.edit.errKvKey', 'invalid or reserved key')}: "${k}"`);
+      if (seen.has(k)) throw new Error(`${tr('vm.edit.errTagDup', 'duplicate tag key')}: ${k}`);
+      seen.add(k);
+      out[k] = v;
+    });
+    kvSource(vm, kind).forEach(([k]) => { if (!seen.has(k)) out[k] = null; });
+    return out;
+  }
+
   const OS_TYPES = ['windows', 'linux', 'SLEs', 'debian', 'fedora', 'gentoo', 'oracle', 'redhat', 'openSUSE', 'ubuntu', 'otherLinux'];
   const MAINTAIN = ['Migrate', 'ShutdownAndRestartAfterEnable', 'ShutdownAndRestartAfterDisable', 'Shutdown'];
 
@@ -1533,6 +1597,9 @@ const VMEdit = (() => {
       <div class="vm-edit-cards" data-cards="tags">
         ${TFForm.render(TAG_SCHEMA, cluster, { tag: tagItems }, { hideHeader: true })}
       </div>
+      ${kvBlock(vm, 'labels', tr('vm.edit.kvLabels', 'Labels'), tr('vm.edit.kvLabelsHint', 'Labels of the VM object itself.'))}
+      ${kvBlock(vm, 'ilabels', tr('vm.edit.kvInstance', 'Instance labels'), tr('vm.edit.kvInstanceHint', 'Labels copied to the running instance (VMI): load balancer selectors and affinity rules read them.'))}
+      ${kvBlock(vm, 'annots', tr('vm.edit.kvAnnots', 'Annotations'), tr('vm.edit.kvAnnotsHint', 'Annotations of the VM; Harvester\'s own keys stay hidden and are kept.'))}
       ${applyBar('general')}`;
   }
 
@@ -1856,8 +1923,29 @@ const VMEdit = (() => {
       ${applyBar('lifecycle')}`;
   }
 
-  function renderCloudInit(cluster) {
+  // v1.62.0 : à la création seulement, comme Harvester : fichier de réponses
+  // Windows (Secret autounattend.xml, lecteur sysprep) et volumes virtiofs
+  function renderCreateExtras() {
+    const fsRow = (kind) => `<div class="vm-kv-row vm-fs-row" data-fs-kind="${kind}">
+        <span class="res-dim">${esc(kind)}</span>
+        <input type="text" data-fs="source" placeholder="${esc(tr('vm.create.fsSource', 'name of the source'))}" class="tip" data-tip="${esc(tr('vm.create.tFsSource', 'The ConfigMap, Secret or ServiceAccount of the namespace to share; empty = none'))}">
+        <input type="text" data-fs="name" placeholder="${esc({ configMap: 'appconfigfs', secret: 'appsecretfs', serviceAccount: 'appserviceaccountfs' }[kind])}" class="tip" data-tip="${esc(tr('vm.create.tFsName', 'The tag to mount in the guest: mount -t virtiofs <tag> /mnt/<tag>'))}">
+      </div>`;
     return `
+      <details class="vm-edit-adv">
+        <summary>${esc(tr('vm.create.sysprep', 'Windows answer file (autounattend.xml)'))}</summary>
+        <p class="form-hint">${esc(tr('vm.create.sysprepHint', 'Given to Windows Setup on a SATA CD-ROM named sysprep, from a Secret, as Harvester does.'))}</p>
+        <textarea class="yaml-editor" data-sysprep spellcheck="false" placeholder="&lt;unattend xmlns=&quot;urn:schemas-microsoft-com:unattend&quot;&gt;…"></textarea>
+      </details>
+      <details class="vm-edit-adv">
+        <summary>${esc(tr('vm.create.fs', 'Filesystem volumes (virtiofs)'))}</summary>
+        <p class="form-hint">${esc(tr('vm.create.fsHint', 'Share a ConfigMap, a Secret or a ServiceAccount with the guest as a virtiofs filesystem (one of each at most, set at creation).'))}</p>
+        ${['configMap', 'secret', 'serviceAccount'].map(fsRow).join('')}
+      </details>`;
+  }
+
+  function renderCloudInit(cluster, opts = {}) {
+    return `${opts.claimsAreToCreate ? renderCreateExtras() : ''}
       <h3>Cloud-init</h3>
       <p class="form-hint">Edit user-data and network-data. Saved to the VM's cloud-init Secret.</p>
       <details class="vm-edit-adv vm-edit-ci-wizard">
@@ -2011,6 +2099,20 @@ const VMEdit = (() => {
           loadNetPath(sectionEl, cluster, namespace, name);
         }
       }));
+    }
+
+    // v1.62.0 : ajouter / retirer une entrée des labels et annotations
+    if (sectionId === 'general') {
+      sectionEl.addEventListener('click', (e) => {
+        const add = e.target.closest('[data-kv-add]');
+        if (add) {
+          const kind = add.dataset.kvAdd;
+          sectionEl.querySelector(`[data-kv-block="${kind}"] .vm-kv-rows`).insertAdjacentHTML('beforeend', kvRowHtml(kind));
+          return;
+        }
+        const del = e.target.closest('[data-kv-del]');
+        if (del) del.closest('.vm-kv-row').remove();
+      });
     }
 
     if (sectionId === 'cloudinit') {
@@ -2189,6 +2291,7 @@ const VMEdit = (() => {
           });
         }
         const vmLabels = {
+          ...kvRead(sectionEl, vm, 'labels'),
           'harvesterhci.io/os': val('label.os') || null,
           // comme Harvester : écrit seulement quand ce n'est pas Migrate
           'harvesterhci.io/maintain-mode-strategy': (val('label.maintain') || 'Migrate') === 'Migrate' ? null : val('label.maintain'),
@@ -2196,6 +2299,7 @@ const VMEdit = (() => {
         return {
           metadata: {
             annotations: {
+              ...kvRead(sectionEl, vm, 'annots'),
               'field.cattle.io/description': val('annot.description') || null,
               'harvesterhci.io/description': null,
               'harvesterhci.io/vmDisplayName': (val('annot.displayName') || '').trim() || null,
@@ -2205,7 +2309,7 @@ const VMEdit = (() => {
           spec: {
             runStrategy: val('spec.runStrategy'),
             template: {
-              metadata: { labels },
+              metadata: { labels: { ...kvRead(sectionEl, vm, 'ilabels'), ...labels } },
               spec: { hostname: (val('spec.hostname') || '').trim() || null },
             },
           },
@@ -2374,7 +2478,17 @@ const VMEdit = (() => {
         const editor = get('.vm-edit-cards .tf-form');
         const read = TFForm.read(editor, NET_SCHEMA, { emitEmptyLists: true });
         const { passthrough } = vmNetsToForm(vm);
-        return formNetsToPatch(read.nic || [], passthrough, vm);
+        const patch = formNetsToPatch(read.nic || [], passthrough, vm);
+        // v1.62.0 : les IP statiques, annotations de la VM (null = retirée)
+        const annotations = {};
+        Object.keys((vm.metadata || {}).annotations || {})
+          .filter(k => k.startsWith('static-ip.harvesterhci.io/')).forEach(k => { annotations[k] = null; });
+        (read.nic || []).forEach(n => {
+          const ip = (n.static_ip || '').trim();
+          if (ip && n.type === 'bridge') annotations[`static-ip.harvesterhci.io/${n.name}`] = ip;
+        });
+        if (Object.keys(annotations).length) patch.metadata = { ...(patch.metadata || {}), annotations };
+        return patch;
       }
       default:
         return {};

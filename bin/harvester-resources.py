@@ -45,12 +45,31 @@ il s'utilise aussi seul.
   harvester-resources vm access --cluster harv1 --namespace default --name web --kind basic --users ops --password-file pw
   harvester-resources vm access --cluster harv1 --namespace default --name web --kind ssh --users ops --keys default/k1
 
+  harvester-resources host basics --cluster harv1 --node n1 [--custom-name "rack 2"] [--console-url https://10.0.0.21] [--labels-file l.json]
+  harvester-resources host tags --cluster harv1 --node n1 --tags fast,ssd
+  harvester-resources host disk-add --cluster harv1 --node n1 --disk BLOCKDEVICE [--provisioner LonghornV1|LonghornV2|lvm] [--vg VG] [--format|--no-format]
+  harvester-resources host disk-remove --cluster harv1 --node n1 --disk BLOCKDEVICE
+  harvester-resources host disk-set --cluster harv1 --node n1 --disk BLOCKDEVICE [--tags a,b] [--scheduling on|off]
+  harvester-resources host hugepages --cluster harv1 --node n1 [--thp-enabled madvise] [--thp-shmem never] [--thp-defrag madvise]
+  harvester-resources host ksmtuned --cluster harv1 --node n1 [--run run] [--mode standard|high|customized] [--thres 20] [--merge on|off] [--params p.json]
+  harvester-resources host cpu-manager --cluster harv1 --node n1 --enable|--disable
+  harvester-resources host oob --cluster harv1 --node n1 --bmc-host 10.0.0.21 [--bmc-port 623] --username admin --password-file pw [--insecure] [--interval 1h]
+  harvester-resources host oob --cluster harv1 --node n1 --off
+  harvester-resources host power --cluster harv1 --node n1 --operation shutdown|poweron|reboot
+  harvester-resources host delete --cluster harv1 --node n3
+
+  harvester-resources namespace create --cluster harv1 --name team-a [--description ..] [--labels-file l.json]
+  harvester-resources namespace update --cluster harv1 --name team-a [--description ..] [--labels-file l.json] [--annotations-file a.json]
+  harvester-resources namespace quota  --cluster harv1 --name team-a --size 100Gi   (0 removes it)
+  harvester-resources namespace delete --cluster harv1 --name team-a
+
 Sorties : 0 fait, 1 échec, 2 refusé par le contrôle, 3 annulé. Les étapes
 s'écrivent sur stderr en `STEP_EVENT|étape|statut|message`, que la console
 relaie au dock.
 """
 
 import argparse
+import json
 import signal
 import sys
 import time
@@ -63,6 +82,8 @@ import hv_backups as hb  # noqa: E402
 import hv_objects as ho  # noqa: E402
 import hv_yaml as hy  # noqa: E402
 import hv_vm as hv  # noqa: E402
+import hv_host as hh  # noqa: E402
+import hv_ns as hn  # noqa: E402
 
 EXIT_OK, EXIT_FAIL, EXIT_BLOCKED, EXIT_CANCELLED = 0, 1, 2, 3
 K_ADDON = "addons.harvesterhci.io"
@@ -1274,6 +1295,323 @@ def cmd_vm(args):
     return VM_ACTIONS[args.action](kube, args)
 
 
+# ---------------------------------------------------------------------------
+# Hôtes (v1.62.0) : la fenêtre « Modifier la configuration » d'un hôte de
+# Harvester et ses gestes (CPU manager, alimentation hors bande, suppression).
+# ---------------------------------------------------------------------------
+
+LH_NS = "longhorn-system"
+
+
+def _node(kube, name):
+    node = kube.get("nodes", None, name)
+    if node is None:
+        raise ValueError(f"no host {name}")
+    return node
+
+
+def _lh_node(kube, name):
+    lh = kube.get(hh.K_LHNODE, LH_NS, name)
+    if lh is None:
+        raise ValueError(f"Longhorn does not know the host {name}")
+    return lh
+
+
+def _split(text):
+    return [t.strip() for t in (text or "").split(",") if t.strip()]
+
+
+def host_basics(kube, args):
+    node = _node(kube, args.node)
+    labels = _read_json(args.labels_file) if args.labels_file else None
+    patch = hh.basics_patch(node, args.custom_name, args.console_url, labels)
+    step("host", "running", f"settings of {args.node}")
+    kube.patch("nodes", None, args.node, patch)
+    step("host", "done", f"{args.node} updated")
+    return EXIT_OK
+
+
+def host_tags(kube, args):
+    lh = _lh_node(kube, args.node)
+    patch = hh.lh_node_patch(lh, tags=_split(args.tags))
+    step("tags", "running", f"host tags of {args.node}: {', '.join(patch['spec']['tags']) or 'none'}")
+    kube.patch(hh.K_LHNODE, LH_NS, args.node, patch)
+    step("tags", "done", "Longhorn places the replicas of the classes with these tags on this host")
+    return EXIT_OK
+
+
+def _block_device(kube, args):
+    bd = kube.get(hh.K_BD, LH_NS, args.disk or "")
+    if bd is None or (bd.get("spec") or {}).get("nodeName") != args.node:
+        raise ValueError(f"no disk {args.disk} on {args.node}")
+    return bd
+
+
+def host_disk_add(kube, args):
+    bd = _block_device(kube, args)
+    out = hh.disk_add(bd, force_format=args.format, provisioner=args.provisioner, vg=args.vg)
+    path = (bd.get("spec") or {}).get("devPath")
+    step("disk", "running", f"{path} added to {args.node}"
+         + (" (formatted)" if out["spec"]["fileSystem"]["forceFormatted"] else ""))
+    kube.replace(out)
+
+    def done(obj):
+        st = (obj or {}).get("status") or {}
+        conds = {c.get("type"): c for c in st.get("conditions") or []}
+        fail = [c.get("message") for c in conds.values() if str(c.get("status")) == "False" and c.get("reason") == "Failed"]
+        if fail:
+            return False, fail[0]
+        if st.get("provisionPhase") == "Provisioned":
+            return True, f"{path} is a storage disk of {args.node}"
+        return None, st.get("provisionPhase") or "formatting and mounting"
+    return _wait(kube, hh.K_BD, LH_NS, args.disk, done, args.timeout, label="disk")
+
+
+def host_disk_remove(kube, args):
+    bd = _block_device(kube, args)
+    out = hh.disk_remove(bd)
+    path = (bd.get("spec") or {}).get("devPath")
+    step("disk", "running", f"{path} leaves {args.node}: its replicas move to the other disks first")
+    kube.replace(out)
+
+    def done(obj):
+        st = (obj or {}).get("status") or {}
+        if st.get("provisionPhase") == "Unprovisioned":
+            return True, f"{path} no longer holds volumes"
+        return None, st.get("provisionPhase") or "moving the replicas"
+    return _wait(kube, hh.K_BD, LH_NS, args.disk, done, args.timeout, label="disk")
+
+
+def host_disk_set(kube, args):
+    lh = _lh_node(kube, args.node)
+    sched = None if args.scheduling is None else args.scheduling == "on"
+    tags = None if args.tags is None else _split(args.tags)
+    patch = hh.lh_node_patch(lh, disk=args.disk, disk_tags=tags, scheduling=sched)
+    step("disk", "running", f"disk {args.disk} of {args.node}")
+    kube.patch(hh.K_LHNODE, LH_NS, args.node, patch)
+    step("disk", "done", "saved")
+    return EXIT_OK
+
+
+def host_hugepages(kube, args):
+    _node(kube, args.node)
+    if kube.get(hh.K_HUGEPAGE, None, args.node) is None:
+        raise ValueError("this Harvester has no huge page settings (Harvester 1.7 or later)")
+    patch = hh.hugepage_patch(args.thp_enabled, args.thp_shmem, args.thp_defrag)
+    step("hugepages", "running", f"transparent huge pages of {args.node}")
+    kube.patch(hh.K_HUGEPAGE, None, args.node, patch)
+    step("hugepages", "done", "applied by the node manager")
+    return EXIT_OK
+
+
+def host_ksmtuned(kube, args):
+    _node(kube, args.node)
+    if kube.get(hh.K_KSM, None, args.node) is None:
+        raise ValueError(f"no ksmtuned settings for {args.node}")
+    params = _read_json(args.params) if args.params else None
+    merge = None if args.merge is None else args.merge == "on"
+    patch = hh.ksmtuned_patch(args.run, args.mode, args.thres, merge, params)
+    step("ksmtuned", "running", f"memory page merging (KSM) of {args.node}")
+    kube.patch(hh.K_KSM, None, args.node, patch)
+    step("ksmtuned", "done", "applied by the node manager")
+    return EXIT_OK
+
+
+def host_cpu_manager(kube, args):
+    if args.enable is None:
+        raise ValueError("give --enable or --disable")
+    node = _node(kube, args.node)
+    vmis = [v for v in kube.list(K_VMI) if ((v.get("status") or {}).get("nodeName")) == args.node]
+    patch = hh.cpu_manager_request(node, args.enable, vmis)
+    step("cpumanager", "running", f"{'enabling' if args.enable else 'disabling'} the CPU manager of {args.node}: "
+         "Harvester restarts the node's Kubernetes agent (the VMs keep running)")
+    kube.patch("nodes", None, args.node, patch)
+    want = "true" if args.enable else "false"
+
+    def done(obj):
+        st = hh.cpu_manager_status(obj)
+        if st["status"] == "failed":
+            return False, "Harvester could not change the CPU manager (see the update-cpu-manager job)"
+        if st["status"] == "success" and st["label"] == want:
+            return True, f"CPU manager {'enabled' if args.enable else 'disabled'} on {args.node}"
+        return None, {"requested": "requested", "running": "the node's agent restarts"}.get(st["status"], "waiting")
+    return _wait(kube, "nodes", None, args.node, done, args.timeout, label="cpumanager")
+
+
+def _seeder_enabled(kube):
+    addon = kube.get(K_ADDON, "harvester-system", "harvester-seeder")
+    return bool(((addon or {}).get("spec") or {}).get("enabled"))
+
+
+def host_oob(kube, args):
+    _node(kube, args.node)
+    inv = kube.get(hh.K_INVENTORY, "harvester-system", args.node)
+    if args.off:
+        if inv is None:
+            step("oob", "done", f"{args.node} has no out-of-band access")
+            return EXIT_OK
+        step("oob", "running", f"out-of-band access of {args.node} removed")
+        kube.delete(hh.K_INVENTORY, "harvester-system", args.node)
+        step("oob", "done", "the BMC credentials secret is kept")
+        return EXIT_OK
+    if not _seeder_enabled(kube):
+        raise ValueError("enable the harvester-seeder add-on first (Add-ons)")
+    ref = ((((inv or {}).get("spec") or {}).get("baseboardSpec") or {}).get("connection") or {}).get("authSecretRef") or {}
+    sns, sname = ref.get("namespace") or "harvester-system", ref.get("name") or f"{args.node}-bmc"
+    if args.password_file:
+        password = Path(args.password_file).read_text().rstrip("\n")
+        existing = kube.get("secrets", sns, sname)
+        secret = hh.bmc_secret(args.node, args.username, password, existing)
+        secret["metadata"].update({"name": sname, "namespace": sns})
+        step("oob", "running", f"BMC credentials of {args.node} saved in the secret {sns}/{sname}")
+        (kube.replace if existing else kube.create)(secret)
+    elif kube.get("secrets", sns, sname) is None:
+        raise ValueError("give the BMC user name and password")
+    obj = hh.inventory(args.node, args.bmc_host, args.bmc_port, sns, sname, insecure=args.insecure,
+                       events=not args.no_events, interval=args.interval, existing=inv)
+    step("oob", "running", f"{args.node} reached out of band at {args.bmc_host}")
+    (kube.replace if inv else kube.create)(obj)
+    started = time.time()
+
+    def done(o):
+        st = (o or {}).get("status") or {}
+        if st.get("status") == "inventoryNodeReady":
+            return True, f"the BMC answers: {args.node} is {st.get('machinePowerState') or 'known'}"
+        err = hh.bmc_error(o)
+        # vu sur harvlab : le seeder réessaie sans fin et garde la condition
+        # d'un essai précédent ; passé 45 s sans réponse, on dit pourquoi
+        if err and time.time() - started > 45:
+            return False, f"the BMC cannot be reached: {err}"
+        return None, st.get("status") or "the seeder contacts the BMC"
+    return _wait(kube, hh.K_INVENTORY, "harvester-system", args.node, done, min(args.timeout, 300), label="oob")
+
+
+def host_power(kube, args):
+    node = _node(kube, args.node)
+    inv = kube.get(hh.K_INVENTORY, "harvester-system", args.node)
+    patch = hh.power_check(node, inv, args.operation)
+    step("power", "running", f"{args.operation} of {args.node} through its BMC")
+    kube.patch(hh.K_INVENTORY, "harvester-system", args.node, patch)
+    # comme l'action powerAction de Harvester : vider lastJobName (sous-ressource
+    # status) est ce qui fait lancer un nouveau travail au seeder. Vu sur
+    # harvlab : sans lui, la demande restait sans suite et l'état du travail
+    # précédent faisait croire l'action finie.
+    kube.run("patch", hh.K_INVENTORY, args.node, "-n", "harvester-system", "--subresource=status",
+             "--type", "merge", "-p", json.dumps({"status": {"powerAction": {"lastJobName": ""}}}))
+    prefix = f"{args.node}-{args.operation}-"
+
+    def done(o):
+        st = (o or {}).get("status") or {}
+        job = (st.get("powerAction") or {}).get("lastJobName") or ""
+        if not job.startswith(prefix):
+            return None, "the seeder prepares the BMC job"
+        bj = kube.get(hh.K_BMC_JOB, "harvester-system", job) or {}
+        conds = {c.get("type"): str(c.get("status")) for c in (bj.get("status") or {}).get("conditions") or []}
+        if conds.get("Failed") == "True":
+            return False, f"{args.operation} of {args.node} failed (BMC job {job})"
+        if conds.get("Completed") == "True":
+            return True, f"{args.operation} of {args.node} done" + (
+                f" (machine {st.get('machinePowerState')})" if st.get("machinePowerState") else "")
+        return None, "the BMC is working"
+    return _wait(kube, hh.K_INVENTORY, "harvester-system", args.node, done, min(args.timeout, 900), label="power")
+
+
+def host_delete(kube, args):
+    node = _node(kube, args.node)
+    kind, ns, name = hh.delete_target(node, kube.list("nodes"))
+    step("host", "running", f"{args.node} removed from the cluster"
+         + (f" (Cluster API machine {ns}/{name})" if ns else ""))
+    kube.delete(kind, ns, name)
+
+    def done(o):
+        return (True, f"{args.node} is no longer in the cluster") if o is None else (None, "the node is being removed")
+    return _wait(kube, "nodes", None, args.node, done, args.timeout, label="host")
+
+
+HOST_ACTIONS = {
+    "basics": host_basics, "tags": host_tags, "disk-add": host_disk_add, "disk-remove": host_disk_remove,
+    "disk-set": host_disk_set, "hugepages": host_hugepages, "ksmtuned": host_ksmtuned,
+    "cpu-manager": host_cpu_manager, "oob": host_oob, "power": host_power, "delete": host_delete,
+}
+
+
+def cmd_host(args):
+    kube = kube_from(args)
+    hh.check_node(args.node)
+    return HOST_ACTIONS[args.action](kube, args)
+
+
+# ---------------------------------------------------------------------------
+# Namespaces (v1.62.0) : le menu Namespaces de Harvester.
+# ---------------------------------------------------------------------------
+
+def ns_create(kube, args):
+    if kube.get("namespaces", None, args.name) is not None:
+        raise ValueError(f"the namespace {args.name} already exists")
+    labels = _read_json(args.labels_file) if args.labels_file else None
+    obj = hn.manifest(args.name, args.description or "", labels)
+    step("namespace", "running", f"namespace {args.name} created")
+    kube.create(obj)
+    step("namespace", "done", f"{args.name} is ready")
+    return EXIT_OK
+
+
+def ns_update(kube, args):
+    obj = kube.get("namespaces", None, args.name)
+    if obj is None:
+        raise ValueError(f"no namespace {args.name}")
+    labels = _read_json(args.labels_file) if args.labels_file else None
+    annotations = _read_json(args.annotations_file) if args.annotations_file else None
+    patch = hn.update_patch(obj, args.description, labels, annotations)
+    step("namespace", "running", f"namespace {args.name} changed")
+    kube.patch("namespaces", None, args.name, patch)
+    step("namespace", "done", "saved")
+    return EXIT_OK
+
+
+def ns_quota(kube, args):
+    if kube.get("namespaces", None, args.name) is None:
+        raise ValueError(f"no namespace {args.name}")
+    size = str(args.size or "0")
+    nbytes = 0 if size == "0" else hv.quantity(size)
+    if nbytes is None:
+        raise ValueError("quota: a size such as 100Gi, or 0 to remove it")
+    existing = kube.get(hn.K_QUOTA, args.name, hn.QUOTA_NAME)
+    obj = hn.quota_object(existing, args.name, nbytes)
+    if obj is None:
+        step("quota", "done", f"{args.name} has no snapshot quota")
+        return EXIT_OK
+    step("quota", "running", f"snapshot quota of the namespace {args.name}: {size if nbytes else 'none'}")
+    (kube.replace if existing else kube.create)(obj)
+    step("quota", "done", f"{args.name}: {size if nbytes else 'no quota'}")
+    return EXIT_OK
+
+
+def ns_delete(kube, args):
+    obj = kube.get("namespaces", None, args.name)
+    if obj is None:
+        raise ValueError(f"no namespace {args.name}")
+    what = hn.delete_check(args.name, obj, kube.list(K_VM, args.name), kube.list("persistentvolumeclaims", args.name))
+    step("namespace", "running", f"namespace {args.name} deleted with {len(what['vms'])} VM(s) and "
+         f"{len(what['volumes'])} volume(s)")
+    kube.delete("namespaces", None, args.name)
+
+    def done(o):
+        if o is None:
+            return True, f"{args.name} is gone"
+        return None, "Kubernetes removes what the namespace holds"
+    return _wait(kube, "namespaces", None, args.name, done, args.timeout, label="namespace")
+
+
+NS_ACTIONS = {"create": ns_create, "update": ns_update, "quota": ns_quota, "delete": ns_delete}
+
+
+def cmd_namespace(args):
+    kube = kube_from(args)
+    hn.check_name(args.name)
+    return NS_ACTIONS[args.action](kube, args)
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(prog="harvester-resources", description=__doc__.split("\n\n")[0])
     sub = ap.add_subparsers(dest="cmd", required=True)
@@ -1417,6 +1755,55 @@ def main(argv=None):
     sp.add_argument("--password-file", help="access: file holding the password (never on the command line)")
     sp.add_argument("--keys", help="access: SSH key pairs (namespace/name), comma separated")
     sp.add_argument("--timeout", type=int, default=3600)
+    sp = sub.add_parser("host", help="a host's settings and actions, as in Harvester")
+    sp.set_defaults(fn=cmd_host)
+    sp.add_argument("action", choices=sorted(HOST_ACTIONS))
+    sp.add_argument("--cluster")
+    sp.add_argument("--kubeconfig")
+    sp.add_argument("--node", required=True, help="the host (Kubernetes node name)")
+    sp.add_argument("--custom-name", help="basics: name shown for the host ('' removes it)")
+    sp.add_argument("--console-url", help="basics: address of the host's console, e.g. its BMC ('' removes it)")
+    sp.add_argument("--labels-file", help="basics: JSON object of the host's labels (the visible ones)")
+    sp.add_argument("--tags", help="tags/disk-set: tags, comma separated ('' removes them)")
+    sp.add_argument("--disk", help="disk-*: the block device name")
+    sp.add_argument("--provisioner", default="LonghornV1", choices=("LonghornV1", "LonghornV2", "lvm"))
+    sp.add_argument("--vg", help="disk-add: the LVM volume group (lvm provisioner)")
+    fmt = sp.add_mutually_exclusive_group()
+    fmt.add_argument("--format", dest="format", action="store_true", default=None, help="disk-add: format the disk")
+    fmt.add_argument("--no-format", dest="format", action="store_false", help="disk-add: keep its ext4/XFS file system")
+    sp.add_argument("--scheduling", choices=("on", "off"), help="disk-set: Longhorn may place replicas on it")
+    sp.add_argument("--thp-enabled", choices=hh.THP_ENABLED)
+    sp.add_argument("--thp-shmem", choices=hh.THP_SHMEM)
+    sp.add_argument("--thp-defrag", choices=hh.THP_DEFRAG)
+    sp.add_argument("--run", choices=hh.KSM_RUN, help="ksmtuned: stop, run or prune")
+    sp.add_argument("--mode", choices=("standard", "high", "customized"))
+    sp.add_argument("--thres", help="ksmtuned: free memory threshold, 0 to 100 %%")
+    sp.add_argument("--merge", choices=("on", "off"), help="ksmtuned: merge pages across NUMA nodes")
+    sp.add_argument("--params", help="ksmtuned customized: JSON file with sleepMsec, boost, decay, minPages, maxPages")
+    en = sp.add_mutually_exclusive_group()
+    en.add_argument("--enable", dest="enable", action="store_true", default=None)
+    en.add_argument("--disable", dest="enable", action="store_false")
+    sp.add_argument("--bmc-host", help="oob: the BMC address")
+    sp.add_argument("--bmc-port", default=623, help="oob: the BMC port (623)")
+    sp.add_argument("--username", help="oob: BMC user name")
+    sp.add_argument("--password-file", help="oob: file holding the BMC password (never on the command line)")
+    sp.add_argument("--insecure", action="store_true", help="oob: accept the BMC's certificate without checking it")
+    sp.add_argument("--no-events", action="store_true", help="oob: do not collect the BMC's hardware events")
+    sp.add_argument("--interval", default="1h", help="oob: polling interval of the events (1h)")
+    sp.add_argument("--off", action="store_true", help="oob: remove the out-of-band access")
+    sp.add_argument("--operation", choices=hh.POWER_OPS, help="power: shutdown, poweron or reboot")
+    sp.add_argument("--timeout", type=int, default=3600)
+    sp = sub.add_parser("namespace", help="create, change, delete a namespace; its snapshot quota")
+    sp.set_defaults(fn=cmd_namespace)
+    sp.add_argument("action", choices=sorted(NS_ACTIONS))
+    sp.add_argument("--cluster")
+    sp.add_argument("--kubeconfig")
+    sp.add_argument("--name", required=True, help="the namespace")
+    sp.add_argument("--description")
+    sp.add_argument("--labels-file", help="JSON object of the namespace's labels")
+    sp.add_argument("--annotations-file", help="update: JSON object of its annotations")
+    sp.add_argument("--size", help="quota: total size of the snapshots, e.g. 100Gi (0 removes it)")
+    sp.add_argument("--timeout", type=int, default=900)
     args = ap.parse_args(argv)
     signal.signal(signal.SIGTERM, _on_signal)
     try:

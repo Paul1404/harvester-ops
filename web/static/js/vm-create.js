@@ -363,6 +363,11 @@ const VMCreate = (() => {
         network_data: ciEl.querySelector('[data-ci="networkData"]')?.value || '',
       } : null;
       const sshKeys = [...head.querySelectorAll('[name="ssh_keys"] option')].filter(o => o.selected).map(o => o.value);
+      // v1.62.0 : fichier de réponses Windows et volumes virtiofs
+      const sysprep = ciEl ? (ciEl.querySelector('[data-sysprep]')?.value || '') : '';
+      const filesystems = ciEl ? [...ciEl.querySelectorAll('.vm-fs-row')].map(r => ({
+        kind: r.dataset.fsKind, source: r.querySelector('[data-fs="source"]').value.trim(),
+        name: r.querySelector('[data-fs="name"]').value.trim() || undefined })).filter(f => f.source) : [];
       const guestAgent = head.querySelector('[name="guest_agent"]').checked;
       say(esc(tr('vm.create.sending', 'Sending…')));
       try {
@@ -370,7 +375,8 @@ const VMCreate = (() => {
           method: 'POST', headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ namespace: ns, name, count, start,
                                  manifest, dry_run: dryRun, cloudinit,
-                                 ssh_keys: sshKeys, guest_agent: guestAgent }),
+                                 ssh_keys: sshKeys, guest_agent: guestAgent,
+                                 sysprep: sysprep.trim() ? sysprep : undefined, filesystems }),
         });
         const d = await r.json();
         if (!r.ok) { say(esc(d.error || 'error'), true); return; }

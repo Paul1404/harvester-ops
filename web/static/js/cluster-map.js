@@ -114,6 +114,7 @@ const ClusterMap = (() => {
               tabindex="0" role="button" aria-label="${esc(n.name)}">
         <span class="vsw-kind">${esc(tr('cluster.host', 'Host'))}</span>
         ${val(n.name, 'vsw-title')}
+        ${n.custom_name ? `<span class="vsw-sub">${esc(n.custom_name)}</span>` : ''}
         ${hostState(n).map(b => `<span class="vsw-sub">${esc(b)}</span>`).join('')}
         ${(n.roles || []).length ? `<span class="vsw-sub">${esc(n.roles.join(', '))}</span>` : ''}
         ${n.addresses && n.addresses.InternalIP ? `<span class="vsw-sub">${val(n.addresses.InternalIP)}</span>` : ''}
@@ -261,7 +262,7 @@ const ClusterMap = (() => {
     selected = { type: 'node', key: name };
     markSelected();
     const inMaint = !!n.maintenance;
-    side.innerHTML = `<h3>${esc(n.name)}</h3><dl class="kv">`
+    side.innerHTML = `<h3>${esc(n.name)}</h3>${n.custom_name ? `<p class="res-dim">${esc(n.custom_name)}</p>` : ''}<dl class="kv">`
       + kv(tr('topology.detail.ready', 'Ready'), n.ready ? tr('storage.yes', 'yes') : tr('storage.no', 'no'))
       + kv(tr('topology.detail.schedulable', 'Schedulable'), n.schedulable ? tr('storage.yes', 'yes') : tr('storage.no', 'no'))
       + kv(tr('cluster.maintenance', 'Maintenance'), n.maintenance || '-')
@@ -271,6 +272,8 @@ const ClusterMap = (() => {
       + kv(tr('cluster.memory', 'Memory'), `${size(n.memory_allocated)} / ${size(n.memory_allocatable)}`)
       + `</dl><div class="actions cm-actions">`
       + btn('node-notes', tr('topology.action.notes', 'Notes'), tr('cluster.notesTip', 'Private notes attached to this object'), '', 'notes')
+      // v1.62.0 : « Modifier la configuration » de Harvester (disques, tags, BMC...)
+      + btn('node-settings', tr('hs.open', 'Configure...'), tr('hs.tip.open', 'The host settings of Harvester: name, labels, disks, huge pages, KSM, out-of-band access, CPU manager, deletion'), '', 'settings')
       // Harvester refuse d'isoler le dernier nœud disponible (son webhook) :
       // le bouton reste visible, désactivé, et la raison est écrite.
       + (!inMaint && n.schedulable ? btn('node-cordon', tr('cluster.cordon', 'Cordon'),
@@ -300,7 +303,7 @@ const ClusterMap = (() => {
       return v ? [v.phase, v.run_strategy, v.node].join('|') : 'gone';
     }
     const n = (lastData.nodes || []).find(x => x.name === s.key);
-    return n ? [n.ready, n.schedulable, n.maintenance, n.last_available].join('|') : 'gone';
+    return n ? [n.ready, n.schedulable, n.maintenance, n.last_available, n.custom_name].join('|') : 'gone';
   }
 
   function refreshPanel(before) {
@@ -446,6 +449,7 @@ const ClusterMap = (() => {
       } else {
         const name = s.key;
         if (action === 'node-notes') return window.Notes?.open('node', cluster, name);
+        if (action === 'node-settings') return window.HostSettings?.open(cluster, name, { onDone: () => setTimeout(() => refresh(true), 1500) });
         if (action === 'node-maint-check') return maintenanceCheck(name, false);
         if (action === 'node-cordon') {
           if (!window.confirm(fill(tr('cluster.confirm.cordon', 'Cordon node "{name}"? No new VM or pod will be placed on it.'), { name }))) return;

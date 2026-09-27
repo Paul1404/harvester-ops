@@ -88,8 +88,9 @@ def vm_volumes(vm):
 
 
 def cloudinit_secrets(vm):
-    """Les Secrets cloud-init qu'une VM référence. `secretRef` est le nom JSON
-    de userDataSecretRef (le nom Go) : c'est lui qu'on lit sur le cluster."""
+    """Les Secrets de démarrage qu'une VM référence : cloud-init (`secretRef`
+    est le nom JSON de userDataSecretRef, le nom Go : c'est lui qu'on lit sur
+    le cluster) et, depuis 1.62.0, le fichier de réponses Windows (sysprep)."""
     names = []
     for v in _tspec(vm).get("volumes") or []:
         for src in ("cloudInitNoCloud", "cloudInitConfigDrive"):
@@ -98,6 +99,9 @@ def cloudinit_secrets(vm):
                 n = (ci.get(k) or {}).get("name")
                 if n and n not in names:
                     names.append(n)
+        n = (((v.get("sysprep") or {}).get("secret")) or {}).get("name")
+        if n and n not in names:
+            names.append(n)
     return names
 
 
@@ -216,6 +220,9 @@ def rename_secret_refs(vm, old, new):
             for k in ("secretRef", "userDataSecretRef", "networkDataSecretRef"):
                 if (ci.get(k) or {}).get("name") == old:
                     ci[k]["name"] = new
+        sp = (v.get("sysprep") or {}).get("secret")
+        if sp and sp.get("name") == old:
+            sp["name"] = new
     return vm
 
 
@@ -768,3 +775,71 @@ def access_credential(vm, kind, users, password=None, keys=None, rnd=random):
     tann["harvesterhci.io/dynamic-ssh-key-users"] = json.dumps(
         known_users + [u for u in users if u not in known_users], separators=(",", ":"))
     return secret, out
+
+
+
+# ---------------------------------------------------------------------------
+# v1.62.0 : Windows, fichier de réponses (sysprep) ; volumes de système de
+# fichiers (virtiofs) ; formats de Harvester 1.9.
+# ---------------------------------------------------------------------------
+UNATTEND_NS = "urn:schemas-microsoft-com:unattend"
+
+
+def check_unattend(xml_text):
+    """Un autounattend.xml lisible dont la racine est dans l'espace de noms
+    de Microsoft (même contrôle que Harvester)."""
+    import xml.etree.ElementTree as ET
+    try:
+        root = ET.fromstring(xml_text or "")
+    except ET.ParseError as e:
+        raise ValueError(f"the answer file is not valid XML: {e}") from None
+    if not root.tag.startswith("{" + UNATTEND_NS + "}"):
+        raise ValueError(f"the answer file's root element must be in the namespace {UNATTEND_NS}")
+    return xml_text
+
+
+def sysprep_secret(vm_name, ns, xml_text, rnd=random):
+    return {"apiVersion": "v1", "kind": "Secret", "type": "Opaque",
+            "metadata": {"name": f"{vm_name}-windows-sysprep-{suffix(rnd=rnd)}"[:63], "namespace": ns,
+                         "labels": {"harvesterhci.io/windows-sysprep": "true"}},
+            "stringData": {"autounattend.xml": xml_text}}
+
+
+def attach_sysprep(vm, secret_name):
+    out = copy.deepcopy(vm)
+    ts = out.setdefault("spec", {}).setdefault("template", {}).setdefault("spec", {})
+    vols = [v for v in ts.setdefault("volumes", []) if v.get("name") != "sysprep"]
+    vols.append({"name": "sysprep", "sysprep": {"secret": {"name": secret_name}}})
+    ts["volumes"] = vols
+    devs = ts.setdefault("domain", {}).setdefault("devices", {})
+    disks = [d for d in devs.setdefault("disks", []) if d.get("name") != "sysprep"]
+    disks.append({"name": "sysprep", "cdrom": {"bus": "sata"}})
+    devs["disks"] = disks
+    return out
+
+
+FS_KINDS = {"configMap": "name", "secret": "secretName", "serviceAccount": "serviceAccountName"}
+FS_DEFAULT = {"configMap": "appconfigfs", "secret": "appsecretfs", "serviceAccount": "appserviceaccountfs"}
+
+
+def add_filesystems(vm, items):
+    """Volumes partagés en virtiofs (ConfigMap, Secret ou ServiceAccount),
+    trois au plus, un par type, à la création (formulaire de Harvester)."""
+    items = [i for i in items or [] if i.get("source")]
+    if len(items) > 3:
+        raise ValueError("three filesystem volumes at most")
+    kinds = [i.get("kind") for i in items]
+    if len(set(kinds)) != len(kinds):
+        raise ValueError("one filesystem volume per kind (ConfigMap, Secret, ServiceAccount)")
+    out = copy.deepcopy(vm)
+    ts = out.setdefault("spec", {}).setdefault("template", {}).setdefault("spec", {})
+    devs = ts.setdefault("domain", {}).setdefault("devices", {})
+    for i in items:
+        kind = i.get("kind")
+        if kind not in FS_KINDS:
+            raise ValueError("filesystem source: configMap, secret or serviceAccount")
+        name = check_name(i.get("name") or FS_DEFAULT[kind], "filesystem name")
+        check_name(i["source"], "source")
+        devs.setdefault("filesystems", []).append({"name": name, "virtiofs": {}})
+        ts.setdefault("volumes", []).append({"name": name, kind: {FS_KINDS[kind]: i["source"]}})
+    return out

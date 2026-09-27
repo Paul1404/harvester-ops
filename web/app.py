@@ -35,7 +35,7 @@ import tempfile
 import threading
 import time
 import uuid
-from collections import deque
+from collections import Counter as _TallyCounter, deque
 from functools import wraps
 from pathlib import Path
 from urllib.parse import quote
@@ -358,6 +358,9 @@ _K8S_SUBDOMAIN_RE = re.compile(r"^[a-z0-9]([-a-z0-9.]{0,251}[a-z0-9])?$")
 @app.before_request
 def _validate_k8s_path_params():
     args = request.view_args or {}
+    # v1.62.0 : un nom de nœud est un sous-domaine DNS (jusqu'à 253 caractères)
+    if "node" in args and not _K8S_SUBDOMAIN_RE.match(args["node"]):
+        return jsonify({"error": "invalid node name"}), 400
     if "oname" in args and not _K8S_SUBDOMAIN_RE.match(args["oname"]):
         return jsonify({"error": "invalid object name",
                         "hint": "a Kubernetes object name: a-z, 0-9, '.', '-', 253 characters at most"}), 400
@@ -661,6 +664,8 @@ ADMIN_ONLY_PREFIXES = (
     "/api/iso/",                # magasin d'ISO
     "/api/terraform/provider",  # remplacement du provider
     "/api/vmtemplates/",        # templates partagés du cluster
+    "/api/host/",               # v1.62.0 : disques, CPU manager, BMC, suppression d'un hôte
+    "/api/ns-admin/",           # v1.62.0 : créer, modifier, supprimer un namespace
     "/api/users",               # gestion des comptes de la console
     "/api/harvester-users",     # comptes du cluster Harvester
     "/api/kubeovn/",            # réseaux kube-ovn : un changement peut couper des VMs
@@ -2872,6 +2877,8 @@ def _topology_node(item):
         "cpu_allocatable": _cpu_cores(allocatable.get("cpu")),
         "memory_allocatable": _k8s_bytes(allocatable.get("memory")),
         "maintenance": node_maintenance.maintenance_state(item),
+        # v1.62.0 : le nom affiché que Harvester donne à l'hôte
+        "custom_name": (meta.get("annotations") or {}).get("harvesterhci.io/host-custom-name"),
         "vcpu_allocated": 0,
         "memory_allocated": 0,
     }
@@ -5744,7 +5751,12 @@ def api_vms_list(cluster):
             "cpu": vcpu,
             "memory": mem,
             "node": state.get("node"),
-            "ips": state.get("ips") or [],
+            # v1.62.0 : comme la colonne IP de Harvester, une IP statique
+            # déclarée (static-ip.harvesterhci.io/<carte>) passe en premier
+            "ips": list(dict.fromkeys(
+                [v.split("/")[0] for k, v in sorted(annot.items())
+                 if k.startswith("static-ip.harvesterhci.io/") and re.match(r"^\d{1,3}(\.\d{1,3}){3}(/\d{1,2})?$", str(v))]
+                + (state.get("ips") or []))),
             "labels": item["metadata"].get("labels") or {},
         })
 
@@ -6979,21 +6991,36 @@ def _vm_create_runner(run, cluster, kc, namespace, names, start, manifest,
             # v1.60.0 : le cloud-init de la fenêtre de création (il était
             # perdu) : un Secret par VM, référencé comme le fait Harvester.
             if cloudinit:
-                secret = _hv.cloudinit_secret(name, namespace, cloudinit["user_data"],
-                                              cloudinit["network_data"])
-                vm = _hv.attach_cloudinit(vm, secret["metadata"]["name"])
+                secrets = []
+                # v1.62.0 : pas de disque cloud-init vide (fichier de réponses
+                # Windows ou virtiofs seuls)
+                if (cloudinit.get("user_data") or "").strip() or (cloudinit.get("network_data") or "").strip():
+                    secret = _hv.cloudinit_secret(name, namespace, cloudinit["user_data"],
+                                                  cloudinit["network_data"])
+                    vm = _hv.attach_cloudinit(vm, secret["metadata"]["name"])
+                    secrets.append(("cloud-init", secret))
+                if cloudinit.get("sysprep"):
+                    sp = _hv.sysprep_secret(name, namespace, cloudinit["sysprep"])
+                    vm = _hv.attach_sysprep(vm, sp["metadata"]["name"])
+                    secrets.append(("sysprep", sp))
+                if cloudinit.get("filesystems"):
+                    vm = _hv.add_filesystems(vm, cloudinit["filesystems"])
                 if cloudinit.get("ssh_names"):
                     vm.setdefault("metadata", {}).setdefault("annotations", {}).update(
                         _hv.ssh_names_annotation(cloudinit["ssh_names"]))
-                if not dry_run:
+                bad = False
+                for what, secret in ([] if dry_run else secrets):
                     r = subprocess.run(["kubectl", "--kubeconfig", kc, "create", "-f", "-", "-o", "name"],
                                        input=json.dumps(secret), capture_output=True, text=True, timeout=60)
                     if r.returncode != 0:
                         detail = (r.stderr or r.stdout).strip().splitlines()
-                        failed.append((name, detail[-1][:300] if detail else "cloud-init secret"))
+                        failed.append((name, detail[-1][:300] if detail else f"{what} secret"))
                         step(name, "error", failed[-1][1])
-                        continue
-                    step(name, "running", f"cloud-init: secret {secret['metadata']['name']}")
+                        bad = True
+                        break
+                    step(name, "running", f"{what}: secret {secret['metadata']['name']}")
+                if bad:
+                    continue
             cmd = ["kubectl", "--kubeconfig", kc, "create", "-f", "-",
                    "-o", "name"]
             if dry_run:
@@ -7068,9 +7095,19 @@ def _vm_create_cloudinit(kc, cluster, namespace, data):
         user = _hv.with_guest_agent(user)
     if publics:
         user = _hv.with_ssh_keys(user, publics)
-    if not user.strip() and not net.strip():
+    # v1.62.0 : fichier de réponses Windows et volumes virtiofs (création)
+    sysprep = data.get("sysprep")
+    if sysprep is not None and not isinstance(sysprep, str):
+        raise ValueError("sysprep: the autounattend.xml text")
+    sysprep = _hv.check_unattend(sysprep) if sysprep and sysprep.strip() else None
+    fss = data.get("filesystems") or []
+    if not isinstance(fss, list):
+        raise ValueError("filesystems: a list")
+    _hv.add_filesystems({"spec": {"template": {"spec": {}}}}, fss)      # contrôle d'avance
+    if not user.strip() and not net.strip() and not sysprep and not fss:
         return None
-    return {"user_data": user, "network_data": net, "ssh_names": names}
+    return {"user_data": user if (user.strip() or net.strip()) else None, "network_data": net,
+            "ssh_names": names, "sysprep": sysprep, "filesystems": fss}
 
 
 @app.route("/api/vms/<cluster>/create", methods=["POST"])
@@ -11407,6 +11444,392 @@ def _vm_access_action(cluster, kc, namespace, name, body):
     if err:
         after()
     return _res_reply(run, err, vm=f"{namespace}/{name}", action="access", kind=kind)
+
+
+# ---------------------------------------------------------------------------
+# v1.62.0 : la configuration d'un hôte comme dans Harvester (nom affiché, URL
+# de console, labels, tags, disques, huge pages, ksmtuned, accès hors bande)
+# et ses gestes (CPU manager, alimentation par le BMC, suppression). Écriture
+# par bin/harvester-resources.py host, en actions suivies.
+# ---------------------------------------------------------------------------
+import hv_host as _hh  # noqa: E402
+
+_HOST_DO = ("basics", "tags", "disk-add", "disk-remove", "disk-set", "hugepages", "ksmtuned",
+            "cpu-manager", "oob", "power", "delete")
+
+
+@app.route("/api/host/<cluster>/<node>/settings")
+@requires_auth
+def api_host_settings(cluster, node):
+    """Tout ce que montre la fenêtre d'un hôte. Le secret du BMC ne sort
+    jamais : seulement son nom."""
+    kc = _kubectl_for_cluster(cluster)
+    if not kc:
+        return jsonify({"error": f"unknown cluster: {cluster}"}), 404
+    # neuf lectures indépendantes : en série, 12,8 s sur harvlab ; en parallèle,
+    # le temps de la plus lente (le kubeconfig porte déjà l'identité déléguée)
+    from concurrent.futures import ThreadPoolExecutor
+    reads = {"n": ("nodes", node), "nodes": ("nodes",),
+             "lh": (_hh.K_LHNODE, node, "-n", "longhorn-system"), "bds": (_hh.K_BD, "-n", "longhorn-system"),
+             "hp": (_hh.K_HUGEPAGE, node), "ksm": (_hh.K_KSM, node),
+             "seeder": ("addons.harvesterhci.io", "harvester-seeder", "-n", "harvester-system")}
+    with ThreadPoolExecutor(max_workers=len(reads)) as pool:
+        futs = {k: pool.submit(_kubectl_json, kc, "get", *a, cluster=cluster) for k, a in reads.items()}
+        got = {k: f.result() for k, f in futs.items()}
+    n = got["n"]
+    if n is None:
+        return jsonify({"error": f"no host {node}"}), 404
+    meta = n.get("metadata") or {}
+    ann, labels = meta.get("annotations") or {}, meta.get("labels") or {}
+    nodes = (got["nodes"] or {}).get("items") or []
+    lh, hp, ksm, seeder = got["lh"], got["hp"], got["ksm"], got["seeder"]
+    bds = (got["bds"] or {}).get("items") or []
+    # sans l'add-on, le type Inventory n'existe pas : kubectl relirait toute la
+    # découverte de l'API avant d'échouer (plusieurs secondes)
+    inv = _kubectl_json(kc, "get", _hh.K_INVENTORY, node, "-n", "harvester-system", cluster=cluster) \
+        if ((seeder or {}).get("spec") or {}).get("enabled") else None
+    conn = ((((inv or {}).get("spec") or {}).get("baseboardSpec") or {}).get("connection") or {})
+    ref = conn.get("authSecretRef") or {}
+    ist = (inv or {}).get("status") or {}
+    return jsonify({
+        "node": node,
+        "custom_name": ann.get(_hh.ANN_NAME) or "",
+        "console_url": ann.get(_hh.ANN_CONSOLE) or "",
+        "labels": _hh.user_labels(n),
+        "maintenance": ann.get(_hh.ANN_MAINT),
+        "witness": "node-role.harvesterhci.io/witness" in labels,
+        "nodes": len(nodes),
+        "capi_machine": ann.get("cluster.x-k8s.io/machine"),
+        "tags": ((lh or {}).get("spec") or {}).get("tags") or [],
+        "longhorn": lh is not None,
+        "disks": _hh.block_devices(bds, node, lh),
+        "hugepages": None if hp is None else {
+            "transparent": ((hp.get("spec") or {}).get("transparent") or {}),
+            "meminfo": {k: v for k, v in (((hp.get("status") or {}).get("meminfo")) or {}).items()
+                        if k.lower().startswith(("hugepage", "anonhuge", "shmemhuge", "memtotal"))}},
+        "ksmtuned": None if ksm is None else {"spec": ksm.get("spec") or {}, "status": ksm.get("status") or {}},
+        "cpu_manager": _hh.cpu_manager_status(n),
+        "seeder": bool(((seeder or {}).get("spec") or {}).get("enabled")),
+        "seeder_installed": seeder is not None,
+        "oob": None if inv is None else {
+            "host": conn.get("host"), "port": conn.get("port"), "insecure": bool(conn.get("insecureTLS")),
+            "secret": f"{ref.get('namespace')}/{ref.get('name')}" if ref.get("name") else None,
+            "events": (((inv.get("spec") or {}).get("events")) or {}),
+            "status": ist.get("status"), "power_state": ist.get("machinePowerState"),
+            "error": _hh.bmc_error(inv),
+            "power_action": ist.get("powerAction") or {},
+            "requested": (inv.get("spec") or {}).get("powerActionRequested")},
+    })
+
+
+def _host_do_args(action, b, files):
+    """Les options d'un geste sur un hôte, contrôlées avant de lancer l'outil.
+    `files` reçoit les fichiers privés à effacer après l'action."""
+    out = []
+
+    def tmp(content):
+        wd = _capi_work_dir()
+        fd, path = tempfile.mkstemp(prefix="host-", dir=str(wd) if wd else None)
+        os.chmod(path, 0o600)
+        with os.fdopen(fd, "w") as f:
+            f.write(content)
+        files.append(path)
+        return path
+
+    def disk():
+        d = str(b.get("disk") or "")
+        if not _K8S_SUBDOMAIN_RE.match(d):
+            raise ValueError("disk: a block device name")
+        return ["--disk", d]
+
+    def tags(key="tags"):
+        t = b.get(key)
+        if not isinstance(t, list):
+            raise ValueError(f"{key}: a list")
+        return ["--tags", ",".join(_hh.check_tags([str(x) for x in t]))]
+
+    if action == "basics":
+        if "custom_name" in b:
+            out += ["--custom-name", str(b.get("custom_name") or "")[:120]]
+        if "console_url" in b:
+            out += ["--console-url", str(b.get("console_url") or "")[:500]]
+        if "labels" in b:
+            if not isinstance(b["labels"], dict):
+                raise ValueError("labels: an object")
+            _hh.basics_patch({}, labels={str(k): str(v) for k, v in b["labels"].items()})  # contrôle d'avance
+            out += ["--labels-file", tmp(json.dumps(b["labels"]))]
+        if not out:
+            raise ValueError("nothing to change")
+    elif action == "tags":
+        out += tags()
+    elif action == "disk-add":
+        out += disk()
+        prov = str(b.get("provisioner") or "LonghornV1")
+        if prov not in ("LonghornV1", "LonghornV2", "lvm"):
+            raise ValueError("provisioner: LonghornV1, LonghornV2 or lvm")
+        out += ["--provisioner", prov]
+        if prov == "lvm":
+            out += ["--vg", str(b.get("vg") or "")[:127]]
+        if b.get("format") is True:
+            out.append("--format")
+        elif b.get("format") is False:
+            out.append("--no-format")
+    elif action == "disk-remove":
+        out += disk()
+    elif action == "disk-set":
+        out += disk()
+        if "tags" in b:
+            out += tags()
+        if "scheduling" in b:
+            out += ["--scheduling", "on" if b.get("scheduling") else "off"]
+    elif action == "hugepages":
+        for key, flag, allowed in (("enabled", "--thp-enabled", _hh.THP_ENABLED),
+                                   ("shmem", "--thp-shmem", _hh.THP_SHMEM),
+                                   ("defrag", "--thp-defrag", _hh.THP_DEFRAG)):
+            if b.get(key):
+                if b[key] not in allowed:
+                    raise ValueError(f"{key}: one of {', '.join(allowed)}")
+                out += [flag, b[key]]
+    elif action == "ksmtuned":
+        _hh.ksmtuned_patch(b.get("run"), b.get("mode"), b.get("thres"),
+                           None if b.get("merge") is None else bool(b.get("merge")), b.get("params"))
+        if b.get("run"):
+            out += ["--run", b["run"]]
+        if b.get("mode"):
+            out += ["--mode", b["mode"]]
+            if b["mode"] == "customized":
+                out += ["--params", tmp(json.dumps(b.get("params") or {}))]
+        if b.get("thres") is not None:
+            out += ["--thres", str(int(b["thres"]))]
+        if b.get("merge") is not None:
+            out += ["--merge", "on" if b.get("merge") else "off"]
+    elif action == "cpu-manager":
+        if not isinstance(b.get("enable"), bool):
+            raise ValueError("enable: true or false")
+        out.append("--enable" if b["enable"] else "--disable")
+    elif action == "oob":
+        if b.get("off"):
+            return ["--off"]
+        out += ["--bmc-host", str(b.get("host") or ""), "--bmc-port", str(int(b.get("port") or 623)),
+                "--interval", str(b.get("interval") or "1h")]
+        _hh.inventory("x", b.get("host"), b.get("port") or 623, "ns", "n",
+                      interval=str(b.get("interval") or "1h"))  # contrôle d'avance
+        if b.get("insecure"):
+            out.append("--insecure")
+        if b.get("events") is False:
+            out.append("--no-events")
+        if b.get("password"):
+            user = str(b.get("username") or "")
+            if not user or len(user) > 128 or any(c in user for c in "\n\r,"):
+                raise ValueError("BMC user name: required")
+            out += ["--username", user, "--password-file", tmp(str(b["password"]))]
+    elif action == "power":
+        if b.get("operation") not in _hh.POWER_OPS:
+            raise ValueError("operation: shutdown, poweron or reboot")
+        out += ["--operation", b["operation"]]
+    return out
+
+
+@app.route("/api/host/<cluster>/<node>/do/<action>", methods=["POST"])
+@requires_auth
+@_rate_limit("30/minute")
+def api_host_do(cluster, node, action):
+    if action not in _HOST_DO:
+        return jsonify({"error": f"action must be one of {', '.join(_HOST_DO)}"}), 400
+    kc = _kubectl_for_cluster(cluster)
+    if not kc:
+        return jsonify({"error": f"unknown cluster: {cluster}"}), 404
+    body = request.get_json(silent=True) or {}
+    files = []
+
+    def after():
+        for f in files:
+            Path(f).unlink(missing_ok=True)
+        _invalidate_cluster_caches(cluster)
+    try:
+        extra = _host_do_args(action, body if isinstance(body, dict) else {}, files)
+    except (ValueError, TypeError) as e:
+        after()
+        return jsonify({"error": str(e)}), 400
+    cmd = [sys.executable, str(BIN_DIR / RESOURCES_SCRIPT), "host", action, "--kubeconfig", kc,
+           "--node", node] + extra
+    run, err = _cli_action(cluster, f"host:{action}:{node}", cmd, "harvester-resources", after=after)
+    if err:
+        after()
+    return _res_reply(run, err, node=node, action=action)
+
+
+# ---------------------------------------------------------------------------
+# v1.62.0 : le menu Namespaces de Harvester. Lecture pour tous, écriture par
+# bin/harvester-resources.py namespace (admin), en actions suivies.
+# ---------------------------------------------------------------------------
+import hv_ns as _hn  # noqa: E402
+
+_NS_DO = ("update", "quota", "delete")
+
+
+@app.route("/api/ns-admin/<cluster>")
+@requires_auth
+def api_ns_admin_list(cluster):
+    kc = _kubectl_for_cluster(cluster)
+    if not kc:
+        return jsonify({"error": f"unknown cluster: {cluster}"}), 404
+    if _cluster_reachable(kc) is False:
+        return jsonify(_unreachable_payload(cluster, kc)), 200
+    from concurrent.futures import ThreadPoolExecutor
+    reads = {"ns": ("namespaces",), "vms": ("virtualmachines.kubevirt.io", "-A"),
+             "pvcs": ("persistentvolumeclaims", "-A"), "quotas": (_hn.K_QUOTA, "-A")}
+    with ThreadPoolExecutor(max_workers=len(reads)) as pool:
+        futs = {k: pool.submit(_kubectl_json, kc, "get", *a, cluster=cluster) for k, a in reads.items()}
+        got = {k: (f.result() or {}).get("items") or [] for k, f in futs.items()}
+    if not got["ns"]:
+        return jsonify({"error": "cannot list the namespaces"}), 502
+    count = lambda items: _TallyCounter((o.get("metadata") or {}).get("namespace") for o in items)  # noqa: E731
+    vms, pvcs = count(got["vms"]), count(got["pvcs"])
+    quota = {(q.get("metadata") or {}).get("namespace"):
+             ((q.get("spec") or {}).get("snapshotLimit") or {}).get("namespaceTotalSnapshotSizeQuota")
+             for q in got["quotas"] if (q.get("metadata") or {}).get("name") == _hn.QUOTA_NAME}
+    rows = []
+    for o in got["ns"]:
+        meta = o.get("metadata") or {}
+        name = meta.get("name")
+        rows.append({"name": name, "system": _hn.is_system(name, o), "protected": _hn.protected(name, o),
+                     "phase": (o.get("status") or {}).get("phase"),
+                     "description": (meta.get("annotations") or {}).get(_hn.DESC) or "",
+                     "labels": _hn._visible(meta.get("labels")), "annotations": _hn._visible(meta.get("annotations")),
+                     "created": meta.get("creationTimestamp"), "vms": vms.get(name, 0), "volumes": pvcs.get(name, 0),
+                     "snapshot_quota": quota.get(name), "project": (meta.get("labels") or {}).get("field.cattle.io/projectId")})
+    rows.sort(key=lambda r: (r["system"], r["name"]))
+    return jsonify({"cluster": cluster, "items": rows})
+
+
+def _ns_kv_file(files, data, key):
+    v = data.get(key)
+    if v is None:
+        return []
+    if not isinstance(v, dict):
+        raise ValueError(f"{key}: an object")
+    wd = _capi_work_dir()
+    fd, path = tempfile.mkstemp(prefix="ns-", dir=str(wd) if wd else None)
+    with os.fdopen(fd, "w") as f:
+        json.dump({str(k): v2 for k, v2 in v.items()}, f)
+    files.append(path)
+    return ["--labels-file" if key == "labels" else "--annotations-file", path]
+
+
+def _ns_action(cluster, kc, name, action, extra, files):
+    def after():
+        for f in files:
+            Path(f).unlink(missing_ok=True)
+        _invalidate_cluster_caches(cluster)
+    cmd = [sys.executable, str(BIN_DIR / RESOURCES_SCRIPT), "namespace", action, "--kubeconfig", kc,
+           "--name", name] + extra
+    run, err = _cli_action(cluster, f"namespace:{action}:{name}", cmd, "harvester-resources", after=after)
+    if err:
+        after()
+    return _res_reply(run, err, namespace=name, action=action)
+
+
+@app.route("/api/ns-admin/<cluster>", methods=["POST"])
+@requires_auth
+@_rate_limit("20/minute")
+def api_ns_admin_create(cluster):
+    kc = _kubectl_for_cluster(cluster)
+    if not kc:
+        return jsonify({"error": f"unknown cluster: {cluster}"}), 404
+    b = request.get_json(silent=True) or {}
+    files = []
+    try:
+        name = _hn.check_name(str(b.get("name") or ""))
+        _hn.manifest(name, str(b.get("description") or ""), b.get("labels") or None)   # contrôle d'avance
+        extra = ["--description", str(b.get("description") or "")[:1000]] + _ns_kv_file(files, b, "labels")
+    except (ValueError, TypeError) as e:
+        for f in files:
+            Path(f).unlink(missing_ok=True)
+        return jsonify({"error": str(e)}), 400
+    return _ns_action(cluster, kc, name, "create", extra, files)
+
+
+@app.route("/api/ns-admin/<cluster>/<name>/do/<action>", methods=["POST"])
+@requires_auth
+@_rate_limit("20/minute")
+def api_ns_admin_do(cluster, name, action):
+    if action not in _NS_DO:
+        return jsonify({"error": f"action must be one of {', '.join(_NS_DO)}"}), 400
+    kc = _kubectl_for_cluster(cluster)
+    if not kc:
+        return jsonify({"error": f"unknown cluster: {cluster}"}), 404
+    b = request.get_json(silent=True) or {}
+    files = []
+    try:
+        extra = []
+        if action == "update":
+            _hn.update_patch({}, b.get("description"), b.get("labels"), b.get("annotations"))  # contrôle d'avance
+            if b.get("description") is not None:
+                extra += ["--description", str(b["description"])[:1000]]
+            extra += _ns_kv_file(files, b, "labels") + _ns_kv_file(files, b, "annotations")
+        elif action == "quota":
+            size = str(b.get("size") or "0")
+            if size != "0" and _hv.quantity(size) is None:
+                raise ValueError("quota: a size such as 100Gi, or 0 to remove it")
+            extra += ["--size", size]
+        elif _hn.protected(name):
+            raise ValueError(f"{name} is a system namespace: the cluster needs it")
+    except (ValueError, TypeError) as e:
+        for f in files:
+            Path(f).unlink(missing_ok=True)
+        return jsonify({"error": str(e)}), 400
+    return _ns_action(cluster, kc, name, action, extra, files)
+
+
+# ---------------------------------------------------------------------------
+# v1.62.0 : le tableau de bord de Harvester : événements du cluster rangés
+# par hôtes, VMs, volumes, images ; jauges d'usage réel CPU, mémoire, stockage.
+# ---------------------------------------------------------------------------
+import hv_dash as _hd  # noqa: E402
+
+
+@app.route("/api/events/<cluster>")
+@requires_auth
+def api_cluster_events(cluster):
+    kc = _kubectl_for_cluster(cluster)
+    if not kc:
+        return jsonify({"error": f"unknown cluster: {cluster}"}), 404
+    if _cluster_reachable(kc) is False:
+        return jsonify(_unreachable_payload(cluster, kc)), 200
+    got = _kubectl_json(kc, "get", "events", "-A", timeout=30, cluster=cluster)
+    if got is None:
+        return jsonify({"error": "cannot read the events"}), 502
+    rows = _hd.events(got.get("items") or [])
+    counts = _TallyCounter(r["group"] for r in rows)
+    warnings = _TallyCounter(r["group"] for r in rows if r["type"] == "Warning")
+    return jsonify({"cluster": cluster, "items": rows, "counts": dict(counts), "warnings": dict(warnings)})
+
+
+@app.route("/api/usage/<cluster>")
+@requires_auth
+def api_cluster_usage(cluster):
+    kc = _kubectl_for_cluster(cluster)
+    if not kc:
+        return jsonify({"error": f"unknown cluster: {cluster}"}), 404
+    if _cluster_reachable(kc) is False:
+        return jsonify(_unreachable_payload(cluster, kc)), 200
+    from concurrent.futures import ThreadPoolExecutor
+    reads = {"nodes": ("nodes",), "metrics": ("nodes.metrics.k8s.io",),
+             "lh": ("nodes.longhorn.io", "-n", "longhorn-system"),
+             "op": ("settings.longhorn.io", "storage-over-provisioning-percentage", "-n", "longhorn-system")}
+    with ThreadPoolExecutor(max_workers=len(reads)) as pool:
+        futs = {k: pool.submit(_kubectl_json, kc, "get", *a, cluster=cluster) for k, a in reads.items()}
+        got = {k: f.result() for k, f in futs.items()}
+    if got["nodes"] is None:
+        return jsonify({"error": "cannot read the nodes"}), 502
+    try:
+        op = int(str((got["op"] or {}).get("value") or 100))
+    except ValueError:
+        op = 100
+    return jsonify({"cluster": cluster, **_hd.usage((got["nodes"] or {}).get("items") or [],
+                                                     (got["metrics"] or {}).get("items") or [],
+                                                     (got["lh"] or {}).get("items") or [], op)})
 
 
 @app.route("/api/vm/<cluster>/<namespace>/<name>/logs")

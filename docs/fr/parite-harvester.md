@@ -1,8 +1,8 @@
 # Parité avec l'interface de Harvester
 
-État au 2026-09-27, console **v1.61.0**, comparée à l'interface de **Harvester v1.9** (menus relevés dans le code de harvester-ui-extension v1.9.0 et la documentation v1.9).
+État au 2026-09-27, console **v1.62.0**, comparée à l'interface de **Harvester v1.9** (menus relevés dans le code de harvester-ui-extension v1.9.0 et la documentation v1.9).
 
-Sur 135 fonctions de l'interface de Harvester : **68 faites**, **18 partielles**, **49 manquantes** ; 2 hors périmètre. Une fonction manquante porte la version où elle est prévue.
+Sur 135 fonctions de l'interface de Harvester : **85 faites**, **14 partielles**, **36 manquantes** ; 2 hors périmètre. Une fonction manquante porte la version où elle est prévue.
 
 Statuts : Fait, Partiel (ce qui manque est dit), Manquant (version prévue), Console seulement (ce que Harvester n'a pas), Hors périmètre.
 
@@ -13,8 +13,8 @@ Menu Harvester : *Dashboard*
 | Fonction | Statut | Version | Précision |
 |---|---|---|---|
 | Compteurs nœuds, VMs, volumes | Fait | 1.2 | Vue d'ensemble |
-| Capacité CPU, mémoire, stockage | Partiel | 1.43 | alloué par nœud et allouable Longhorn ; pas l'usage réel |
-| Événements du cluster (hôtes, VMs) | Manquant | prévue 1.62 |  |
+| Capacité CPU, mémoire, stockage | Fait | 1.62 | usage réel (metrics.k8s.io), réservé, stockage écrit et promis |
+| Événements du cluster (hôtes, VMs, volumes, images) | Fait | 1.62 | onglet Événements de l'aperçu, filtre avertissements |
 | Métriques du cluster et des VMs (rancher-monitoring) | Manquant | prévue 1.66 |  |
 | Bouton Mettre à jour Harvester | Manquant | prévue 1.66 |  |
 
@@ -27,14 +27,14 @@ Menu Harvester : *Hosts*
 | Liste des hôtes, état, rôles | Fait | 1.0 |  |
 | Mode maintenance (avec forçage) | Fait | 1.43 | pré-contrôle : ce qui migre, ce qui s'arrête |
 | Cordon / uncordon | Fait | 1.27 |  |
-| Modifier : nom affiché, URL de console, labels | Manquant | prévue 1.62 |  |
-| Disques : ajouter, retirer, étiquettes (host/disk tags) | Manquant | prévue 1.62 |  |
-| Hugepages | Manquant | prévue 1.62 |  |
-| Ksmtuned (stratégie, mode, seuils) | Manquant | prévue 1.62 |  |
-| Activer / désactiver le CPU manager | Manquant | prévue 1.62 |  |
-| Alimentation (éteindre, allumer, redémarrer) | Partiel | 1.17 | par Redfish dans l'onglet Bare-metal ; pas encore par harvester-seeder |
-| Accès hors bande (seeder) | Manquant | prévue 1.62 |  |
-| Supprimer un hôte (cluster à plusieurs nœuds) | Manquant | prévue 1.62 |  |
+| Modifier : nom affiché, URL de console, labels | Fait | 1.62 | labels système protégés |
+| Disques : ajouter, retirer, étiquettes (host/disk tags) | Fait | 1.62 | Longhorn V1, V2 ou LVM ; planification par disque |
+| Hugepages | Fait | 1.62 |  |
+| Ksmtuned (stratégie, mode, seuils) | Fait | 1.62 |  |
+| Activer / désactiver le CPU manager | Fait | 1.62 |  |
+| Alimentation (éteindre, allumer, redémarrer) | Fait | 1.62 | par harvester-seeder en maintenance, comme Harvester ; aussi par Redfish dans Bare-metal |
+| Accès hors bande (seeder) | Fait | 1.62 | vérifié par IPMI (virtualbmc) ; Redfish sur 443 seulement |
+| Supprimer un hôte (cluster à plusieurs nœuds) | Fait | 1.62 | nom tapé pour confirmer |
 | Détail : réseau, stockage, VMs de l'hôte | Partiel | 1.39 | vues Fabrique et Stockage |
 
 ## Machines virtuelles : liste et actions
@@ -85,21 +85,21 @@ Menu Harvester : *Create / Edit VM*
 | Plafonds du branchement à chaud CPU / mémoire | Fait | 1.61 | case de Harvester : un cœur par socket, limites = maximums |
 | Volumes : image, vide, existant, conteneur ; ordre de boot | Fait | 1.8 |  |
 | Cartes réseau (modèle, type, MAC) | Fait | 1.8 |  |
-| IP statique d'une carte (v1.9) | Manquant | prévue 1.62 | Harvester l'écrit en annotation et la montre ; rien ne l'applique côté serveur : à vérifier |
+| IP statique d'une carte (v1.9) | Fait | 1.62 | appliquée par kube-ovn sur un réseau overlay (DHCP vers l'invité) ; seulement montrée sur un VLAN |
 | Placement sur les nœuds (sélecteur, règles) | Fait | 1.13 |  |
 | Affinité / anti-affinité entre VMs | Fait | 1.13 |  |
 | Périphériques PCI | Fait | 1.15 |  |
 | Périphériques USB | Manquant | prévue 1.65 |  |
 | Access credentials (mot de passe, clés par l'agent) | Fait | 1.61 | appliqués au prochain redémarrage |
-| Volume de système de fichiers (virtiofs, v1.9) | Manquant | prévue 1.62 |  |
-| Labels, labels d'instance, annotations | Partiel | 1.12 | étiquettes ; labels d'instance et annotations en 1.62 (et par le YAML dès 1.60) |
+| Volume de système de fichiers (virtiofs, v1.9) | Fait | 1.62 | à la création ; le noyau invité doit connaître virtiofs |
+| Labels, labels d'instance, annotations | Fait | 1.62 |  |
 | Stratégie d'exécution | Fait | 1.2 |  |
 | Type d'OS, mémoire réservée, stratégie de maintenance | Fait | 1.61 | et nom affiché, description à la clé de Harvester |
 | Nom d'hôte, délai d'arrêt | Fait | 1.12 |  |
 | Cloud-init (user-data, network-data) | Fait | 1.60 | perdu à la création jusqu'à 1.59 ; en Secret, créé ou converti à l'enregistrement |
 | Clés SSH à la création | Fait | 1.60 |  |
 | Installer l'agent invité | Fait | 1.60 |  |
-| Windows : unattend et sysprep | Manquant | prévue 1.62 |  |
+| Windows : unattend et sysprep | Fait | 1.62 | fichier de réponses à la création, lecteur sysprep |
 | TPM, EFI, Secure Boot, tablette USB | Fait | 1.12 |  |
 
 ## Volumes
@@ -143,9 +143,9 @@ Menu Harvester : *Namespaces*
 
 | Fonction | Statut | Version | Précision |
 |---|---|---|---|
-| Liste | Partiel | 1.2 | sélecteur seulement |
-| Créer / supprimer | Manquant | prévue 1.62 |  |
-| Quota d'instantanés du namespace | Manquant | prévue 1.62 |  |
+| Liste | Fait | 1.62 | fenêtre Namespaces : VMs, volumes, quota ; système caché |
+| Créer / modifier / supprimer | Fait | 1.62 | suppression par nom tapé |
+| Quota d'instantanés du namespace | Fait | 1.62 |  |
 
 ## Réseaux
 
@@ -245,7 +245,7 @@ Menu Harvester : *Authentication / Rancher*
 |---|---|---|---|
 | Connexion par Rancher (ses fournisseurs d'identité), droits de la personne | Fait | 1.50 | comme Harvester importé dans Rancher (Virtualization Management) : les appels partent avec le jeton de la personne, les droits Rancher du cluster et du projet s'appliquent |
 | Rôles de virtualisation (chart Harvester RBAC, Rancher 2.14.1, expérimental) | Partiel | 1.50 | appliqués d'office par le jeton Rancher ; vérifié avec un membre du cluster, pas encore avec les rôles de ce chart |
-| Projets Rancher : namespaces rangés par projet, quotas de ressources | Manquant | prévue 1.62 |  |
+| Projets Rancher : namespaces rangés par projet, quotas de ressources | Manquant | prévue 1.66 |  |
 | Membres du cluster | Partiel | 1.31 | comptes du cluster : activer, désactiver, admin ; pas encore les rôles Rancher |
 | Connexion obligatoire, comptes et rôles propres à la console | Console seulement | 1.57 | sans Rancher ; Harvester seul n'a qu'un compte admin |
 

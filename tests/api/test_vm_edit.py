@@ -642,6 +642,25 @@ console.log(JSON.stringify([items[0].boot_order,
     assert order == 1 and itf["bootOrder"] == 1
 
 
+def test_an_overlay_nic_rewritten_to_managedtap_stays_editable():
+    """Vu sur harv1 (v1.62.0) : sur un réseau overlay dont le sous-réseau sert
+    le DHCP, Harvester remplace `bridge` par `binding: managedtap` ; l'éditeur
+    cachait alors la carte et son IP statique."""
+    out = _run_node("""
+const vm = {metadata: {namespace: 'default', name: 'v', annotations: {'static-ip.harvesterhci.io/nic-1': '10.62.0.50'}},
+  spec: {template: {spec: {
+  domain: {devices: {interfaces: [{name: 'nic-1', binding: {name: 'managedtap'}, model: 'virtio', macAddress: '0a:57:bb:d7:ca:b0'}]}},
+  networks: [{name: 'nic-1', multus: {networkName: 'default/ovn-overlay'}}],
+}}}};
+const {items, passthrough} = M.vmNetsToForm(vm);
+const itf = M.formNetsToPatch(items, passthrough, vm).spec.template.spec.domain.devices.interfaces[0];
+console.log(JSON.stringify([items, passthrough.interfaces.length, itf]));
+""")
+    items, kept, itf = json.loads(out)
+    assert items[0]["type"] == "bridge" and items[0]["static_ip"] == "10.62.0.50" and kept == 0
+    assert itf == {"name": "nic-1", "model": "virtio", "macAddress": "0a:57:bb:d7:ca:b0", "bridge": {}}   # le webhook reconvertit
+
+
 def test_placement_never_touches_harvester_node_affinity():
     """Harvester owns nodeAffinity (it derives it from the VM networks).
     The placement patch must only carry nodeSelector + pod rules, so the

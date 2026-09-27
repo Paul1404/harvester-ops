@@ -271,6 +271,27 @@ IP, un nœud ou un label (`clé=valeur`). La fenêtre de réglages écrit les
 champs de Harvester : nom affiché, description (la clé que lit Harvester),
 système d'exploitation, stratégie de maintenance, mémoire réservée.
 
+### Plus à la création et dans les réglages d'une VM (1.62.0)
+
+- **IP statique** par carte réseau, écrite là où Harvester la lit
+  (`static-ip.harvesterhci.io/<carte>`) ; la liste des VMs la montre en
+  premier. Sur un réseau overlay (kube-ovn), Harvester en fait l'adresse
+  kube-ovn de la carte, et l'invité la reçoit par DHCP si le sous-réseau le
+  sert (vérifié sur harv1 : 10.62.0.50 dans l'invité 41 s après le
+  démarrage) ; sur un réseau VLAN, elle est seulement montrée et se
+  configure dans l'invité.
+- **Labels, labels d'instance et annotations** dans la fenêtre de réglages,
+  en lignes clé et valeur ; les clés que gèrent Harvester, KubeVirt et
+  Kubernetes sont cachées et laissées intactes.
+- **Fichier de réponses Windows** (autounattend.xml) à la création : gardé
+  dans un Secret et donné au programme d'installation de Windows sur un
+  CD-ROM SATA nommé `sysprep`, comme le fait Harvester.
+- **Volumes de système de fichiers (virtiofs)** à la création : une
+  ConfigMap, un Secret ou un ServiceAccount du namespace partagé avec
+  l'invité (un de chaque au plus), monté par `mount -t virtiofs <nom>
+  /mnt/<nom>`. Le noyau de l'invité doit connaître virtiofs (vérifié avec une
+  image Tumbleweed ; une image Leap minimale ne l'a pas).
+
 ### Modifier et télécharger le YAML (1.60.0)
 
 Tout objet que Harvester permet de modifier en YAML le peut, depuis sa
@@ -752,6 +773,75 @@ créé et supprimé ; la configuration d'un add-on modifiée puis remise.
 - **`/healthz/ready`** — readiness probe renvoyant 503 si la config, les
   clusters ou la base d'actions sont en défaut (`/healthz` pour la
   liveness).
+
+### Les hôtes, comme dans Harvester (1.62.0)
+
+Dans la vue Cluster, le panneau d'un hôte a **Configurer...**, qui ouvre la
+configuration d'hôte de Harvester dans une fenêtre, un onglet par sujet.
+Chaque changement est une action suivie, par `harvester-resources host
+<action>` (administrateurs).
+
+- **Général** : le nom affiché de l'hôte, l'adresse de sa console (un lien
+  l'ouvre), ses labels (ceux du système, dont `cpumanager`, ceux de Rancher
+  et de Longhorn, sont cachés et jamais touchés) et ses **tags d'hôte**, qui
+  servent aux classes de stockage à placer les répliques.
+- **Disques** : les disques que le gestionnaire de disques de Harvester a
+  trouvés. Un disque entier, actif et non monté peut être **ajouté** au
+  stockage (formaté, sauf s'il porte déjà de l'ext4 ou du XFS ; Longhorn V1,
+  V2 ou un groupe de volumes LVM) ; un disque du stockage montre sa place
+  libre, maximale et promise, prend des **tags de disque** et peut cesser
+  d'accepter des répliques ; le **retirer** laisse Longhorn déplacer d'abord
+  ses répliques (Harvester refuse s'il porte la seule copie saine d'un volume).
+- **Huge pages** : les huge pages transparentes du noyau de l'hôte (activées,
+  mémoire partagée, défragmentation).
+- **KSM** : la fusion des pages mémoire identiques entre VMs (stop, run,
+  prune ; paramètres standard, high ou personnalisés ; seuil de mémoire libre ;
+  fusion entre nœuds NUMA). ksmtuned ne fusionne que lorsque la mémoire libre
+  passe sous le seuil.
+- **Hors bande** : le BMC de l'hôte par l'add-on harvester-seeder (adresse,
+  port, utilisateur et mot de passe gardés dans un Secret, vérification du
+  certificat, événements matériels). Comme dans Harvester, **éteindre,
+  allumer et redémarrer** par le BMC ne sont offerts qu'à un hôte en
+  maintenance.
+- **Gestes** : **activer ou désactiver le CPU manager** (la politique
+  statique, nécessaire aux CPU dédiés ; Harvester redémarre l'agent
+  Kubernetes du nœud, les VMs continuent ; refusé tant qu'une VM à CPU dédiés
+  y tourne), et **supprimer l'hôte** après avoir tapé son nom (jamais le
+  dernier nœud).
+
+Le seeder joint le **Redfish** d'un BMC **sur le port 443** quel que soit le
+port donné (ce port est celui d'IPMI, 623), et **IPMI n'accepte que des mots
+de passe de 20 octets au plus** ; la fenêtre dit les deux, et montre l'erreur
+de connexion du seeder quand il ne joint pas le BMC.
+
+Vérifié sur le cluster de test à trois nœuds : noms, labels et tags ; un
+disque virtuel ajouté, étiqueté, sorti de la planification puis retiré ; huge
+pages ; KSM en marche ; CPU manager activé puis désactivé ; l'accès hors bande
+par un émulateur IPMI (virtualbmc), l'hôte éteint puis rallumé par lui en
+maintenance ; un hôte supprimé, puis réinstallé dans le cluster. Un vrai BMC
+(iLO, iDRAC) n'a pas encore été essayé par le seeder.
+
+### Les namespaces (1.62.0)
+
+**Namespaces**, à côté du sélecteur de namespace de l'onglet Machines
+virtuelles, ouvre une fenêtre avec les namespaces du cluster : description,
+VMs, volumes, quota d'instantanés, âge. Les namespaces du système sont
+cachés par défaut et ne se suppriment pas. **Nouveau namespace** (nom,
+description, labels) ; **modifier** (description, labels, annotations, et le
+**quota d'instantanés** du namespace entier, gardé dans la
+`default-resource-quota` de Harvester) ; **YAML** ; **supprimer** après avoir
+tapé le nom, la fenêtre disant ce qui part avec.
+
+### Événements et utilisation du tableau de bord (1.62.0)
+
+L'aperçu a un onglet **Événements** : les événements du cluster, rangés comme
+sur le tableau de bord de Harvester (hôtes, VMs, volumes, images), avec leurs
+nombres, les avertissements marqués, un filtre « avertissements seulement »
+et une recherche ; relus toutes les 20 secondes. L'onglet Métriques montre
+des jauges d'**utilisation** : CPU et mémoire mesurés maintenant
+(metrics.k8s.io) face à la capacité des hôtes, avec ce que pods et VMs ont
+réservé ; le stockage Longhorn écrit, et ce qui est promis aux volumes face à
+ce qui peut l'être (sur-provisionnement compris).
 
 ## 4. Cluster API : clusters RKE2 en aval (console + CLI)
 

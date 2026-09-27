@@ -295,6 +295,8 @@ const FloatingPanels = (() => {
     'vm-migrate':   () => tr('panel.kind.migrate',   'Migrate'),
     'notes':        () => tr('panel.kind.notes',     'Notes'),
     'backups':      () => tr('panel.kind.backups',   'Backups'),
+    'host-settings': () => tr('panel.kind.host',     'Host'),
+    'namespaces':   () => tr('panel.kind.namespaces', 'Namespaces'),
   };
 
   function kindLabel(opts) {

@@ -63,9 +63,9 @@ def test_the_sidebar_has_the_harvester_sections(page):
     for tab in ("storage", "network", "addons", "security"):
         link = page.locator(f'.tab[data-tab="{tab}"]')
         assert link.count() == 1 and link.get_attribute("data-i18n-title"), tab
-    # l'aperçu ne garde que Métriques et Cluster
+    # l'aperçu garde Métriques et Cluster ; v1.62.0 : les Événements du tableau de bord de Harvester
     assert page.locator("[data-overview-tab]").evaluate_all("els => els.map(e => e.dataset.overviewTab)") \
-        == ["metrics", "cluster"]
+        == ["metrics", "cluster", "events"]
 
 
 def test_images_list_sorts_and_filters(context, flask_server):

@@ -1,0 +1,405 @@
+"""harvester-ops : les réglages et gestes d'un hôte, comme l'interface de Harvester (v1.62.0).
+
+Formats relevés dans harvester-ui-extension v1.9.0, le serveur de Harvester
+v1.9.0, node-disk-manager v1.9.0, node-manager et seeder v1.9.0 :
+
+- nom affiché et URL de console : annotations du Node ;
+- tags d'hôte : `nodes.longhorn.io` <nœud> spec.tags ; tags et planification
+  d'un disque : spec.disks[<disque>] du même objet ;
+- disques : BlockDevice (harvesterhci.io/v1beta1, longhorn-system),
+  spec.provision vrai pour l'ajouter, faux pour le retirer (NDM évacue les
+  répliques avant de retirer le disque de Longhorn) ;
+- Hugepage et Ksmtuned : node.harvesterhci.io/v1beta1, du nom du nœud ;
+- CPU manager : annotation `harvesterhci.io/cpu-manager-update-status`, un
+  Job de Harvester redémarre rke2 sur le nœud puis pose le label cpumanager ;
+- accès hors bande : Inventory de seeder (metal.harvesterhci.io/v1alpha1),
+  gestes d'alimentation par spec.powerActionRequested, en maintenance.
+
+Fonctions pures ; bin/harvester-resources.py `host` les applique.
+"""
+
+import copy
+import json
+import re
+
+ANN_NAME = "harvesterhci.io/host-custom-name"
+ANN_CONSOLE = "harvesterhci.io/host-console-url"
+ANN_CPU = "harvesterhci.io/cpu-manager-update-status"
+ANN_MAINT = "harvesterhci.io/maintain-status"
+# ceux que cache Harvester, plus ceux que la console protège aussi : les
+# retirer casserait le CPU manager (cpumanager, posé par KubeVirt), Rancher
+# (cattle.io), Longhorn ou kube-ovn (kube-ovn/role, vu sur harv1)
+HIDDEN_LABEL = re.compile(r"(k3s|kubernetes|kubevirt|harvesterhci|k3os|cattle|longhorn)+\.io/|^cpumanager$|^kube-ovn/")
+SHOWN_LABELS = ("topology.kubernetes.io/zone", "topology.kubernetes.io/region")
+LABEL_KEY = re.compile(r"^([a-z0-9]([-a-z0-9.]*[a-z0-9])?/)?[A-Za-z0-9]([-A-Za-z0-9_.]*[A-Za-z0-9])?$")
+TAG_RE = re.compile(r"^[A-Za-z0-9]([-A-Za-z0-9_.]*[A-Za-z0-9])?$")
+
+K_BD = "blockdevices.harvesterhci.io"
+K_LHNODE = "nodes.longhorn.io"
+K_HUGEPAGE = "hugepages.node.harvesterhci.io"
+K_KSM = "ksmtuneds.node.harvesterhci.io"
+K_INVENTORY = "inventories.metal.harvesterhci.io"
+K_BMC_JOB = "jobs.bmc.tinkerbell.org"
+
+THP_ENABLED = ("always", "madvise", "never")
+THP_SHMEM = ("always", "within_size", "advise", "never", "deny", "force")
+THP_DEFRAG = ("always", "defer", "defer+madvise", "madvise", "never")
+KSM_RUN = ("stop", "run", "prune")
+KSM_MODES = {"standard": {"sleepMsec": 20, "boost": 0, "decay": 0, "minPages": 100, "maxPages": 100},
+             "high": {"sleepMsec": 20, "boost": 200, "decay": 50, "minPages": 100, "maxPages": 10000}}
+POWER_OPS = ("shutdown", "poweron", "reboot")
+
+
+NODE_RE = re.compile(r"^[a-z0-9]([-a-z0-9.]{0,251}[a-z0-9])?$")
+
+
+def check_node(name):
+    """Un nom de nœud est un sous-domaine DNS (vu sur harv1 : `harv1.home.lo`)."""
+    if not NODE_RE.match(name or ""):
+        raise ValueError("host name: a node name (lower-case letters, digits, dots and dashes)")
+    return name
+
+
+def user_labels(node):
+    """Les labels qu'une personne gère (ceux que montre Harvester)."""
+    labels = ((node or {}).get("metadata") or {}).get("labels") or {}
+    return {k: v for k, v in labels.items() if k in SHOWN_LABELS or not HIDDEN_LABEL.search(k)}
+
+
+def basics_patch(node, custom_name=None, console_url=None, labels=None):
+    """Merge patch du Node : nom affiché, URL de console, labels (les labels
+    visibles retirés passent à null ; les autres ne sont jamais touchés)."""
+    ann = {}
+    if custom_name is not None:
+        ann[ANN_NAME] = custom_name.strip() or None
+    if console_url is not None:
+        url = console_url.strip()
+        if url and not re.match(r"^[a-z]+://\S+$", url):
+            raise ValueError("console URL: an address such as https://10.0.0.21")
+        ann[ANN_CONSOLE] = url or None
+    patch = {"metadata": {}}
+    if ann:
+        patch["metadata"]["annotations"] = ann
+    if labels is not None:
+        new = {}
+        for k, v in labels.items():
+            if not LABEL_KEY.match(k) or (HIDDEN_LABEL.search(k) and k not in SHOWN_LABELS):
+                raise ValueError(f"label {k!r}: invalid, or reserved to the system")
+            if len(str(v)) > 63 or (v and not re.match(r"^[A-Za-z0-9]([-A-Za-z0-9_.]*[A-Za-z0-9])?$", str(v))):
+                raise ValueError(f"label {k!r}: value of 63 letters, digits, dash, dot or underscore at most")
+            new[k] = str(v)
+        for k in user_labels(node):
+            if k not in new:
+                new[k] = None
+        patch["metadata"]["labels"] = new
+    return patch
+
+
+def check_tags(tags):
+    tags = [t.strip() for t in tags or [] if t and t.strip()]
+    bad = [t for t in tags if not TAG_RE.match(t)]
+    if bad:
+        raise ValueError(f"tags: letters, digits, dash, dot, underscore ({', '.join(bad)})")
+    if len(set(tags)) != len(tags):
+        raise ValueError("tags: each tag once")
+    return tags
+
+
+def block_devices(bds, node_name, lh_node=None):
+    """Les disques d'un nœud tels que la fenêtre les montre : ceux déjà
+    ajoutés à Longhorn, et ceux qu'on peut ajouter (mêmes règles que
+    Harvester : disque entier actif, non monté, non provisionné)."""
+    lh_disks = ((lh_node or {}).get("spec") or {}).get("disks") or {}
+    lh_status = ((lh_node or {}).get("status") or {}).get("diskStatus") or {}
+    out = []
+    for bd in bds:
+        meta, spec, st = bd.get("metadata") or {}, bd.get("spec") or {}, bd.get("status") or {}
+        if spec.get("nodeName") != node_name:
+            continue
+        det = (st.get("deviceStatus") or {}).get("details") or {}
+        fs = (st.get("deviceStatus") or {}).get("fileSystem") or {}
+        conds = {c.get("type"): str(c.get("status")) for c in st.get("conditions") or []}
+        provisioned = bool(spec.get("provision") or (spec.get("fileSystem") or {}).get("provisioned"))
+        name = meta.get("name")
+        in_lh = name in lh_disks
+        dstat = lh_status.get(name) or {}
+        dconds = {c.get("type"): str(c.get("status")) for c in dstat.get("conditions") or []}
+        out.append({
+            "name": name, "dev_path": spec.get("devPath") or (st.get("deviceStatus") or {}).get("devPath"),
+            "size": ((st.get("deviceStatus") or {}).get("capacity") or {}).get("sizeBytes"),
+            "type": det.get("deviceType"), "state": st.get("state"), "phase": st.get("provisionPhase"),
+            "mounted": bool(fs.get("mountPoint")), "provisioned": provisioned,
+            "formatting": conds.get("Formatting") == "True",
+            "provisioner": "lvm" if (spec.get("provisioner") or {}).get("lvm") else
+                           ((spec.get("provisioner") or {}).get("longhorn") or {}).get("engineVersion") or ("LonghornV1" if provisioned else None),
+            "addable": det.get("deviceType") == "disk" and st.get("state") == "Active" and not in_lh
+                       and conds.get("AddedToNode") != "True" and not provisioned and not fs.get("mountPoint"),
+            "in_longhorn": in_lh,
+            "tags": (lh_disks.get(name) or {}).get("tags") or [],
+            "scheduling": (lh_disks.get(name) or {}).get("allowScheduling"),
+            "ready": dconds.get("Ready") == "True", "schedulable": dconds.get("Schedulable") == "True",
+            "storage_available": dstat.get("storageAvailable"), "storage_maximum": dstat.get("storageMaximum"),
+            "storage_scheduled": dstat.get("storageScheduled"),
+            "message": st.get("deviceStatus", {}).get("message") if isinstance(st.get("deviceStatus"), dict) else None,
+        })
+    # les disques Longhorn sans BlockDevice (le disque par défaut, sur le disque
+    # système) : Harvester les montre avec leurs tags, sans « retirer »
+    seen = {d["name"] for d in out}
+    for name, spec in lh_disks.items():
+        if name in seen:
+            continue
+        dstat = lh_status.get(name) or {}
+        dconds = {c.get("type"): str(c.get("status")) for c in dstat.get("conditions") or []}
+        out.append({
+            "name": name, "dev_path": spec.get("path"), "size": dstat.get("storageMaximum"), "type": "longhorn",
+            "state": None, "phase": None, "mounted": True, "provisioned": False, "formatting": False,
+            "provisioner": "LonghornV1" if (spec.get("diskType") or "filesystem") == "filesystem" else spec.get("diskType"),
+            "addable": False, "in_longhorn": True, "removable": False,
+            "tags": spec.get("tags") or [], "scheduling": spec.get("allowScheduling"),
+            "ready": dconds.get("Ready") == "True", "schedulable": dconds.get("Schedulable") == "True",
+            "storage_available": dstat.get("storageAvailable"), "storage_maximum": dstat.get("storageMaximum"),
+            "storage_scheduled": dstat.get("storageScheduled"), "message": None,
+        })
+    for d in out:
+        d.setdefault("removable", bool(d["provisioned"]))
+    out.sort(key=lambda d: (not d["in_longhorn"], d["dev_path"] or ""))
+    return out
+
+
+def disk_add(bd, force_format=None, provisioner="LonghornV1", vg=None):
+    """Le BlockDevice passé en « provisionné » (Harvester : PUT du BlockDevice)."""
+    spec = (bd or {}).get("spec") or {}
+    st = (bd or {}).get("status") or {}
+    fs = (st.get("deviceStatus") or {}).get("fileSystem") or {}
+    if spec.get("provision") or (spec.get("fileSystem") or {}).get("provisioned"):
+        raise ValueError("this disk is already added")
+    if fs.get("mountPoint"):
+        raise ValueError(f"this disk is mounted on {fs['mountPoint']}: it cannot be added")
+    out = copy.deepcopy(bd)
+    s = out.setdefault("spec", {})
+    s["provision"] = True
+    if force_format is None:
+        # défaut de Harvester : formater sauf un disque déjà en ext4/XFS
+        force_format = not (fs.get("LastFormattedAt") or str(fs.get("type") or "").lower() in ("ext4", "xfs"))
+    s.setdefault("fileSystem", {})["forceFormatted"] = bool(force_format)
+    if provisioner == "lvm":
+        if not vg or not re.match(r"^[A-Za-z0-9+_.-]{1,127}$", vg):
+            raise ValueError("volume group: a name")
+        s["provisioner"] = {"lvm": {"vgName": vg}}
+    elif provisioner in ("LonghornV1", "LonghornV2"):
+        s["provisioner"] = {"longhorn": {"engineVersion": provisioner}}
+    else:
+        raise ValueError("provisioner: LonghornV1, LonghornV2 or lvm")
+    # vu sur harvlab : le CRD BlockDevice n'a pas de sous-ressource status,
+    # un remplacement sans status est refusé (« status: Required value »)
+    return out
+
+
+def disk_remove(bd):
+    spec = (bd or {}).get("spec") or {}
+    if not (spec.get("provision") or (spec.get("fileSystem") or {}).get("provisioned")):
+        raise ValueError("this disk is not added")
+    out = copy.deepcopy(bd)
+    out["spec"]["provision"] = False
+    if "fileSystem" in out["spec"]:
+        out["spec"]["fileSystem"].pop("provisioned", None)
+    return out
+
+
+def lh_node_patch(lh_node, tags=None, disk=None, disk_tags=None, scheduling=None):
+    """Merge patch du nœud Longhorn : tags de l'hôte, tags et planification
+    d'un disque."""
+    patch = {"spec": {}}
+    if tags is not None:
+        patch["spec"]["tags"] = check_tags(tags)
+    if disk is not None:
+        disks = ((lh_node or {}).get("spec") or {}).get("disks") or {}
+        if disk not in disks:
+            raise ValueError(f"no Longhorn disk {disk} on this node")
+        d = {}
+        if disk_tags is not None:
+            d["tags"] = check_tags(disk_tags)
+        if scheduling is not None:
+            d["allowScheduling"] = bool(scheduling)
+        patch["spec"]["disks"] = {disk: d}
+    return patch
+
+
+def hugepage_patch(enabled=None, shmem=None, defrag=None):
+    t = {}
+    for v, allowed, key in ((enabled, THP_ENABLED, "enabled"), (shmem, THP_SHMEM, "shmemEnabled"),
+                            (defrag, THP_DEFRAG, "defrag")):
+        if v is None:
+            continue
+        if v not in allowed:
+            raise ValueError(f"{key}: one of {', '.join(allowed)}")
+        t[key] = v
+    if not t:
+        raise ValueError("nothing to change")
+    return {"spec": {"transparent": t}}
+
+
+def ksmtuned_patch(run=None, mode=None, thres=None, merge=None, params=None):
+    spec = {}
+    if run is not None:
+        if run not in KSM_RUN:
+            raise ValueError("run: stop, run or prune")
+        spec["run"] = run
+    if thres is not None:
+        t = int(thres)
+        if not 0 <= t <= 100:
+            raise ValueError("threshold: 0 to 100 (% of memory)")
+        spec["thresCoef"] = t
+    if merge is not None:
+        spec["mergeAcrossNodes"] = 1 if merge else 0
+    if mode is not None:
+        if mode not in ("standard", "high", "customized"):
+            raise ValueError("mode: standard, high or customized")
+        spec["mode"] = mode
+        if mode in KSM_MODES:
+            spec["ksmtunedParameters"] = dict(KSM_MODES[mode])
+        else:
+            p = params or {}
+            try:
+                vals = {k: int(p[k]) for k in ("sleepMsec", "boost", "decay", "minPages", "maxPages")}
+            except (KeyError, TypeError, ValueError):
+                raise ValueError("customized mode: sleepMsec, boost, decay, minPages, maxPages as numbers") from None
+            if any(v < 0 for v in vals.values()) or vals["minPages"] > vals["maxPages"]:
+                raise ValueError("customized mode: positive numbers, minPages at most maxPages")
+            spec["ksmtunedParameters"] = vals
+    if not spec:
+        raise ValueError("nothing to change")
+    return {"spec": spec}
+
+
+def cpu_manager_status(node):
+    meta = (node or {}).get("metadata") or {}
+    raw = (meta.get("annotations") or {}).get(ANN_CPU)
+    try:
+        st = json.loads(raw) if raw else {}
+    except ValueError:
+        st = {}
+    return {"enabled": ((meta.get("labels") or {}).get("cpumanager") == "true"),
+            "label": (meta.get("labels") or {}).get("cpumanager"),
+            "policy": st.get("policy"), "status": st.get("status"), "job": st.get("jobName")}
+
+
+def cpu_manager_request(node, enable, vmis_on_node=()):
+    """L'annotation que pose l'action enableCPUManager / disableCPUManager,
+    après les contrôles du webhook de Harvester."""
+    labels = ((node or {}).get("metadata") or {}).get("labels") or {}
+    if labels.get("node-role.harvesterhci.io/witness") is not None:
+        raise ValueError("a witness node has no CPU manager")
+    if "cpumanager" not in labels:
+        raise ValueError("the node has no cpumanager label yet (KubeVirt sets it): try again later")
+    want = "true" if enable else "false"
+    if labels.get("cpumanager") == want:
+        raise ValueError(f"the CPU manager is already {'enabled' if enable else 'disabled'}")
+    st = cpu_manager_status(node)
+    if st["status"] in ("requested", "running"):
+        raise ValueError("a CPU manager change is already in progress on this node")
+    if not enable:
+        pinned = [f"{(v.get('metadata') or {}).get('namespace')}/{(v.get('metadata') or {}).get('name')}"
+                  for v in vmis_on_node
+                  if ((((v.get("spec") or {}).get("domain") or {}).get("cpu") or {}).get("dedicatedCpuPlacement"))]
+        if pinned:
+            raise ValueError(f"VMs with dedicated CPUs run on this node: {', '.join(pinned[:5])}")
+    return {"metadata": {"annotations": {ANN_CPU: json.dumps(
+        {"policy": "static" if enable else "none", "status": "requested"}, separators=(",", ":"))}}}
+
+
+def inventory(node_name, host, port, secret_ns, secret_name, insecure=False, events=True, interval="1h",
+              existing=None):
+    """L'Inventory de seeder pour l'accès hors bande d'un hôte."""
+    if not host or not re.match(r"^[A-Za-z0-9.:\[\]-]+$", host):
+        raise ValueError("BMC address: a host name or an IP address")
+    try:
+        port = int(port or 623)
+    except ValueError:
+        raise ValueError("port: a number") from None
+    if not 1 <= port <= 65535:
+        raise ValueError("port: 1 to 65535")
+    if not re.match(r"^\d+[hms]$", interval or ""):
+        raise ValueError("polling interval: a number followed by h, m or s (e.g. 1h)")
+    out = copy.deepcopy(existing) if existing else {
+        "apiVersion": "metal.harvesterhci.io/v1alpha1", "kind": "Inventory",
+        "metadata": {"name": node_name, "namespace": "harvester-system",
+                     "annotations": {"metal.harvesterhci.io/local-inventory": "true",
+                                     "metal.harvesterhci.io/local-node-name": node_name}},
+        "spec": {"primaryDisk": "", "managementInterfaceMacAddress": ""}}
+    spec = out.setdefault("spec", {})
+    spec["baseboardSpec"] = {"connection": {"host": host, "port": port, "insecureTLS": bool(insecure),
+                                            "authSecretRef": {"name": secret_name, "namespace": secret_ns}}}
+    spec["events"] = {"enabled": bool(events), "pollingInterval": interval}
+    out.pop("status", None)
+    return out
+
+
+def power_check(node, inv, operation):
+    if operation not in POWER_OPS:
+        raise ValueError("operation: shutdown, poweron or reboot")
+    if inv is None:
+        raise ValueError("no out-of-band access configured for this host")
+    ann = ((node or {}).get("metadata") or {}).get("annotations") or {}
+    if ANN_MAINT not in ann:
+        raise ValueError("Harvester powers a host only in maintenance mode: put it in maintenance first")
+    st = (inv.get("status") or {})
+    if st.get("status") != "inventoryNodeReady":
+        raise ValueError(f"the BMC is not ready ({st.get('status') or 'no status yet'})")
+    pa = st.get("powerAction") or {}
+    if (inv.get("spec") or {}).get("powerActionRequested") and "actionStatus" not in pa:
+        raise ValueError("a power action is already in progress")
+    state = st.get("machinePowerState")
+    if operation == "poweron" and state == "on":
+        raise ValueError("the host is already on")
+    if operation in ("shutdown", "reboot") and state == "off":
+        raise ValueError("the host is off")
+    return {"spec": {"powerActionRequested": operation}}
+
+
+def delete_target(node, nodes):
+    """Ce que supprime « Supprimer l'hôte » : la Machine Cluster API du nœud
+    quand il en a une (le contrôleur retire ensuite le Node), sinon le Node."""
+    if len(nodes) < 2:
+        raise ValueError("the last node of a cluster cannot be deleted")
+    ann = ((node or {}).get("metadata") or {}).get("annotations") or {}
+    machine, mns = ann.get("cluster.x-k8s.io/machine"), ann.get("cluster.x-k8s.io/cluster-namespace")
+    if machine and mns:
+        return ("machines.cluster.x-k8s.io", mns, machine)
+    return ("nodes", None, (node.get("metadata") or {}).get("name"))
+
+
+def bmc_secret(node_name, username, password, existing=None):
+    """Le secret des identifiants du BMC (clés username et password, comme
+    ceux que propose Harvester)."""
+    import base64
+    if not username or not password:
+        raise ValueError("BMC user name and password are required")
+    out = copy.deepcopy(existing) if existing else {
+        "apiVersion": "v1", "kind": "Secret", "type": "Opaque",
+        "metadata": {"name": f"{node_name}-bmc", "namespace": "harvester-system",
+                     "labels": {"app.kubernetes.io/managed-by": "harvester-ops"}}}
+    out["data"] = {"username": base64.b64encode(username.encode()).decode(),
+                   "password": base64.b64encode(password.encode()).decode()}
+    out.pop("stringData", None)
+    return out
+
+
+def bmc_error(inv):
+    """Pourquoi le seeder ne joint pas le BMC, en une ligne par fournisseur
+    essayé. Vu sur harvlab : la condition machineNotContactable liste chaque
+    fournisseur de bmclib (Redfish toujours sur le port 443, le port de
+    l'Inventory n'étant que celui d'IPMI ; mot de passe IPMI limité à 20 octets)."""
+    for c in ((inv or {}).get("status") or {}).get("conditions") or []:
+        if c.get("type") == "machineNotContactable" and str(c.get("status")) == "True":
+            lines = [x.strip(" *\t") for x in str(c.get("message") or "").split("\n")]
+            lines = [x for x in lines if x.startswith("provider:")]
+            short = []
+            for x in lines:
+                name = x.split(":", 2)[1].strip() if x.count(":") >= 2 else x
+                why = "password longer than 20 bytes (IPMI limit)" if "longer than 20 bytes" in x else \
+                      ("connection refused or no route" if ("no route" in x or "refused" in x) else
+                       ("timeout" if "timeout" in x.lower() else x.split(":", 2)[-1].strip()[:80]))
+                short.append(f"{name}: {why}")
+            return "; ".join(short[:6]) or (c.get("message") or "unreachable")[:200]
+    return None

@@ -175,6 +175,7 @@
         <div class="sub-tabs sub-tabs-inline" role="tablist" aria-label="Overview sub-tabs">
           <button type="button" class="sub-tab active" data-overview-tab="metrics"><span class="tab-icon" data-icon="metrics"></span> <span data-i18n="overview.tabMetrics">Metrics</span></button>
           <button type="button" class="sub-tab" data-overview-tab="cluster"><span class="tab-icon" data-icon="node"></span> <span data-i18n="overview.tabCluster">Cluster</span></button>
+          <button type="button" class="sub-tab tip" data-overview-tab="events" data-tip-i18n="ev.tip.tab" data-i18n-title="ev.tip.tab" title="The cluster events, by hosts, VMs, volumes and images, as on Harvester's dashboard"><span class="tab-icon" data-icon="activity"></span> <span data-i18n="ev.tab">Events</span></button>
         </div>
       </div>
 
@@ -185,6 +186,11 @@
           <div class="metric"><div class="label" data-i18n="overview.vmsRunning">VMs running</div><div class="value" id="m-vms">–</div></div>
           <div class="metric"><div class="label" data-i18n="overview.longhornVolumes">Longhorn volumes</div><div class="value" id="m-volumes">–</div></div>
           <div class="metric"><div class="label" data-i18n="overview.rebuildLimit">Rebuild limit</div><div class="value" id="m-rebuild">–</div></div>
+        </div>
+        <!-- v1.62.0 : les jauges du tableau de bord de Harvester -->
+        <div class="card" id="overview-usage" hidden>
+          <div class="card-header"><h2 data-i18n="ev.usage">Usage</h2></div>
+          <div class="usage-gauges" data-usage="body"></div>
         </div>
         <div class="card">
           <div class="card-header"><h2 data-i18n="overview.nodesTable">Nodes</h2><button class="btn btn-sm" onclick="App.refreshStatus()" data-i18n="overview.refresh">Refresh</button></div>
@@ -205,6 +211,10 @@
            Fabrique, Stockage et VPC vivent dans leurs sections. -->
       <div class="overview-subtab" data-subtab="cluster" data-board="cluster" hidden>
         <div class="topology-host" data-topology-mode="cluster"></div>
+      </div>
+      <!-- v1.62.0 : les événements du tableau de bord de Harvester -->
+      <div class="overview-subtab" data-subtab="events" data-board="events" hidden>
+        <div class="topology-host"></div>
       </div>
     </section>
 
@@ -427,6 +437,10 @@
         <button class="btn btn-sm btn-secondary btn-ico tip" id="btn-vm-backups"
                 data-tip-i18n="vms.backupsTip" data-i18n-title="vms.backupsTip"
                 title="Backups, snapshots and their schedules for this namespace, in a window"><span data-icon="snapshot"></span> <span data-i18n="vms.backups">Backups</span></button>
+        <!-- v1.62.0 : le menu Namespaces de Harvester, en fenêtre -->
+        <button class="btn btn-sm btn-secondary btn-ico tip" id="btn-vm-namespaces"
+                data-tip-i18n="nsw.tip.open" data-i18n-title="nsw.tip.open"
+                title="Create, change and delete the namespaces of this cluster, in a window"><span data-icon="placement"></span> <span data-i18n="nsw.open">Namespaces</span></button>
         <button class="btn btn-sm btn-secondary" id="btn-ns-notes" data-i18n-title="vms.nsNotes" title="Namespace notes"><span data-icon="notes"></span> <span data-i18n="vms.nsNotes">Namespace notes</span></button>
         <button class="btn btn-sm btn-primary btn-ico tip" id="btn-vm-create"
                 data-tip-i18n="vm.create.tip.open" data-i18n-title="vm.create.tip.open"
@@ -981,6 +995,9 @@
 <script src="/static/js/object-forms.js"></script>
 <script src="/static/js/yaml-window.js"></script>
 <script src="/static/js/vm-actions.js"></script>
+  <script src="/static/js/host-settings.js"></script>
+  <script src="/static/js/namespaces.js"></script>
+  <script src="/static/js/events.js"></script>
 <script src="/static/js/versions.js"></script>
 <script src="/static/js/console-accounts.js"></script>
 <script src="/static/js/user-menu.js"></script>

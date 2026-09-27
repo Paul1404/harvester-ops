@@ -460,3 +460,79 @@ def test_a_console_ticket_opens_only_its_own_console():
     assert wapp._vnc_take_ticket(s, "harv1", "default", "web", kind="serial")["kind"] == "serial"
     v = wapp._vnc_issue_ticket("harv1", "default", "web")
     assert wapp._vnc_take_ticket(v, "harv1", "default", "web")["kind"] == "vnc"             # la VNC d'avant
+
+
+# -- v1.62.0 : fichier de réponses Windows et volumes virtiofs à la création -----------
+
+UNATTEND = '<unattend xmlns="urn:schemas-microsoft-com:unattend"><settings pass="oobeSystem"/></unattend>'
+
+
+def test_the_answer_file_goes_to_a_sysprep_drive_as_in_harvester():
+    assert hv.check_unattend(UNATTEND) == UNATTEND
+    with pytest.raises(ValueError, match="not valid XML"):
+        hv.check_unattend("<unattend>")
+    with pytest.raises(ValueError, match="namespace"):
+        hv.check_unattend("<unattend/>")
+    s = hv.sysprep_secret("web", "default", UNATTEND, rnd=__import__("random").Random(1))
+    assert s["metadata"]["labels"] == {"harvesterhci.io/windows-sysprep": "true"}
+    assert s["stringData"] == {"autounattend.xml": UNATTEND} and s["metadata"]["name"].startswith("web-windows-sysprep-")
+    vm = hv.attach_sysprep(hv.attach_sysprep(a_vm(), "old"), s["metadata"]["name"])       # remplacé, pas doublé
+    ts = vm["spec"]["template"]["spec"]
+    assert [v for v in ts["volumes"] if v["name"] == "sysprep"] == [{"name": "sysprep", "sysprep": {"secret": {"name": s["metadata"]["name"]}}}]
+    assert [d for d in ts["domain"]["devices"]["disks"] if d["name"] == "sysprep"] == [{"name": "sysprep", "cdrom": {"bus": "sata"}}]
+
+
+def test_filesystem_volumes_one_per_kind_three_at_most():
+    vm = hv.add_filesystems(a_vm(), [{"kind": "configMap", "source": "app-cfg"},
+                                     {"kind": "secret", "source": "app-sec", "name": "creds"},
+                                     {"kind": "serviceAccount", "source": ""}])            # vide = aucun
+    ts = vm["spec"]["template"]["spec"]
+    assert ts["domain"]["devices"]["filesystems"] == [{"name": "appconfigfs", "virtiofs": {}}, {"name": "creds", "virtiofs": {}}]
+    assert {"name": "appconfigfs", "configMap": {"name": "app-cfg"}} in ts["volumes"]
+    assert {"name": "creds", "secret": {"secretName": "app-sec"}} in ts["volumes"]
+    with pytest.raises(ValueError, match="one filesystem volume per kind"):
+        hv.add_filesystems(a_vm(), [{"kind": "secret", "source": "a"}, {"kind": "secret", "source": "b"}])
+    with pytest.raises(ValueError, match="configMap, secret or serviceAccount"):
+        hv.add_filesystems(a_vm(), [{"kind": "pvc", "source": "a"}])
+
+
+def test_creating_a_vm_with_an_answer_file_and_virtiofs(world, monkeypatch):
+    seen = {}
+
+    def fake_track(label, cluster, fn, *a):
+        seen["args"] = a
+        return "create00000002"
+    monkeypatch.setattr(wapp, "track_action", fake_track)
+    base = {"namespace": "default", "name": "win", "manifest": a_vm()}
+    with wapp.app.test_client() as c:
+        assert c.post("/api/vms/harv1/create", json={**base, "sysprep": "<bad"}, headers=auth("ops")).status_code == 400
+        assert c.post("/api/vms/harv1/create", json={**base, "filesystems": [{"kind": "secret", "source": "a"},
+                                                                          {"kind": "secret", "source": "b"}]},
+                      headers=auth("ops")).status_code == 400
+        r = c.post("/api/vms/harv1/create", json={**base, "sysprep": UNATTEND,
+                                                  "filesystems": [{"kind": "configMap", "source": "app-cfg"}]}, headers=auth("ops"))
+        assert r.status_code == 202, r.get_json()
+    ci = seen["args"][-1]
+    assert ci["sysprep"] == UNATTEND and ci["filesystems"] == [{"kind": "configMap", "source": "app-cfg"}]
+
+
+def test_the_create_runner_makes_the_sysprep_secret_and_the_filesystems(monkeypatch):
+    created = []
+
+    class R:
+        returncode, stdout, stderr = 0, "ok", ""
+
+    monkeypatch.setattr(wapp.subprocess, "run", lambda cmd, input=None, **k: created.append(json.loads(input)) or R())
+    run = wapp.ActionRun("t00000000002", "vm-create:default/win", "harv1", [], dry_run=False)
+    manifest = a_vm()
+    manifest["spec"]["template"]["spec"]["volumes"] = manifest["spec"]["template"]["spec"]["volumes"][:1]
+    wapp._vm_create_runner(run, "harv1", "/kc", "default", ["win"], False, manifest, False,
+                           {"user_data": "", "network_data": "", "sysprep": UNATTEND,
+                            "filesystems": [{"kind": "configMap", "source": "app-cfg"}]})
+    kinds = [o["kind"] for o in created]
+    assert kinds == ["Secret", "VirtualMachine"]
+    secret, vm = created
+    assert secret["metadata"]["labels"] == {"harvesterhci.io/windows-sysprep": "true"}
+    ts = vm["spec"]["template"]["spec"]
+    assert {"name": "sysprep", "sysprep": {"secret": {"name": secret["metadata"]["name"]}}} in ts["volumes"]
+    assert ts["domain"]["devices"]["filesystems"] == [{"name": "appconfigfs", "virtiofs": {}}]

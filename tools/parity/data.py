@@ -3,7 +3,7 @@
 # Statuts : ok (fait), part (partiel), todo (manquant), plus (console seulement), na (hors périmètre).
 # v : version où c'est arrivé (ok/part) ou prévue (todo).
 
-AS_OF = "1.70.0"
+AS_OF = "1.71.0"
 DATE = "2026-09-27"
 
 S = []  # sections
@@ -214,7 +214,11 @@ r("plus", "1.57", "Connexion obligatoire, comptes et rôles propres à la consol
   "sans Rancher ; Harvester seul n'a qu'un compte admin", "without Rancher; standalone Harvester has a single admin")
 
 sec("addonmenus", "Menus apportés par des add-ons", "Menus brought by add-ons", "VM Imports / VM Migration", "VM Imports / VM Migration")
-r("todo", "1.71", "Imports de VM (VMware, OpenStack, OVA)", "VM imports (VMware, OpenStack, OVA)")
+r("ok", "1.71", "Imports de VM (VMware, OpenStack, OVA)", "VM imports (VMware, OpenStack, OVA)",
+  "OVA importée de bout en bout en réel ; source VMware vérifiée contre vcsim ; l'export réel depuis VMware et OpenStack n'est pas vérifié (ni vCenter ni OpenStack sur les bancs)",
+  "OVA imported end to end for real; VMware source checked against vcsim; the real export from VMware and OpenStack is not verified (no vCenter nor OpenStack on the benches)")
+r("plus", "1.71", "Raison d'un import ou d'une source bloqués, tirée du journal du contrôleur ; noms refusés avant d'écrire", "Reason of a blocked import or source, from the controller's log; names refused before writing",
+  "Harvester boucle sans rien dire (image au nom trop long, identifiants refusés)", "Harvester loops silently (image name too long, refused credentials)")
 r("na", "", "Migration par forklift-operator", "Migration through forklift-operator", "add-on absent de la documentation 1.9", "add-on missing from the 1.9 docs")
 
 sec("console", "Ce que la console ajoute", "What the console adds", "", "")

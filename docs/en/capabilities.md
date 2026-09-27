@@ -1145,6 +1145,63 @@ Reading is open to every role; changing is for administrators. On the command
 line: `harvester-resources monlog output-apply|output-delete|flow-apply|
 flow-delete|amc-apply|amc-delete`.
 
+### Importing VMs from VMware, OpenStack or an OVA archive (1.71.0)
+
+**VM Import**, in the Cluster menu, drives Harvester's vm-import-controller
+add-on (enable it in Add-ons first; the section says when it is off).
+
+- **Sources**, one tab per provider:
+  - **VMware**: the vCenter SDK address (`https://vcenter/sdk`), the exact
+    datacenter name and an account allowed to export VMs;
+  - **OpenStack**: the Keystone address, the region, the project's user,
+    password, project and domain, and the upload retries;
+  - **OVA**: the address of an `.ova` file over HTTP or HTTPS, with an
+    optional user, password or CA certificate, and the download timeout
+    (600 s by default, it covers the whole download: raise it for a large
+    archive, 0 for no limit).
+
+  Typed credentials become a Secret of the source's namespace (named
+  `<source>-creds` unless you name it), with the key the controller expects
+  for each type (the CA certificate key differs between the three); an
+  existing Secret can be used instead. Each source shows whether the
+  controller reached it (ready), could not (not ready), or never checked
+  it (missing Secret, refused login). Harvester keeps the reason only in
+  the controller's log: **Why** shows its error lines for that source. A
+  ready source is never checked again by Harvester: **Check again**
+  recreates it. A source used by an import in progress cannot be changed
+  or deleted; deleting a source also deletes the Secret the console
+  created for it.
+- **Imports**: the VM to import (its name in vCenter, the server's name or
+  ID in OpenStack, the name to give it for an OVA), the target namespace,
+  the storage class of its disks, and the mapping of the source's network
+  cards to VM networks. A card without a line is dropped; with no line at
+  all the VM gets a single card on the pod network. Advanced: default card
+  model and disk bus, skipping the checks on the source, and for VMware the
+  folder, the guest shutdown timeout and a forced power-off (needed without
+  VMware Tools). The form shows the name the VM will get in Harvester.
+
+  What the controller would loop on without saying anything is refused
+  before writing: a VM name that is not valid in Harvester, image names
+  over 63 characters (`vm-import-<import>-<disk>`), a network mapped twice
+  or to a network that does not exist, a VM of the same name not created
+  by an import. Each import shows its step (checks, export from the
+  source, images, VM created, VM running), the progress of each disk's
+  image and a link to the VM once created. An import is followed to the
+  running VM in the dock; one blocked without changing state for five
+  minutes is ended with the controller's reason. Deleting an import once
+  done leaves the VM and its images; before that, its images go with it
+  and a VM already created stays.
+
+Verified for real: an OVA imported end to end on harv1, and VMware sources
+against vcsim (the vCenter simulator of the controller's own tests). The
+export of a VM from a real vCenter or OpenStack is not verified: none is
+available on the test benches.
+
+Reading is open to every role; changing, and the controller's log, are for
+administrators. On the command line: `harvester-resources vmimport
+source-apply|source-recheck|source-delete|import-create|import-follow|
+import-delete`.
+
 ## 4. Cluster API: downstream RKE2 clusters (console + CLI)
 
 Create and operate Kubernetes clusters whose nodes are Harvester VMs,

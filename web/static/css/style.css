@@ -5092,3 +5092,13 @@ td.tpl-acts .btn + .btn { margin-left: 4px; }
 .ml-rule { display: grid; grid-template-columns: 110px 1fr 1fr auto auto; gap: 6px; margin-bottom: 6px; align-items: center; }
 .ml-rec { border: 1px solid var(--border); border-radius: 8px; padding: 6px 10px; margin: 0 0 8px; }
 .ml-rec legend { font-size: 12px; color: var(--text-dim); }
+/* v1.71.0 : imports de VM */
+.vi-bar { display: inline-block; width: 120px; height: 6px; border-radius: 3px; background: var(--border); vertical-align: middle; overflow: hidden; }
+.vi-bar i { display: block; height: 100%; background: var(--accent); }
+.vi-bar.vi-fail i { background: var(--error); }
+.vi-steps { display: flex; align-items: center; gap: 6px; margin-bottom: 4px; }
+.vi-disk { font-size: 12.5px; white-space: nowrap; }
+.vi-net { display: grid; grid-template-columns: 1fr 1fr 130px auto; gap: 6px; margin-bottom: 6px; align-items: center; }
+.vi-adv summary { cursor: pointer; margin: 8px 0; }
+.vi-log { max-height: 280px; overflow: auto; font-size: 12px; white-space: pre-wrap; }
+@media (max-width: 700px) { .vi-net { grid-template-columns: 1fr; } }

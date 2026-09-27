@@ -4,6 +4,60 @@ All notable changes to this project will be documented here.
 Format inspired by [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 This file summarises each minor release; per-patch detail lives in `git log`.
 
+## [1.71.0] - 2026-09-27 - Importing VMs from VMware, OpenStack or an OVA archive
+
+### Added
+- **VM Import** section in the Cluster menu, driving Harvester's
+  vm-import-controller add-on:
+  - **Sources**, one tab per provider (VMware, OpenStack, OVA), with their
+    state: ready, not ready, or never checked. Typed credentials become a
+    Secret with the keys the controller expects for each type (the CA key
+    differs between the three); an existing Secret can be used. **Why**
+    shows the controller's error lines, the only place Harvester keeps the
+    reason. **Check again** recreates a source, since Harvester never
+    checks a ready one again. A source used by an import in progress is
+    kept.
+  - **Imports**: the VM to import, target namespace, storage class, the
+    mapping of the source's network cards to VM networks, and the advanced
+    options (default card model and disk bus, skipping the checks, VMware
+    folder, guest shutdown timeout, forced power-off). Each import shows its
+    step, the progress of each disk's image and a link to the VM once
+    created; it is followed to the running VM in the dock.
+- What the controller would loop on without a word is refused before
+  writing: a VM name not valid in Harvester (the controller only lowercases
+  it: `DC0_H0_VM0` stays invalid), image names over 63 characters, a
+  network mapped twice or to a missing network, a VM of the same name not
+  created by an import.
+- An import stuck in the same state for five minutes, or a source whose
+  credentials are refused, is ended with the controller's reason instead
+  of waiting out its timeout.
+- `harvester-resources vmimport source-apply|source-recheck|source-delete|import-create|import-follow|import-delete`.
+
+### Tests
+- Library: sources as the controller reads them, the refusals, source
+  states and users, imports as Harvester's form writes them, states and
+  progress from the images, the reason of a controller log line.
+- Command line and routes: credentials become a Secret (never in the
+  source, a response or a command line), a source recreated to be checked
+  again and protected while used, an import followed to the running VM, a
+  stuck import and refused credentials ended with the controller's words,
+  admin-only writes and log.
+- In Chromium: imports with their steps and image progress, the reason
+  window, sources by type, the VMware source form, the import form with its
+  network mapping and VMware options, a disabled add-on.
+- Real, on harv1 (Harvester 1.9.0): an OVA served by node1, its source
+  created by the form and checked, a source in 404 said not ready with the
+  controller's reason, a name too long refused, then the import by the form
+  followed to the running VM in 2 min 30 (image
+  `vm-import-imp-cirros-cirros-ova-cirros-disk1.img` ready, VM with its card
+  on `default/production`, running); all removed through the interface.
+- Real, against vcsim on node1 (the vCenter simulator of the controller's
+  own tests): a VMware source ready, its Secret with the controller's keys;
+  a wrong password said in 18 s ("Login failure") instead of 3 min; a wrong
+  datacenter said not ready ("datacenter '/DC9' not found"); a vCenter VM
+  name invalid in Harvester refused. The export of a VM from a real vCenter
+  or OpenStack is not verified: none is available on the benches.
+
 ## [1.70.0] - 2026-09-27 - Monitoring and logging
 
 ### Added

@@ -108,6 +108,8 @@ il s'utilise aussi seul.
   harvester-resources upgrade start --cluster harv1 --iso harvester-v1.9.0-amd64.iso --checksum SHA512   (airgap)
   harvester-resources upgrade follow|logs|dismiss|abort --cluster harv1 --name hvst-upgrade-xxxxx [--out logs.zip]
   harvester-resources monlog output-apply|flow-apply|amc-apply --cluster harv1 --spec request.json
+  harvester-resources vmimport source-apply|import-create --cluster harv1 --spec request.json
+  harvester-resources vmimport import-follow|import-delete --cluster harv1 --namespace ns --name imp
   harvester-resources monlog output-delete|flow-delete|amc-delete --cluster harv1 --kind Flow --namespace ns --name n
   harvester-resources kubeconfig revoke --cluster harv1 --name ci
 
@@ -142,6 +144,7 @@ import hv_settings as hset  # noqa: E402
 import hv_devices as hdev  # noqa: E402
 import hv_upgrade as hup  # noqa: E402
 import hv_monlog as hml  # noqa: E402
+import hv_vmimport as hvi  # noqa: E402
 
 EXIT_OK, EXIT_FAIL, EXIT_BLOCKED, EXIT_CANCELLED = 0, 1, 2, 3
 K_ADDON = "addons.harvesterhci.io"
@@ -2988,6 +2991,206 @@ def _ml_config_error(kube, conf_hash):
         return ""
 
 
+# ---------------------------------------------------------------------------
+# v1.71.0 : imports de VM (vm-import-controller : VMware, OpenStack, OVA)
+# ---------------------------------------------------------------------------
+
+VMI_STUCK_AFTER = 300          # s sans changer d'état avant de lire le journal du contrôleur
+VMI_SOURCE_WAIT = 180          # s : une source se vérifie en quelques secondes
+VMI_SOURCE_LOG_AFTER = 15      # s : une source toujours sans état fait lire le journal
+
+
+def _vmi_log(kube, name):
+    """Les lignes d'erreur du journal du contrôleur qui citent `name` (le
+    statut des sources et des imports ne porte pas la raison)."""
+    try:
+        text = kube.run("logs", "-n", hvi.CTRL_NS, f"deploy/{hvi.CTRL_DEPLOY}", "--tail", "3000", timeout=30)
+    except Exception:      # noqa: BLE001 : journal illisible, on n'en dit rien
+        return []
+    return hvi.log_lines(text, name)
+
+
+def _vmi_secret(kube, ns, secret):
+    """Crée ou complète le secret d'une source ; rend son nom."""
+    import base64
+    data = {k: base64.b64encode(v.encode()).decode() for k, v in secret["data"].items()}
+    cur = kube.get("secrets", ns, secret["name"])
+    if cur is None:
+        kube.create({"apiVersion": "v1", "kind": "Secret", "type": "Opaque",
+                     "metadata": {"name": secret["name"], "namespace": ns, "labels": {"harvester-ops.io/managed": "true"}},
+                     "data": data})
+        step("vmimport", "running", f"secret {ns}/{secret['name']} created")
+    else:
+        kube.patch("secrets", ns, secret["name"], {"data": data})
+        step("vmimport", "running", f"secret {ns}/{secret['name']}: {', '.join(sorted(secret['data']))} set")
+
+
+def _vmi_sources(kube):
+    return hvi.source_rows({t: kube.list(hvi.K_SRC[t], None) for t in hvi.TYPES})
+
+
+def _vmi_wait_source(kube, t, ns, name, timeout):
+    """Une source neuve est vérifiée aussitôt : prête, pas prête, ou sans
+    état (secret absent, identifiants refusés : le contrôleur réessaie sans
+    fin, seul son journal le dit ; vu contre vcsim, lu après 15 s)."""
+    t0 = time.time()
+
+    def done(o):
+        state = hvi.source_state(o)
+        if state == "ready":
+            return True, f"{hvi.KIND[t]} {ns}/{name} ready: the controller reached it"
+        if state == "notready":
+            lines = _vmi_log(kube, name)
+            return False, f"{hvi.KIND[t]} {ns}/{name} not ready: " + (hvi.log_error(lines[-1]) if lines else "the controller could not reach it")
+        if time.time() - t0 > VMI_SOURCE_LOG_AFTER:
+            lines = _vmi_log(kube, name)
+            if lines:
+                return False, f"{hvi.KIND[t]} {ns}/{name} never checked: {hvi.log_error(lines[-1])}"
+        return None, "waiting for the controller to check the source"
+    rc = _wait(kube, hvi.K_SRC[t], ns, name, done, timeout, label="vmimport")
+    if rc != EXIT_OK and hvi.source_state(kube.get(hvi.K_SRC[t], ns, name)) == "pending":
+        # jamais vérifiée : secret illisible, identifiants refusés... le journal seul le dit
+        lines = _vmi_log(kube, name)
+        step("vmimport", "error", f"{hvi.KIND[t]} {ns}/{name} never checked: "
+             + (hvi.log_error(lines[-1]) if lines else "see the controller log"))
+    return rc
+
+
+def _vmi_follow(kube, ns, name, timeout, sleep=None, now=None):
+    """Suit l'import jusqu'à la VM en marche. La progression est celle des
+    images ; un état figé plus de VMI_STUCK_AFTER s fait lire le journal du
+    contrôleur, qui seul dit pourquoi l'import boucle."""
+    sleep = sleep or time.sleep
+    now = now or time.time
+    deadline, last_msg, phase, since = now() + timeout, None, None, now()
+    while now() < deadline:
+        o = kube.get(hvi.K_IMPORT, ns, name)
+        images = kube.list(hvi.K_IMAGE, ns, selector=f"{hvi.L_IMPORTED}=true") if o else []
+        cur = ((o or {}).get("status") or {}).get("importStatus") or ""
+        if cur != phase:
+            phase, since = cur, now()
+        stuck = ""
+        if o and now() - since > VMI_STUCK_AFTER and cur not in (hvi.DONE,) + hvi.FAILED:
+            stuck = hvi.stuck_reason(_vmi_log(kube, name))
+            if not stuck and cur == "":
+                src = ((o.get("spec") or {}).get("sourceCluster") or {})
+                t = hvi.TYPE_OF_KIND.get(str(src.get("kind") or "").lower())
+                s = kube.get(hvi.K_SRC[t], src.get("namespace") or ns, src.get("name")) if t else None
+                if hvi.source_state(s) != "ready":
+                    stuck = f"the source {src.get('name')} is not ready: check it in the Sources tab"
+        res, msg = hvi.settled(o, images, stuck)
+        if res is False and o and cur in hvi.FAILED and msg.endswith("see the controller log"):
+            lines = _vmi_log(kube, name)
+            if lines:
+                msg = f"{cur}: {hvi.log_error(lines[-1])}"
+        if msg != last_msg:
+            step("vmimport", "running" if res is None else ("done" if res else "error"), msg)
+            last_msg = msg
+        if res is True:
+            return EXIT_OK
+        if res is False:
+            return EXIT_FAIL
+        sleep(10)
+    step("vmimport", "error", f"not finished after {timeout} s; the import goes on in Harvester, follow it again")
+    return EXIT_FAIL
+
+
+def cmd_vmimport(args):
+    kube = kube_from(args)
+    act = args.action
+    if act in ("source-apply", "source-recheck"):
+        if act == "source-apply":
+            spec = _read_json(args.spec)
+            src, secret = hvi.source_manifest(spec)
+        else:
+            t = args.type
+            if t not in hvi.TYPES:
+                raise ValueError("--type: vmware, openstack or ova")
+            cur = kube.get(hvi.K_SRC[t], hvi.check_name(args.namespace, "namespace"), hvi.check_name(args.name))
+            if cur is None:
+                raise ValueError(f"no {hvi.KIND[t]} {args.namespace}/{args.name}")
+            src, secret = {"apiVersion": hvi.API, "kind": hvi.KIND[t],
+                           "metadata": {"name": args.name, "namespace": args.namespace}, "spec": cur.get("spec") or {}}, None
+        t = hvi.TYPE_OF_KIND[src["kind"].lower()]
+        ns, name = src["metadata"]["namespace"], src["metadata"]["name"]
+        imports = kube.list(hvi.K_IMPORT, None)
+        cur = kube.get(hvi.K_SRC[t], ns, name)
+        if cur is not None:
+            users = hvi.source_users({"type": t, "namespace": ns, "name": name}, imports)
+            if users:
+                raise ValueError(f"{hvi.KIND[t]} {ns}/{name} is used by imports in progress: " + ", ".join(users))
+        if secret:
+            _vmi_secret(kube, ns, secret)
+        elif (src["spec"].get("credentials") or {}).get("name") and act == "source-apply":
+            ref = src["spec"]["credentials"]
+            if kube.get("secrets", ref["namespace"], ref["name"]) is None:
+                raise ValueError(f"no secret {ref['namespace']}/{ref['name']}")
+        if cur is not None:
+            # une source prête n'est jamais revérifiée : la recréer la fait vérifier
+            kube.delete(hvi.K_SRC[t], ns, name)
+            for _ in range(30):
+                if kube.get(hvi.K_SRC[t], ns, name) is None:
+                    break
+                time.sleep(1)
+        kube.create(src)
+        step("vmimport", "running", f"{hvi.KIND[t]} {ns}/{name} {'checked again' if cur is not None else 'created'}")
+        return _vmi_wait_source(kube, t, ns, name, min(args.timeout, VMI_SOURCE_WAIT))
+    if act == "source-delete":
+        t = args.type
+        if t not in hvi.TYPES:
+            raise ValueError("--type: vmware, openstack or ova")
+        ns, name = hvi.check_name(args.namespace, "namespace"), hvi.check_name(args.name)
+        cur = kube.get(hvi.K_SRC[t], ns, name)
+        if cur is None:
+            raise ValueError(f"no {hvi.KIND[t]} {ns}/{name}")
+        users = hvi.source_users({"type": t, "namespace": ns, "name": name}, kube.list(hvi.K_IMPORT, None))
+        if users:
+            raise ValueError(f"{hvi.KIND[t]} {ns}/{name} is used by imports in progress: " + ", ".join(users))
+        kube.delete(hvi.K_SRC[t], ns, name)
+        ref = (cur.get("spec") or {}).get("credentials") or {}
+        if args.with_secret and ref.get("name"):
+            sec = kube.get("secrets", ref.get("namespace") or ns, ref["name"])
+            if sec and ((sec.get("metadata") or {}).get("labels") or {}).get("harvester-ops.io/managed") == "true":
+                kube.delete("secrets", ref.get("namespace") or ns, ref["name"])
+                step("vmimport", "running", f"secret {ref['name']} deleted")
+        step("vmimport", "done", f"{hvi.KIND[t]} {ns}/{name} deleted")
+        return EXIT_OK
+    if act == "import-create":
+        spec = _read_json(args.spec)
+        nads = [f"{(n.get('metadata') or {}).get('namespace')}/{(n.get('metadata') or {}).get('name')}"
+                for n in kube.list("network-attachment-definitions.k8s.cni.cncf.io", None)]
+        classes = [(c.get("metadata") or {}).get("name") for c in kube.list(ho.K["storageclass"])
+                   if (c.get("parameters") or {}).get("harvesterhci.io/isInternalStorageClass") != "true"]
+        obj = hvi.import_manifest(spec, _vmi_sources(kube), nads, classes)
+        ns, name = obj["metadata"]["namespace"], obj["metadata"]["name"]
+        if kube.get(hvi.K_IMPORT, ns, name) is not None:
+            raise ValueError(f"an import {ns}/{name} already exists")
+        final = hvi.imported_name(spec["source"]["type"], obj["spec"]["virtualMachineName"])
+        if final:
+            vm = kube.get("virtualmachines.kubevirt.io", ns, final)
+            if vm is not None and ((vm.get("metadata") or {}).get("labels") or {}).get(hvi.L_IMPORTED) != "true":
+                raise ValueError(f"a VM {ns}/{final} already exists: the import would loop without creating it")
+        kube.create(obj)
+        step("vmimport", "running", f"import {ns}/{name} created" + (f": VM {final}" if final else ""))
+        return _vmi_follow(kube, ns, name, args.timeout)
+    ns, name = hvi.check_name(args.namespace, "namespace"), hvi.check_name(args.name)
+    if act == "import-follow":
+        if kube.get(hvi.K_IMPORT, ns, name) is None:
+            raise ValueError(f"no import {ns}/{name}")
+        return _vmi_follow(kube, ns, name, args.timeout)
+    if act == "import-delete":
+        o = kube.get(hvi.K_IMPORT, ns, name)
+        if o is None:
+            raise ValueError(f"no import {ns}/{name}")
+        phase = ((o.get("status") or {}).get("importStatus") or "")
+        kube.delete(hvi.K_IMPORT, ns, name)
+        step("vmimport", "done", f"import {ns}/{name} deleted" + (
+            ": the VM and its images stay" if phase == hvi.DONE else
+            "; its images go with it, a VM already created stays"))
+        return EXIT_OK
+    raise ValueError("action: source-apply, source-recheck, source-delete, import-create, import-follow, import-delete")
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(prog="harvester-resources", description=__doc__.split("\n\n")[0])
     sub = ap.add_subparsers(dest="cmd", required=True)
@@ -3397,6 +3600,17 @@ def main(argv=None):
     sp.add_argument("--name")
     sp.add_argument("--grace", type=int, default=90, help="apply: seconds before an unprocessed object is an error")
     sp.add_argument("--timeout", type=int, default=480, help="apply: seconds for the operator, then fluentd's check")
+    sp = sub.add_parser("vmimport", help="VM imports: VMware, OpenStack and OVA sources, imports followed to the running VM")
+    sp.set_defaults(fn=cmd_vmimport)
+    sp.add_argument("action", choices=("source-apply", "source-recheck", "source-delete", "import-create", "import-follow", "import-delete"))
+    sp.add_argument("--cluster")
+    sp.add_argument("--kubeconfig")
+    sp.add_argument("--spec", help="source-apply, import-create: the request as JSON (credentials become a Secret)")
+    sp.add_argument("--type", help="source-recheck, source-delete: vmware, openstack or ova")
+    sp.add_argument("--namespace")
+    sp.add_argument("--name")
+    sp.add_argument("--with-secret", action="store_true", help="source-delete: also delete the secret the console created")
+    sp.add_argument("--timeout", type=int, default=4 * 3600, help="seconds: source check, or the import to the running VM")
     args = ap.parse_args(argv)
     signal.signal(signal.SIGTERM, _on_signal)
     try:

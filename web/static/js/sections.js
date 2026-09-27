@@ -26,6 +26,9 @@ const Sections = (() => {
     // v1.70.0 : le menu Monitoring & Logging de Harvester
     monlog: { first: 'metrics', panes: { metrics: { mod: 'MonLog' }, alerts: { mod: 'MonLog' },
                                          flows: { mod: 'MonLog' }, outputs: { mod: 'MonLog' } } },
+    // v1.71.0 : le menu Virtual Machine Imports de Harvester
+    vmimport: { first: 'imports', panes: { imports: { mod: 'VMImport' }, vmware: { mod: 'VMImport' },
+                                           openstack: { mod: 'VMImport' }, ova: { mod: 'VMImport' } } },
     // v1.67.0 : le menu Advanced de Harvester (réglages, paquet de support, kubeconfigs)
     advanced: { first: 'settings', panes: { settings: { mod: 'Advanced' },
                                             // v1.68.0 : les périphériques de Harvester
@@ -35,7 +38,7 @@ const Sections = (() => {
                                             support: { mod: 'Advanced' } } },
   };
   // les modules qui tiennent leur onglet eux-mêmes : un seul vit à la fois
-  const MODS = ['NetAdmin', 'Advanced', 'Devices', 'MonLog'];
+  const MODS = ['NetAdmin', 'Advanced', 'Devices', 'MonLog', 'VMImport'];
   const KEY = (sec) => `harvester_ops_section_${sec}`;
 
   function isSection(name) { return Object.prototype.hasOwnProperty.call(DEF, name); }

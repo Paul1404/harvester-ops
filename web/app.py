@@ -673,6 +673,7 @@ ADMIN_ONLY_PREFIXES = (
     "/api/devices/",            # v1.68.0 : passthrough PCI et USB, SR-IOV (détache un périphérique de l'hôte)
     "/api/upgrade/",            # v1.69.0 : mise à jour de Harvester (redémarre les hôtes)
     "/api/monlog/",             # v1.70.0 : sorties et flux de journaux, AlertmanagerConfig
+    "/api/vmimport/",           # v1.71.0 : sources d'import (identifiants) et imports de VM
     "/api/users",               # gestion des comptes de la console
     "/api/harvester-users",     # comptes du cluster Harvester
     "/api/kubeovn/",            # réseaux kube-ovn : un changement peut couper des VMs
@@ -805,7 +806,9 @@ ADMIN_ONLY_READ_PREFIXES = ("/api/harvester-users", "/api/users",
                             "/api/addons/",
                             # v1.67.0 : un paquet de support porte les journaux du cluster,
                             # un kubeconfig délivré porte un jeton
-                            "/api/hv-support/")
+                            "/api/hv-support/",
+                            # v1.71.0 : le journal du contrôleur d'import cite URL et serveurs des sources
+                            "/api/vmimport-log/")
 
 
 # Lectures qui donnent plus qu'une vue : le kubeconfig d'un cluster créé
@@ -10842,6 +10845,7 @@ import hv_settings as _hset  # noqa: E402
 import hv_devices as _hdev  # noqa: E402
 import hv_upgrade as _hup  # noqa: E402
 import hv_monlog as _hml  # noqa: E402
+import hv_vmimport as _hvi  # noqa: E402
 import hv_objects as _ho  # noqa: E402
 
 # v1.58.0 : les listes de la fenêtre Backups, servies par la même route
@@ -13204,6 +13208,112 @@ def api_monlog_do(cluster, action):
             # le fichier porte les valeurs secrètes saisies : privé, effacé après l'action
             args = ["monlog", action, "--spec", _private_file(files, json.dumps(spec), "monlog-")]
             label = f"monlog:{action}:{spec.get('namespace') or ''}/{spec.get('name')}"
+    except (ValueError, TypeError) as e:
+        for f in files:
+            Path(f).unlink(missing_ok=True)
+        return jsonify({"error": str(e)}), 400
+    run, err = _res_cli(cluster, kc, label, args, files)
+    return _res_reply(run, err, action=action)
+
+
+# ---------------------------------------------------------------------------
+# v1.71.0 : imports de VM (vm-import-controller). Écritures par
+# bin/harvester-resources.py vmimport ; les identifiants par fichier privé.
+# ---------------------------------------------------------------------------
+
+_VMIMPORT_DO = ("source-apply", "source-recheck", "source-delete", "import-create", "import-follow", "import-delete")
+
+
+@app.route("/api/vmimport/<cluster>")
+@requires_auth
+def api_vmimport(cluster):
+    """Sources et imports, avec l'état lu dans status et la progression tirée
+    des images ; ce qu'il faut au formulaire (réseaux de VM, classes)."""
+    kc = _kubectl_for_cluster(cluster)
+    if not kc:
+        return jsonify({"error": f"unknown cluster: {cluster}"}), 404
+    if _cluster_reachable(kc) is False:
+        return jsonify(_unreachable_payload(cluster, kc)), 200
+    from concurrent.futures import ThreadPoolExecutor
+    reads = {"addon": ("addons.harvesterhci.io", _hvi.ADDON[1], "-n", _hvi.ADDON[0]),
+             "imports": (_hvi.K_IMPORT, "-A"), "images": (_hvi.K_IMAGE, "-A", "-l", f"{_hvi.L_IMPORTED}=true"),
+             "nads": ("network-attachment-definitions.k8s.cni.cncf.io", "-A"), "classes": ("storageclasses",),
+             "namespaces": ("namespaces",), **{t: (_hvi.K_SRC[t], "-A") for t in _hvi.TYPES}}
+    with ThreadPoolExecutor(max_workers=len(reads)) as pool:
+        futs = {k: pool.submit(_kubectl_json, kc, "get", *a, timeout=30, cluster=cluster) for k, a in reads.items()}
+        got = {k: f.result() for k, f in futs.items()}
+    items = lambda k: (got[k] or {}).get("items") or []  # noqa: E731
+    imports = items("imports")
+    sources = _hvi.source_rows({t: items(t) for t in _hvi.TYPES})
+    for r in sources:
+        r["users"] = _hvi.source_users(r, imports)
+    addon = got["addon"] or {}
+    return jsonify({"cluster": cluster,
+                    "addon": {"enabled": bool((addon.get("spec") or {}).get("enabled")),
+                              "status": (addon.get("status") or {}).get("status") or ("absent" if not addon else "")},
+                    "crds": got["ova"] is not None,
+                    "sources": sources,
+                    "imports": sorted((_hvi.import_view(i, items("images")) for i in imports),
+                                      key=lambda v: v["created"] or "", reverse=True),
+                    "nads": sorted(f"{(n.get('metadata') or {}).get('namespace')}/{(n.get('metadata') or {}).get('name')}"
+                                   for n in items("nads")),
+                    "classes": sorted((c.get("metadata") or {}).get("name") for c in items("classes")
+                                      if (c.get("parameters") or {}).get("harvesterhci.io/isInternalStorageClass") != "true"),
+                    "default_class": next(((c.get("metadata") or {}).get("name") for c in items("classes")
+                                           if ((c.get("metadata") or {}).get("annotations") or {})
+                                           .get("storageclass.kubernetes.io/is-default-class") == "true"), ""),
+                    "namespaces": sorted((n.get("metadata") or {}).get("name") for n in items("namespaces")),
+                    "nic_models": _hvi.NIC_MODELS, "disk_bus": _hvi.DISK_BUS})
+
+
+@app.route("/api/vmimport-log/<cluster>/<namespace>/<name>")
+@requires_auth
+def api_vmimport_log(cluster, namespace, name):
+    """Les lignes d'erreur du journal du contrôleur qui citent cet objet :
+    la seule place où une source ou un import dit pourquoi il n'avance pas."""
+    kc = _kubectl_for_cluster(cluster)
+    if not kc:
+        return jsonify({"error": f"unknown cluster: {cluster}"}), 404
+    r = _kubectl_run(["kubectl", "--kubeconfig", kc, "logs", "-n", _hvi.CTRL_NS, f"deploy/{_hvi.CTRL_DEPLOY}", "--tail", "3000"],
+                     capture_output=True, text=True, timeout=30)
+    if r.returncode != 0:
+        return jsonify({"lines": [], "error": "the controller log cannot be read"}), 200
+    lines = _hvi.log_lines(r.stdout, name, limit=20)
+    return jsonify({"lines": lines, "reason": _hvi.stuck_reason(lines)})
+
+
+@app.route("/api/vmimport/<cluster>/do/<action>", methods=["POST"])
+@requires_auth
+@_rate_limit("30/minute")
+def api_vmimport_do(cluster, action):
+    if action not in _VMIMPORT_DO:
+        return jsonify({"error": "action: " + ", ".join(_VMIMPORT_DO)}), 400
+    kc = _kubectl_for_cluster(cluster)
+    if not kc:
+        return jsonify({"error": f"unknown cluster: {cluster}"}), 404
+    b = request.get_json(silent=True) or {}
+    files = []
+    try:
+        if action in ("source-apply", "import-create"):
+            spec = b.get("spec") if isinstance(b.get("spec"), dict) else {}
+            if action == "source-apply":
+                _hvi.source_manifest(json.loads(json.dumps(spec)))
+            else:
+                _hvi.import_manifest(json.loads(json.dumps(spec)))
+            # le fichier peut porter des identifiants : privé, effacé après l'action
+            args = ["vmimport", action, "--spec", _private_file(files, json.dumps(spec), "vmimport-")]
+            label = f"vmimport:{action}:{spec.get('namespace') or 'default'}/{spec.get('name')}"
+        else:
+            ns, name = _hvi.check_name(b.get("namespace"), "namespace"), _hvi.check_name(b.get("name"))
+            args = ["vmimport", action, "--namespace", ns, "--name", name]
+            if action.startswith("source-"):
+                t = str(b.get("type") or "")
+                if t not in _hvi.TYPES:
+                    raise ValueError("type: vmware, openstack or ova")
+                args += ["--type", t]
+                if action == "source-delete" and b.get("with_secret"):
+                    args.append("--with-secret")
+            label = f"vmimport:{action}:{ns}/{name}"
     except (ValueError, TypeError) as e:
         for f in files:
             Path(f).unlink(missing_ok=True)

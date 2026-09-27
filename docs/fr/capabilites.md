@@ -1285,6 +1285,66 @@ La lecture est ouverte à tous les rôles ; la modification est réservée aux
 administrateurs. En ligne de commande : `harvester-resources monlog
 output-apply|output-delete|flow-apply|flow-delete|amc-apply|amc-delete`.
 
+### Importer des VMs depuis VMware, OpenStack ou une archive OVA (1.71.0)
+
+**VM Import**, dans le menu Cluster, pilote l'add-on vm-import-controller
+de Harvester (à activer d'abord dans Add-ons ; la section dit quand il est
+éteint).
+
+- **Sources**, un onglet par fournisseur :
+  - **VMware** : l'adresse SDK du vCenter (`https://vcenter/sdk`), le nom
+    exact du datacenter et un compte autorisé à exporter des VMs ;
+  - **OpenStack** : l'adresse Keystone, la région, l'utilisateur, le mot de
+    passe, le projet et le domaine, et les nouveaux essais d'envoi ;
+  - **OVA** : l'adresse d'un fichier `.ova` en HTTP ou HTTPS, avec un
+    utilisateur, un mot de passe ou un certificat d'autorité facultatifs, et
+    le délai de téléchargement (600 s par défaut, il couvre tout le
+    téléchargement : à augmenter pour une grosse archive, 0 pour aucune
+    limite).
+
+  Les identifiants saisis deviennent un Secret du namespace de la source
+  (nommé `<source>-creds` sauf autre nom), avec la clé que le contrôleur
+  attend pour chaque type (la clé du certificat d'autorité diffère entre
+  les trois) ; un Secret existant peut servir à la place. Chaque source
+  montre si le contrôleur l'a jointe (prête), n'a pas pu (pas prête), ou
+  ne l'a jamais vérifiée (Secret absent, identifiants refusés). Harvester ne
+  garde la raison que dans le journal du contrôleur : **Pourquoi** en
+  montre les lignes d'erreur pour cette source. Harvester ne revérifie
+  jamais une source prête : **Revérifier** la recrée. Une source utilisée
+  par un import en cours ne peut être ni modifiée ni supprimée ; supprimer
+  une source supprime aussi le Secret que la console a créé pour elle.
+- **Imports** : la VM à importer (son nom dans vCenter, le nom ou l'ID du
+  serveur dans OpenStack, le nom à lui donner pour une OVA), le namespace
+  cible, la classe de stockage de ses disques, et la correspondance des
+  cartes réseau de la source avec des réseaux de VM. Une carte sans ligne
+  est supprimée ; sans aucune ligne, la VM reçoit une seule carte sur le
+  réseau des pods. Avancé : modèle de carte et bus de disque par défaut,
+  contrôles de la source à passer, et pour VMware le dossier, le délai
+  d'arrêt de l'invité et une extinction forcée (nécessaire sans les VMware
+  Tools). Le formulaire montre le nom que la VM prendra dans Harvester.
+
+  Ce sur quoi le contrôleur bouclerait sans rien dire est refusé avant
+  d'écrire : un nom de VM invalide dans Harvester, des noms d'image de plus
+  de 63 caractères (`vm-import-<import>-<disque>`), un réseau associé deux
+  fois ou vers un réseau qui n'existe pas, une VM de même nom qui ne vient
+  pas d'un import. Chaque import montre son étape (contrôles, export depuis
+  la source, images, VM créée, VM en marche), la progression de l'image de
+  chaque disque et un lien vers la VM une fois créée. Un import est suivi
+  jusqu'à la VM en marche dans le dock ; un import bloqué sans changer
+  d'état pendant cinq minutes est arrêté avec la raison du contrôleur.
+  Supprimer un import terminé laisse la VM et ses images ; avant, ses images
+  partent avec lui et une VM déjà créée reste.
+
+Vérifié en réel : une OVA importée de bout en bout sur harv1, et les sources
+VMware contre vcsim (le simulateur de vCenter des tests du contrôleur).
+L'export d'une VM depuis un vrai vCenter ou OpenStack n'est pas vérifié :
+aucun n'est disponible sur les bancs d'essai.
+
+La lecture est ouverte à tous les rôles ; la modification, et le journal du
+contrôleur, sont réservés aux administrateurs. En ligne de commande :
+`harvester-resources vmimport source-apply|source-recheck|source-delete|
+import-create|import-follow|import-delete`.
+
 ## 4. Cluster API : clusters RKE2 en aval (console + CLI)
 
 Créer et exploiter des clusters Kubernetes dont les nœuds sont des VMs

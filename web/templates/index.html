@@ -87,6 +87,10 @@
             <span class="tab-icon" data-icon="activity"></span>
             <span class="sidebar-label" data-i18n="tab.monlog">Monitoring &amp; Logging</span>
           </a>
+          <a class="tab tab-child" data-tab="vmimport" href="#vmimport" data-i18n-title="tab.vmimportTip" title="Import VMs from VMware, OpenStack or an OVA archive">
+            <span class="tab-icon" data-icon="migrate"></span>
+            <span class="sidebar-label" data-i18n="tab.vmimport">VM Import</span>
+          </a>
           <a class="tab tab-child" data-tab="advanced" href="#advanced" data-i18n-title="tab.advancedTip" title="Harvester settings, devices, backup target, support bundles and kubeconfigs">
             <span class="tab-icon" data-icon="settings"></span>
             <span class="sidebar-label" data-i18n="tab.advanced">Advanced</span>
@@ -310,6 +314,25 @@
       </div>
       <div class="section-pane" data-pane="secrets" hidden><div class="resource-host" data-resource="secrets"></div></div>
       <div class="section-pane" data-pane="sshkeys" hidden><div class="resource-host" data-resource="sshkeys"></div></div>
+    </section>
+
+    <!-- v1.71.0 : VM IMPORT (vm-import-controller) -->
+    <section id="tab-vmimport" class="tab-content" data-section="vmimport">
+      <div class="shutdown-header">
+        <div class="automation-header-text">
+          <h1><span data-i18n="tab.vmimport">VM Import</span> · <span class="cluster-name"></span></h1>
+        </div>
+        <div class="sub-tabs sub-tabs-inline" role="tablist">
+          <button type="button" class="sub-tab tip" role="tab" data-section-tab="imports" data-i18n-title="section.importsTip" title="Imports of VMs, step by step, with the progress of their disks"><span class="tab-icon" data-icon="migrate"></span> <span data-i18n="section.imports">Imports</span></button>
+          <button type="button" class="sub-tab tip" role="tab" data-section-tab="vmware" data-i18n-title="section.vmwareTip" title="vCenter servers VMs are imported from"><span class="tab-icon" data-icon="cloud"></span> <span>VMware</span></button>
+          <button type="button" class="sub-tab tip" role="tab" data-section-tab="openstack" data-i18n-title="section.openstackTip" title="OpenStack projects VMs are imported from"><span class="tab-icon" data-icon="cloud"></span> <span>OpenStack</span></button>
+          <button type="button" class="sub-tab tip" role="tab" data-section-tab="ova" data-i18n-title="section.ovaTip" title="OVA archives served over HTTP or HTTPS"><span class="tab-icon" data-icon="bundle"></span> <span>OVA</span></button>
+        </div>
+      </div>
+      <div class="section-pane" data-pane="imports" hidden><div class="na-host" data-vi="imports"></div></div>
+      <div class="section-pane" data-pane="vmware" hidden><div class="na-host" data-vi="vmware"></div></div>
+      <div class="section-pane" data-pane="openstack" hidden><div class="na-host" data-vi="openstack"></div></div>
+      <div class="section-pane" data-pane="ova" hidden><div class="na-host" data-vi="ova"></div></div>
     </section>
 
     <!-- v1.70.0 : MONITORING & LOGGING -->
@@ -1077,6 +1100,7 @@
   <script src="/static/js/devices.js"></script>
   <script src="/static/js/upgrade.js"></script>
   <script src="/static/js/monlog.js"></script>
+  <script src="/static/js/vmimport.js"></script>
 <script src="/static/js/versions.js"></script>
 <script src="/static/js/console-accounts.js"></script>
 <script src="/static/js/user-menu.js"></script>

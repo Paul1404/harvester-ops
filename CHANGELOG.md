@@ -4,6 +4,73 @@ All notable changes to this project will be documented here.
 Format inspired by [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 This file summarises each minor release; per-patch detail lives in `git log`.
 
+## [1.67.0] - 2026-09-27 - Harvester settings, support bundles and kubeconfigs
+
+### Added
+- **Advanced** section under Cluster, as in Harvester, with two tabs.
+- **Settings**: every setting Harvester's UI shows, grouped, filtered by
+  words or to the modified ones, with its applied state (hash annotation up
+  to date, `configured` error shown). Typed edit windows (list, number with
+  bounds, yes/no, text, JSON, PEM), values checked beforehand as Harvester's
+  webhook would, the change followed until Harvester applies it; Reset goes
+  back to the default. Settings that can cut an access (disk provisioning,
+  proxy, registry, RKE2 certificate rotation, Rancher registration, TLS,
+  external UI) ask to confirm the risk first; network settings open
+  Network > Cluster Networks.
+- **Backup target** form (NFS or S3) and **Test**, Harvester's own health
+  check of the saved target.
+- **Support bundles**: Harvester's diagnostic archive, created with its
+  description, issue link, extra namespaces and timeouts, followed, then
+  downloaded through the API server; deleted from the list.
+- **Kubeconfigs**: a service account bound to one chosen role, on the whole
+  cluster or one namespace, with a token that expires (1 hour to 90 days);
+  the file is handed over once, never kept or logged; Revoke deletes the
+  account. The form warns when the role reads Secrets (on Harvester, `view`
+  does).
+- `harvester-resources setting set|reset|test-backup-target`,
+  `harvester-resources supportbundle create|delete`,
+  `harvester-resources kubeconfig create|revoke --out <file>`.
+
+### Security
+- Secrets carried by settings (TLS private key, S3 keys, registry passwords,
+  proxy credentials, the token of the Rancher import URL) are masked before reaching the page; a masked value
+  sent back is restored from the cluster by the command, never by the
+  browser.
+- Setting changes are for administrators; the whole Support tab too, reads
+  included (a bundle holds the cluster's logs, a kubeconfig a token).
+- The value of a setting reaches the command through a private file
+  removed after the action; the kubeconfig is written to a private file
+  whose path does not carry the download token.
+
+### Fixed
+- Leaving a section stops the windows' own refresh (the Cluster Networks tab
+  kept reading the cluster in the background).
+
+### Tests
+- Library: groups, masking and unmasking, every webhook check done
+  beforehand, the backup target forms, the applied state, the support
+  bundle, the kubeconfig objects and file, the roles that read Secrets.
+- Command line and routes: masked secret restored, reset, backup target
+  test, kubeconfig written 0600 and revoked whole, bundle followed to ready,
+  admin-only reads and writes, private files removed, kubeconfig handed out
+  once and absent from the action's command line.
+- In Chromium: the section, groups and filters, an enum changed and reset,
+  a dangerous setting that needs the box and keeps its masked secret, the
+  backup target form and its test, support bundles and kubeconfigs.
+- Real, on harv1 (Harvester 1.9.0): 43 settings listed, neither a private
+  key nor the import token in the page; the log level set to debug (applied)
+  and reset; a hotplug ratio of 30 refused by the form, 6 copied into
+  KubeVirt by Harvester, back to 4 after Reset; the grace period set to 90
+  and reset; the backup target test answered; a real support bundle
+  collected in 335 s, downloaded (a 32 MB zip) and deleted; a kubeconfig
+  with `view` on `default` listed the VMs, was refused `kube-system`, and was
+  refused at once after Revoke; its token appears in no log and not in the
+  actions database.
+- Real, on the three-node bench: an NFS backup target set, reached by
+  Longhorn, tested, then removed.
+- The first real run showed the Rancher import URL, and its token, in
+  clear: it is masked since.
+
 ## [1.66.0] - 2026-09-27 - Overlay and underlay networks: NAT, provider networks, policies
 
 ### Added

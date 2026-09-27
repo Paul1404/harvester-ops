@@ -668,6 +668,8 @@ ADMIN_ONLY_PREFIXES = (
     "/api/ns-admin/",           # v1.62.0 : créer, modifier, supprimer un namespace
     "/api/templates/",          # v1.64.0 : versions des modèles partagés du cluster
     "/api/net-admin/",          # v1.65.0 : réseaux de cluster, liens, équilibreurs, réglages réseau
+    "/api/hv-settings/",        # v1.67.0 : réglages de Harvester (certains coupent l'accès)
+    "/api/hv-support/",         # v1.67.0 : paquet de support, kubeconfigs délivrés
     "/api/users",               # gestion des comptes de la console
     "/api/harvester-users",     # comptes du cluster Harvester
     "/api/kubeovn/",            # réseaux kube-ovn : un changement peut couper des VMs
@@ -797,7 +799,10 @@ def current_role():
 # détient l'administration d'un cluster n'a pas à être public.
 ADMIN_ONLY_READ_PREFIXES = ("/api/harvester-users", "/api/users",
                             # v1.59.0 : la configuration d'un add-on peut porter des mots de passe
-                            "/api/addons/")
+                            "/api/addons/",
+                            # v1.67.0 : un paquet de support porte les journaux du cluster,
+                            # un kubeconfig délivré porte un jeton
+                            "/api/hv-support/")
 
 
 # Lectures qui donnent plus qu'une vue : le kubeconfig d'un cluster créé
@@ -10830,6 +10835,7 @@ def api_my_password():
 import cluster_objects as _co  # noqa: E402
 import hv_backups as _hb  # noqa: E402
 import hv_net as _hnet  # noqa: E402
+import hv_settings as _hset  # noqa: E402
 import hv_objects as _ho  # noqa: E402
 
 # v1.58.0 : les listes de la fenêtre Backups, servies par la même route
@@ -12558,6 +12564,190 @@ def api_net_admin_do(cluster, action):
         return jsonify({"error": str(e) if not isinstance(e, KeyError) else f"missing {e}"}), 400
     run, err = _res_cli(cluster, kc, label, args, files)
     return _res_reply(run, err, action=action)
+
+
+# ---------------------------------------------------------------------------
+# v1.67.0 : Advanced > Settings et Support de Harvester (réglages, cible de
+# sauvegarde, paquet de support, kubeconfig sûr). Écritures par
+# bin/harvester-resources.py ; les valeurs par un fichier privé.
+# ---------------------------------------------------------------------------
+
+@app.route("/api/hv-settings/<cluster>")
+@requires_auth
+def api_hv_settings(cluster):
+    """Les réglages de Harvester, secrets masqués."""
+    kc = _kubectl_for_cluster(cluster)
+    if not kc:
+        return jsonify({"error": f"unknown cluster: {cluster}"}), 404
+    if _cluster_reachable(kc) is False:
+        return jsonify(_unreachable_payload(cluster, kc)), 200
+    got = _kubectl_json(kc, "get", _hset.K_SETTING, timeout=30, cluster=cluster) or {}
+    return jsonify({"cluster": cluster, "groups": list(_hset.GROUPS),
+                    "items": _hset.rows(got.get("items") or [], show_hidden=request.args.get("hidden") == "1")})
+
+
+def _private_file(files, text, prefix):
+    wd = _capi_work_dir()
+    fd, path = tempfile.mkstemp(prefix=prefix, dir=str(wd) if wd else None)
+    with os.fdopen(fd, "w") as f:
+        f.write(text)
+    os.chmod(path, 0o600)
+    files.append(path)
+    return path
+
+
+@app.route("/api/hv-settings/<cluster>/do/<action>", methods=["POST"])
+@requires_auth
+@_rate_limit("20/minute")
+def api_hv_settings_do(cluster, action):
+    if action not in ("set", "reset", "test"):
+        return jsonify({"error": "action: set, reset or test"}), 400
+    kc = _kubectl_for_cluster(cluster)
+    if not kc:
+        return jsonify({"error": f"unknown cluster: {cluster}"}), 404
+    b = request.get_json(silent=True) or {}
+    files = []
+    if action == "test":
+        run, err = _res_cli(cluster, kc, "setting:test-backup-target", ["setting", "test-backup-target"])
+        return _res_reply(run, err, action=action)
+    name = str(b.get("name") or "")
+    try:
+        if action == "set":
+            value = str(b.get("value") if b.get("value") is not None else "")
+            if not value.strip():
+                raise ValueError("an empty value is a reset: use Reset")
+            if _hset.MASK not in value:
+                value = _hset.validate(name, value)
+            else:
+                _hset.validate(name, "")            # réglage connu et modifiable
+            args = ["setting", "set", "--name", name, "--value-file", _private_file(files, value, "set-")]
+        else:
+            _hset.validate(name, "")
+            args = ["setting", "reset", "--name", name]
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
+    run, err = _res_cli(cluster, kc, f"setting:{action}:{name}", args, files)
+    return _res_reply(run, err, action=action, setting=name)
+
+
+_KC_OUT = {}                     # jeton -> (chemin, horodatage) des kubeconfigs à retirer une fois
+_KC_OUT_TTL = 600
+
+
+def _kc_sweep():
+    now = time.time()
+    for tok, (path, ts) in list(_KC_OUT.items()):
+        if now - ts > _KC_OUT_TTL:
+            Path(path).unlink(missing_ok=True)
+            _KC_OUT.pop(tok, None)
+
+
+@app.route("/api/hv-support/<cluster>")
+@requires_auth
+def api_hv_support(cluster):
+    """Les paquets de support de Harvester et les kubeconfigs délivrés."""
+    kc = _kubectl_for_cluster(cluster)
+    if not kc:
+        return jsonify({"error": f"unknown cluster: {cluster}"}), 404
+    if _cluster_reachable(kc) is False:
+        return jsonify(_unreachable_payload(cluster, kc)), 200
+    from concurrent.futures import ThreadPoolExecutor
+    with ThreadPoolExecutor(max_workers=4) as pool:
+        fb = pool.submit(_kubectl_json, kc, "get", _hset.K_BUNDLE, "-n", _hset.BUNDLE_NS, timeout=30, cluster=cluster)
+        fs = pool.submit(_kubectl_json, kc, "get", "serviceaccounts", "-n", _hset.KC_NS, "-l", _hset.KC_LABEL, timeout=30, cluster=cluster)
+        fr = pool.submit(_kubectl_json, kc, "get", "clusterroles", timeout=30, cluster=cluster)
+        fn = pool.submit(_kubectl_json, kc, "get", "namespaces", timeout=30, cluster=cluster)
+        bundles, sas, roles, nss = (f.result() or {} for f in (fb, fs, fr, fn))
+    return jsonify({"cluster": cluster, "bundles": _hset.bundle_rows(bundles.get("items") or []),
+                    "kubeconfigs": _hset.kubeconfig_rows(sas.get("items") or []),
+                    "roles": _hset.roles_info(roles.get("items") or []),
+                    "namespaces": sorted(n["metadata"]["name"] for n in nss.get("items") or []
+                                         if not n["metadata"]["name"].startswith(_co.SYSTEM_NAMESPACE_PREFIXES))})
+
+
+@app.route("/api/hv-support/<cluster>/do/<action>", methods=["POST"])
+@requires_auth
+@_rate_limit("20/minute")
+def api_hv_support_do(cluster, action):
+    if action not in ("bundle-create", "bundle-delete", "kc-create", "kc-revoke"):
+        return jsonify({"error": "action: bundle-create, bundle-delete, kc-create or kc-revoke"}), 400
+    kc = _kubectl_for_cluster(cluster)
+    if not kc:
+        return jsonify({"error": f"unknown cluster: {cluster}"}), 404
+    b = request.get_json(silent=True) or {}
+    files, extra = [], {}
+    try:
+        if action == "bundle-create":
+            spec = b.get("spec") if isinstance(b.get("spec"), dict) else {}
+            obj = _hset.bundle_manifest(spec)
+            spec["name"] = obj["metadata"]["name"]
+            args = ["supportbundle", "create", "--spec", _private_file(files, json.dumps(spec), "bundle-")]
+            label, extra = f"supportbundle:create:{spec['name']}", {"name": spec["name"]}
+        elif action == "bundle-delete":
+            args = ["supportbundle", "delete", "--name", _hset.check_name(str(b.get("name") or ""), "bundle")]
+            label = f"supportbundle:delete:{b['name']}"
+        elif action == "kc-create":
+            _hset.kubeconfig_objects(b)
+            _kc_sweep()
+            token = _secrets.token_hex(16)                # le jeton de retrait n'est pas dans le chemin
+            wd = _capi_work_dir()
+            fd, out = tempfile.mkstemp(prefix="kc-", suffix=".yaml", dir=str(wd) if wd else None)
+            os.close(fd)
+            _KC_OUT[token] = (out, time.time())
+            args = ["kubeconfig", "create", "--name", b["name"], "--role", b["role"], "--duration", b.get("duration") or "24h",
+                    "--out", out, "--cluster-name", cluster]
+            if b.get("namespace"):
+                args += ["--namespace", b["namespace"]]
+            if b.get("description"):
+                args += ["--description", str(b["description"])[:500]]
+            label, extra = f"kubeconfig:create:{b['name']}", {"download": token}
+        else:
+            args = ["kubeconfig", "revoke", "--name", _hset.check_name(str(b.get("name") or ""), "kubeconfig")]
+            label = f"kubeconfig:revoke:{b['name']}"
+    except (ValueError, KeyError) as e:
+        for f in files:
+            Path(f).unlink(missing_ok=True)
+        return jsonify({"error": str(e)}), 400
+    run, err = _res_cli(cluster, kc, label, args, files)
+    return _res_reply(run, err, action=action, **extra)
+
+
+@app.route("/api/hv-support/<cluster>/kubeconfig/<token>")
+@requires_auth
+def api_hv_support_kubeconfig(cluster, token):
+    """Le kubeconfig délivré, une seule fois, puis effacé (il porte un jeton)."""
+    if ROLE_RANK.get(current_role(), 0) < ROLE_RANK["admin"]:
+        return jsonify({"error": "forbidden", "required": "admin"}), 403
+    _kc_sweep()
+    entry = _KC_OUT.pop(token, None) if re.fullmatch(r"[0-9a-f]{32}", token or "") else None
+    if not entry or not Path(entry[0]).is_file():
+        return jsonify({"error": "no such kubeconfig, or already downloaded"}), 404
+    text = Path(entry[0]).read_text()
+    Path(entry[0]).unlink(missing_ok=True)
+    return Response(text, mimetype="application/yaml",
+                    headers={"Content-Disposition": f'attachment; filename="{cluster}-kubeconfig.yaml"',
+                             "Cache-Control": "no-store"})
+
+
+@app.route("/api/hv-support/<cluster>/bundle/<name>/download")
+@requires_auth
+def api_hv_support_bundle_download(cluster, name):
+    """Le paquet de support de Harvester, par le proxy de service de
+    l'apiserver, en flux ; gardé sur le cluster (retain) pour être supprimé
+    à la main ou à son expiration."""
+    if ROLE_RANK.get(current_role(), 0) < ROLE_RANK["admin"]:
+        return jsonify({"error": "forbidden", "required": "admin"}), 403
+    kc = _kubectl_for_cluster(cluster)
+    if not kc:
+        return jsonify({"error": f"unknown cluster: {cluster}"}), 404
+    obj = _kubectl_json(kc, "get", _hset.K_BUNDLE, name, "-n", _hset.BUNDLE_NS, cluster=cluster)
+    if not obj or ((obj.get("status") or {}).get("state")) != "ready":
+        return jsonify({"error": "support bundle is not ready"}), 409
+    from kube import Kube as _Kube
+    stream = _Kube(kc).raw_stream(_hset.bundle_download_path(name))
+    fname = re.sub(r"[^A-Za-z0-9._-]+", "_", (obj.get("status") or {}).get("filename") or f"{name}.zip")[:160]
+    return Response(stream_with_context(stream), mimetype="application/zip",
+                    headers={"Content-Disposition": f'attachment; filename="{fname}"'})
 
 
 @app.route("/api/storage-options/<cluster>")

@@ -5045,3 +5045,17 @@ td.tpl-acts .btn + .btn { margin-left: 4px; }
 .ox-rule { display: grid; grid-template-columns: 0.9fr 1.4fr 1fr auto; gap: 6px; align-items: center; }
 .ox-dir > .btn { align-self: flex-start; }
 @media (max-width: 640px) { .ox-rule { grid-template-columns: 1fr 1fr; } }
+
+/* v1.67.0 : Advanced (réglages de Harvester, paquet de support, kubeconfigs) */
+.adv-groups { display: flex; flex-wrap: wrap; gap: 4px; padding: 6px 10px 0; }
+.adv-chip.is-on { border-color: var(--accent); background: var(--accent); color: var(--bg-panel); }
+.adv-table td { vertical-align: top; }
+.adv-val { display: inline-block; max-width: 420px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  vertical-align: bottom; font-size: 12px; }
+.adv-code { font-family: var(--mono, monospace); font-size: 12px; width: 100%; }
+.adv-danger { border: 1px solid var(--warn); border-radius: 8px; padding: 8px 10px; margin-bottom: 10px; }
+.adv-danger .bk-check { margin-top: 6px; }
+.adv-secrets { margin-top: 6px; }
+.adv-nss { display: flex; flex-wrap: wrap; gap: 4px 12px; max-height: 140px; overflow: auto; }
+.adv-progress { width: 90px; vertical-align: middle; }
+#tab-advanced .tpl-card + .tpl-card { margin-top: 12px; }

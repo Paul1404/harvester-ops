@@ -83,6 +83,10 @@
             <span class="tab-icon" data-icon="shield"></span>
             <span class="sidebar-label" data-i18n="tab.security">Security</span>
           </a>
+          <a class="tab tab-child" data-tab="advanced" href="#advanced" data-i18n-title="tab.advancedTip" title="Harvester settings, backup target, support bundles and kubeconfigs">
+            <span class="tab-icon" data-icon="settings"></span>
+            <span class="sidebar-label" data-i18n="tab.advanced">Advanced</span>
+          </a>
           <a class="tab tab-child" data-tab="startup" href="#startup" data-i18n-title="tab.startup" title="Startup">
             <span class="tab-icon icon-green" data-icon="play"></span>
             <span class="sidebar-label" data-i18n="tab.startup">Startup</span>
@@ -296,6 +300,21 @@
       </div>
       <div class="section-pane" data-pane="secrets" hidden><div class="resource-host" data-resource="secrets"></div></div>
       <div class="section-pane" data-pane="sshkeys" hidden><div class="resource-host" data-resource="sshkeys"></div></div>
+    </section>
+
+    <!-- v1.67.0 : ADVANCED (Settings, Support) -->
+    <section id="tab-advanced" class="tab-content" data-section="advanced">
+      <div class="shutdown-header">
+        <div class="automation-header-text">
+          <h1><span data-i18n="tab.advanced">Advanced</span> · <span class="cluster-name"></span></h1>
+        </div>
+        <div class="sub-tabs sub-tabs-inline" role="tablist">
+          <button type="button" class="sub-tab tip" role="tab" data-section-tab="settings" data-i18n-title="section.settingsTip" title="Every Harvester setting: its value, whether Harvester applied it, and a typed form to change or reset it"><span class="tab-icon" data-icon="settings"></span> <span data-i18n="section.settings">Settings</span></button>
+          <button type="button" class="sub-tab tip" role="tab" data-section-tab="support" data-i18n-title="section.supportTip" title="Harvester support bundles and kubeconfigs limited to a role, with a token that expires"><span class="tab-icon" data-icon="bundle"></span> <span data-i18n="section.support">Support</span></button>
+        </div>
+      </div>
+      <div class="section-pane" data-pane="settings" hidden><div class="na-host" data-adv="settings"></div></div>
+      <div class="section-pane" data-pane="support" hidden><div class="na-host" data-adv="support"></div></div>
     </section>
 
     <!-- SHUTDOWN -->
@@ -1018,6 +1037,7 @@
   <script src="/static/js/templates.js"></script>
   <script src="/static/js/netadmin.js"></script>
   <script src="/static/js/ovnextra.js"></script>
+  <script src="/static/js/advanced.js"></script>
 <script src="/static/js/versions.js"></script>
 <script src="/static/js/console-accounts.js"></script>
 <script src="/static/js/user-menu.js"></script>

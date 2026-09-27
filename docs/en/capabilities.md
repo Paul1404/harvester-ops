@@ -464,6 +464,9 @@ for whichever cluster is selected:
   never read into the page; the several hundred secrets the cluster uses
   for itself are hidden until asked for) and SSH Keys (fingerprint,
   validation, the VMs that received them).
+- **Advanced** (1.67.0, see below): Settings (every Harvester setting,
+  the backup target included) and Support (Harvester's support bundles and
+  kubeconfigs limited to a role).
 
 Every list filters by words, sorts by any column (click the header, again to
 reverse; the order is remembered), opens a row's details, and opens a VM
@@ -908,6 +911,73 @@ second NIC, an untagged VLAN, an external network on the LAN keeping six
 addresses; a VM in a VPC subnet reached over SSH from outside through an
 external IP and a DNAT rule; a policy that cut it and, once changed, let it
 through again; everything removed in kube-ovn's order.
+
+### Harvester settings, support bundles and kubeconfigs (1.67.0)
+
+The **Advanced** section, under Cluster, holds the rest of Harvester's
+Advanced and Support menus.
+
+- **Settings**: the forty-odd settings Harvester's UI shows, grouped
+  (general, network, security, performance, backup, upgrade, support, UI),
+  filtered by words or to the modified ones. Each row says whether the value
+  differs from the default and whether Harvester **applied** it (for a
+  setting with a controller: its hash annotation is up to date and its
+  `configured` condition carries no error, which is shown). Edit opens a
+  typed window (list, number with its bounds, yes/no, text, JSON, PEM); the
+  value is checked beforehand as Harvester's webhook would (log level, hotplug
+  ratio 1 to 20, overcommit of 100 % or more, NTP servers without `http://`
+  and without duplicates, grace period, memory overhead ratio, Longhorn v2
+  memory, JSON and PEM forms), then written and followed in the dock until
+  Harvester applies it. **Reset** goes back to the default (value removed).
+  Settings that can cut an access (automatic disk provisioning, which
+  formats disks; proxy, registry and RKE2 certificate rotation, which
+  re-apply the RKE2 plan on every node; the Rancher registration URL, whose
+  removal deletes the Rancher agent; TLS certificate and options; external
+  UI source) ask to tick "I understand the risk" first. The storage,
+  migration and RWX network settings open Network > Cluster Networks, where
+  their checks live; `server-version` is read-only; `ssl-parameters` is
+  marked as having no effect in Harvester 1.9 (replaced by
+  `traefik-default-tls-options`, which is shown).
+- **Secrets never reach the page**: the TLS private key, S3 keys, registry
+  passwords, proxy credentials and the token of the Rancher import URL (it
+  gives the cluster agent's credentials) are shown as `•••`. Left as they are, the
+  server puts the real ones back from the cluster when saving; S3 keys and
+  registry passwords, which Harvester itself removes from the setting once
+  applied, must be typed again.
+- **Backup target**: an NFS or S3 form (endpoint, bucket, region, keys,
+  virtual-hosted style, refresh interval) and **Test**, which asks Harvester
+  whether it reaches the saved target (its own health check). Harvester
+  connects to a new target before accepting it and refuses a change while a
+  backup or a restore runs.
+- **Support bundles** (Support tab): Harvester's own diagnostic archive.
+  New asks for a description (required by Harvester), an issue link, extra
+  namespaces and the timeouts; the collection is followed to its end, then
+  the archive downloads through the API server and stays on the cluster
+  until it expires or is deleted. The console's own anonymised bundle
+  remains in the top bar.
+- **Kubeconfigs** (Support tab): safer than Harvester's download, which
+  hands out an administrator's credentials. Each kubeconfig is a service
+  account bound to one chosen role (view, edit, admin, cluster-admin or
+  Harvester's own roles), on the whole cluster or one namespace, with a
+  token that expires (1 hour to 90 days). The form warns when the role
+  reads Secrets: on Harvester, `view` does, because Harvester adds its own
+  view rules to it, cloud-init data included. The file is downloaded once;
+  the console keeps no copy and never logs the token. **Revoke** deletes
+  the account: the token stops working at once.
+
+Administrators only, for every change and for the whole Support tab (a
+bundle holds the cluster's logs, a kubeconfig a token). On the command line:
+`harvester-resources setting set|reset|test-backup-target`,
+`harvester-resources supportbundle create|delete` and
+`harvester-resources kubeconfig create|revoke --out <file>`.
+
+Tried for real on harv1: the log level, the hotplug ratio (copied into
+KubeVirt by Harvester) and the grace period changed and reset; the backup
+target tested; a support bundle collected in under six minutes, downloaded
+and deleted; a kubeconfig with `view` on `default` that listed the VMs, was
+refused elsewhere, and stopped working as soon as it was revoked. On the
+three-node bench: an NFS backup target set, reached by Longhorn, tested and
+removed.
 
 ## 4. Cluster API: downstream RKE2 clusters (console + CLI)
 

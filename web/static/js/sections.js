@@ -1,7 +1,7 @@
 /**
  * harvester-ops — les sections de Harvester sous « Cluster » (v1.57.0)
  *
- * Storage, Network, Add-ons et Security, rangées comme dans l'interface de
+ * Storage, Network, Add-ons, Security et Advanced, rangées comme dans l'interface de
  * Harvester, un cluster à la fois. Chaque section a ses onglets ; un onglet
  * est soit une vue de blocs existante (volumes, réseaux, VPC, fabrique),
  * montée par App.mountTopology, soit une liste (ResourceViews).
@@ -23,7 +23,12 @@ const Sections = (() => {
     addons: { first: 'list', panes: { list: { list: 'addons' } } },
     security: { first: 'secrets', panes: { secrets: { list: 'secrets' },
                                            sshkeys: { list: 'sshkeys' } } },
+    // v1.67.0 : le menu Advanced de Harvester (réglages, paquet de support, kubeconfigs)
+    advanced: { first: 'settings', panes: { settings: { mod: 'Advanced' },
+                                            support: { mod: 'Advanced' } } },
   };
+  // les modules qui tiennent leur onglet eux-mêmes : un seul vit à la fois
+  const MODS = ['NetAdmin', 'Advanced'];
   const KEY = (sec) => `harvester_ops_section_${sec}`;
 
   function isSection(name) { return Object.prototype.hasOwnProperty.call(DEF, name); }
@@ -56,7 +61,7 @@ const Sections = (() => {
     const spec = DEF[sec].panes[pane];
     const cluster = window.App && App.getCurrentCluster();
     if (!cluster) return Promise.resolve();
-    if (window.NetAdmin && !spec.mod) NetAdmin.stop();
+    MODS.forEach(m => { if (window[m]) window[m].stop(); });
     if (spec.mod) {
       // v1.65.0 : un onglet tenu par son propre module (Cluster networks)
       if (window.ResourceViews) ResourceViews.stop();
@@ -85,7 +90,12 @@ const Sections = (() => {
     if (window.App && App.setTab) App.setTab(sec);
   }
 
-  function stopLists() { if (window.ResourceViews) ResourceViews.stop(); }
+  // v1.67.0 : quitter la section coupe aussi les modules (leur minuterie
+  // continuait d'interroger le cluster en arrière-plan)
+  function stopLists() {
+    if (window.ResourceViews) ResourceViews.stop();
+    MODS.forEach(m => { if (window[m]) window[m].stop(); });
+  }
 
   function init() {
     $$('[data-section-tab]').forEach(b => b.addEventListener('click', () => {

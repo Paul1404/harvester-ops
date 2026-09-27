@@ -3,7 +3,7 @@
 # Statuts : ok (fait), part (partiel), todo (manquant), plus (console seulement), na (hors périmètre).
 # v : version où c'est arrivé (ok/part) ou prévue (todo).
 
-AS_OF = "1.66.0"
+AS_OF = "1.67.0"
 DATE = "2026-09-27"
 
 S = []  # sections
@@ -21,8 +21,8 @@ sec("dashboard", "Tableau de bord", "Dashboard", "Dashboard", "Dashboard")
 r("ok", "1.2", "Compteurs nœuds, VMs, volumes", "Host, VM and volume counts", "Vue d'ensemble", "Overview tiles")
 r("ok", "1.62", "Capacité CPU, mémoire, stockage", "CPU, memory and storage capacity", "usage réel (metrics.k8s.io), réservé, stockage écrit et promis", "live usage (metrics.k8s.io), reserved, storage written and promised")
 r("ok", "1.62", "Événements du cluster (hôtes, VMs, volumes, images)", "Cluster events (hosts, VMs, volumes, images)", "onglet Événements de l'aperçu, filtre avertissements", "Overview Events tab, warnings filter")
-r("todo", "1.68", "Métriques du cluster et des VMs (rancher-monitoring)", "Cluster and VM metrics (rancher-monitoring)", "", "")
-r("todo", "1.68", "Bouton Mettre à jour Harvester", "Upgrade Harvester button", "", "")
+r("todo", "1.69", "Métriques du cluster et des VMs (rancher-monitoring)", "Cluster and VM metrics (rancher-monitoring)", "", "")
+r("todo", "1.69", "Bouton Mettre à jour Harvester", "Upgrade Harvester button", "", "")
 
 sec("hosts", "Hôtes", "Hosts", "Hosts", "Hosts")
 r("ok", "1.0", "Liste des hôtes, état, rôles", "Host list, state, roles")
@@ -80,7 +80,7 @@ r("ok", "1.62", "IP statique d'une carte (v1.9)", "Static IP of an interface (v1
 r("ok", "1.13", "Placement sur les nœuds (sélecteur, règles)", "Node scheduling (selector, rules)")
 r("ok", "1.13", "Affinité / anti-affinité entre VMs", "VM affinity / anti-affinity")
 r("ok", "1.15", "Périphériques PCI", "PCI devices")
-r("todo", "1.67", "Périphériques USB", "USB devices")
+r("todo", "1.68", "Périphériques USB", "USB devices")
 r("ok", "1.61", "Access credentials (mot de passe, clés par l'agent)", "Access credentials (password, keys through the agent)", "appliqués au prochain redémarrage", "applied at the next restart")
 r("ok", "1.62", "Volume de système de fichiers (virtiofs, v1.9)", "Filesystem volume (virtiofs, v1.9)", "à la création ; le noyau invité doit connaître virtiofs", "at creation; the guest kernel needs virtiofs")
 r("ok", "1.62", "Labels, labels d'instance, annotations", "Labels, instance labels, annotations")
@@ -147,37 +147,41 @@ r("plus", "1.66", "Santé de kube-ovn dite avant tout geste ; réparation d'une 
 sec("backups", "Sauvegardes et instantanés", "Backup and snapshots", "Backup & Snapshots", "Backup & Snapshots")
 r("part", "1.58", "Planifications (créer, suspendre, reprendre, supprimer)", "Schedules (create, suspend, resume, delete)", "pas encore modifier", "no edit yet")
 r("ok", "1.58", "Sauvegardes : restaurer en nouvelle VM ou remplacer", "Backups: restore new or replace existing")
-r("todo", "1.67", "Remplacer en supprimant les anciens volumes ; délai de gel du système de fichiers", "Replace deleting previous volumes; file system freeze deadline")
+r("todo", "1.68", "Remplacer en supprimant les anciens volumes ; délai de gel du système de fichiers", "Replace deleting previous volumes; file system freeze deadline")
 r("ok", "1.58", "Instantanés de VM : restaurer, supprimer", "VM snapshots: restore, delete")
 r("ok", "1.58", "Instantanés de volume : restaurer, supprimer", "Volume snapshots: restore, delete")
-r("part", "1.58", "Cible de sauvegarde (NFS, S3)", "Backup target (NFS, S3)", "affichée ; modifiable en 1.67", "shown; editable in 1.67")
+r("ok", "1.67", "Cible de sauvegarde (NFS, S3)", "Backup target (NFS, S3)", "formulaire NFS ou S3, test de connexion, retrait", "NFS or S3 form, connection test, removal")
 r("ok", "1.60", "YAML des sauvegardes et planifications", "Backup and schedule YAML")
 
 sec("monitoring", "Monitoring et logging", "Monitoring and logging", "Monitoring & Logging", "Monitoring & Logging")
 r("ok", "1.57", "Activer rancher-monitoring / rancher-logging et leur configuration", "Enable rancher-monitoring / rancher-logging and their configuration", "par les add-ons", "through add-ons")
-r("todo", "1.68", "Configurations Alertmanager (récepteurs)", "Alertmanager configurations (receivers)")
-r("todo", "1.68", "Flows, cluster flows, outputs, cluster outputs", "Flows, cluster flows, outputs, cluster outputs")
+r("todo", "1.69", "Configurations Alertmanager (récepteurs)", "Alertmanager configurations (receivers)")
+r("todo", "1.69", "Flows, cluster flows, outputs, cluster outputs", "Flows, cluster flows, outputs, cluster outputs")
 
 sec("advanced", "Avancé", "Advanced", "Advanced", "Advanced")
 r("ok", "1.64", "Templates : versions, par défaut, lancer une version, supprimer", "Templates: versions, default, launch a version, delete")
 r("ok", "1.64", "Clés SSH (créer, lire depuis un fichier, modifier, supprimer)", "SSH keys (create, read from file, edit, delete)")
 r("ok", "1.64", "Modèles de configuration cloud (user / network data)", "Cloud configuration templates (user / network data)")
 r("part", "1.64", "Classes de stockage (Longhorn v1, chiffrement, topologies, par défaut, supprimer)", "Storage classes (Longhorn v1, encryption, topologies, default, delete)", "LVM et Longhorn v2 proposés mais pas vérifiés en réel (absents des bancs)", "LVM and Longhorn v2 offered but not verified for real (absent from the benches)")
-r("part", "1.15", "Périphériques PCI", "PCI devices", "liste et attache aux VMs ; activer le passthrough en 1.67", "list and attach to VMs; enable passthrough in 1.67")
-r("todo", "1.67", "SR-IOV réseau (nombre de VF)", "SR-IOV network devices (VF count)")
-r("todo", "1.67", "GPU SR-IOV, vGPU, configurations MIG", "SR-IOV GPU, vGPU, MIG configurations", "à documenter comme non vérifié : aucun GPU compatible sous Harvester", "to be documented as unverified: no compatible GPU under Harvester")
-r("todo", "1.67", "Périphériques USB (passthrough)", "USB devices (passthrough)")
+r("part", "1.15", "Périphériques PCI", "PCI devices", "liste et attache aux VMs ; activer le passthrough en 1.68", "list and attach to VMs; enable passthrough in 1.68")
+r("todo", "1.68", "SR-IOV réseau (nombre de VF)", "SR-IOV network devices (VF count)")
+r("todo", "1.68", "GPU SR-IOV, vGPU, configurations MIG", "SR-IOV GPU, vGPU, MIG configurations", "à documenter comme non vérifié : aucun GPU compatible sous Harvester", "to be documented as unverified: no compatible GPU under Harvester")
+r("todo", "1.68", "Périphériques USB (passthrough)", "USB devices (passthrough)")
 r("ok", "1.57", "Add-ons : activer, désactiver, configurer", "Add-ons: enable, disable, configure")
 r("ok", "1.64", "Secrets (Opaque, TLS, Basic, Registry, SSH, chiffrement : créer, nouvelles valeurs, supprimer)", "Secrets (Opaque, TLS, Basic, Registry, SSH, encryption: create, new values, delete)")
-r("todo", "1.67", "Réglages de Harvester (les 40 : NTP, proxy, CA, TLS, overcommit…)", "Harvester settings (all 40: NTP, proxy, CA, TLS, overcommit…)")
+r("ok", "1.67", "Réglages de Harvester (les 40 : NTP, proxy, CA, TLS, overcommit…)", "Harvester settings (all 40: NTP, proxy, CA, TLS, overcommit…)",
+  "formulaires typés, contrôlés d'avance comme le webhook, état appliqué, secrets masqués, avertissement des réglages qui coupent un accès",
+  "typed forms, checked beforehand as the webhook would, applied state, masked secrets, warning on settings that can cut an access")
 
 sec("upgrade", "Mise à jour de Harvester", "Harvester upgrade", "Upgrade", "Upgrade")
-r("todo", "1.68", "Mettre à jour (version, notes, suivi par nœud, journaux)", "Upgrade (version, notes, per-node progress, logs)")
-r("todo", "1.68", "Mise à jour airgap (image envoyée)", "Air-gapped upgrade (uploaded image)")
+r("todo", "1.69", "Mettre à jour (version, notes, suivi par nœud, journaux)", "Upgrade (version, notes, per-node progress, logs)")
+r("todo", "1.69", "Mise à jour airgap (image envoyée)", "Air-gapped upgrade (uploaded image)")
 
 sec("support", "Support", "Support", "Support", "Support")
-r("part", "1.1", "Bundle de support", "Support bundle", "celui de la console (anonymisé) ; celui de Harvester en 1.67", "the console's own (anonymised); Harvester's in 1.67")
-r("todo", "1.67", "Télécharger le kubeconfig du cluster", "Download the cluster kubeconfig")
+r("ok", "1.67", "Bundle de support", "Support bundle", "celui de Harvester (créer, suivre, télécharger, supprimer) et celui de la console (anonymisé)", "Harvester's (create, follow, download, delete) and the console's own (anonymised)")
+r("ok", "1.67", "Télécharger le kubeconfig du cluster", "Download the cluster kubeconfig",
+  "plus sûr que celui de Harvester : rôle et namespace choisis, jeton qui expire, révocation, fichier remis une seule fois",
+  "safer than Harvester's: chosen role and namespace, expiring token, revocation, file handed over once")
 r("na", "", "Accès aux interfaces Rancher et Longhorn embarquées", "Access embedded Rancher and Longhorn UIs", "hors périmètre : la console couvre ces vues", "out of scope: the console covers these views")
 
 sec("users", "Utilisateurs et accès", "Users and access", "Authentication / Rancher", "Authentication / Rancher")
@@ -189,7 +193,7 @@ r("part", "1.50", "Rôles de virtualisation (chart Harvester RBAC, Rancher 2.14.
   "Virtualization roles (Harvester RBAC chart, Rancher 2.14.1, experimental)",
   "appliqués d'office par le jeton Rancher ; vérifié avec un membre du cluster, pas encore avec les rôles de ce chart",
   "applied by the Rancher token; checked with a cluster member, not yet with this chart's roles")
-r("todo", "1.68", "Projets Rancher : namespaces rangés par projet, quotas de ressources",
+r("todo", "1.69", "Projets Rancher : namespaces rangés par projet, quotas de ressources",
   "Rancher projects: namespaces grouped by project, resource quotas")
 r("part", "1.31", "Membres du cluster", "Cluster members", "comptes du cluster : activer, désactiver, admin ; pas encore les rôles Rancher", "cluster accounts: enable, disable, admin; Rancher roles not yet")
 r("plus", "1.57", "Connexion obligatoire, comptes et rôles propres à la console",
@@ -197,7 +201,7 @@ r("plus", "1.57", "Connexion obligatoire, comptes et rôles propres à la consol
   "sans Rancher ; Harvester seul n'a qu'un compte admin", "without Rancher; standalone Harvester has a single admin")
 
 sec("addonmenus", "Menus apportés par des add-ons", "Menus brought by add-ons", "VM Imports / VM Migration", "VM Imports / VM Migration")
-r("todo", "1.68", "Imports de VM (VMware, OpenStack, OVA)", "VM imports (VMware, OpenStack, OVA)")
+r("todo", "1.69", "Imports de VM (VMware, OpenStack, OVA)", "VM imports (VMware, OpenStack, OVA)")
 r("na", "", "Migration par forklift-operator", "Migration through forklift-operator", "add-on absent de la documentation 1.9", "add-on missing from the 1.9 docs")
 
 sec("console", "Ce que la console ajoute", "What the console adds", "", "")

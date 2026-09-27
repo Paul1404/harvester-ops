@@ -94,6 +94,13 @@ il s'utilise aussi seul.
   harvester-resources netsetting set --cluster harv1 --name storage-network|vm-migration-network|rwx-network --spec s.json
   harvester-resources netsetting clear --cluster harv1 --name storage-network
 
+  harvester-resources setting set --cluster harv1 --name log-level --value-file v.txt     (valeur dans un fichier privé)
+  harvester-resources setting reset --cluster harv1 --name log-level
+  harvester-resources setting test-backup-target --cluster harv1
+  harvester-resources supportbundle create --cluster harv1 --spec b.json ; supportbundle delete --name bundle-x
+  harvester-resources kubeconfig create --cluster harv1 --name ci --role view [--namespace default] --duration 24h --out ci.yaml
+  harvester-resources kubeconfig revoke --cluster harv1 --name ci
+
 Sorties : 0 fait, 1 échec, 2 refusé par le contrôle, 3 annulé. Les étapes
 s'écrivent sur stderr en `STEP_EVENT|étape|statut|message`, que la console
 relaie au dock.
@@ -118,6 +125,7 @@ import hv_ns as hn  # noqa: E402
 import hv_storage as hs  # noqa: E402
 import hv_advanced as hadv  # noqa: E402
 import hv_net as hnet  # noqa: E402
+import hv_settings as hset  # noqa: E402
 
 EXIT_OK, EXIT_FAIL, EXIT_BLOCKED, EXIT_CANCELLED = 0, 1, 2, 3
 K_ADDON = "addons.harvesterhci.io"
@@ -2350,6 +2358,104 @@ def cmd_netsetting(args):
     return _wait(kube, hnet.K_SETTING, None, kind, done, args.timeout, label="netsetting")
 
 
+# ---------------------------------------------------------------------------
+# v1.67.0 : réglages de Harvester, paquet de support, kubeconfig sûr
+# ---------------------------------------------------------------------------
+
+def cmd_setting(args):
+    kube = kube_from(args)
+    if args.action == "test-backup-target":
+        try:
+            kube.run("get", "--raw", hset.BACKUP_HEALTH_PATH, timeout=60)
+        except KubeError as e:
+            step("setting", "error", "the backup target does not answer: " + refusal(e)[:240])
+            return EXIT_FAIL
+        step("setting", "done", "the backup target answers")
+        return EXIT_OK
+    name = args.name
+    cur = kube.get(hset.K_SETTING, None, name)
+    if cur is None:
+        raise ValueError(f"no setting {name}")
+    if args.action == "reset":
+        value = ""
+        hset.validate(name, "")
+    else:
+        raw = Path(args.value_file).read_text() if args.value_file else ""
+        value = hset.validate(name, hset.unmask(name, raw, cur.get("value") or ""))
+    before = (cur.get("metadata", {}).get("annotations") or {}).get(hset.HASH_ANN)
+    kube.patch(hset.K_SETTING, None, name, {"value": value if value else None})
+    step("setting", "running", f"{name}: " + ("back to the default" if not value else "new value written"))
+    t0 = time.time()
+    return _wait(kube, hset.K_SETTING, None, name,
+                 lambda o: hset.settled(o or {}, before, elapsed=time.time() - t0), args.timeout, label="setting")
+
+
+def cmd_supportbundle(args):
+    kube = kube_from(args)
+    if args.action == "delete":
+        kube.delete(hset.K_BUNDLE, hset.BUNDLE_NS, args.name)
+        return _wait(kube, hset.K_BUNDLE, hset.BUNDLE_NS, args.name,
+                     lambda o: (True, f"support bundle {args.name} deleted") if o is None else (None, "deleting"),
+                     120, label="supportbundle")
+    obj = hset.bundle_manifest(_read_json(args.spec))
+    name = obj["metadata"]["name"]
+    for ns in obj["spec"].get("extraCollectionNamespaces") or []:
+        if kube.get("namespaces", None, ns) is None:
+            raise ValueError(f"namespace {ns} not found")
+    kube.create(obj)
+    step("supportbundle", "running", f"support bundle {name} requested")
+
+    def done(o):
+        st = (o or {}).get("status") or {}
+        if o is None:
+            return False, "the support bundle disappeared"
+        if st.get("state") == "ready":
+            return True, f"{name} ready: {st.get('filename')} ({st.get('filesize') or 0} bytes)"
+        if st.get("state") == "error":
+            return False, f"{name} failed"
+        return None, f"collecting {st.get('progress') or 0} %"
+    return _wait(kube, hset.K_BUNDLE, hset.BUNDLE_NS, name, done, args.timeout, label="supportbundle")
+
+
+def cmd_kubeconfig(args):
+    kube = kube_from(args)
+    if args.action == "revoke":
+        sa = kube.get("serviceaccounts", hset.KC_NS, f"kc-{args.name}")
+        if sa is None:
+            raise ValueError(f"no kubeconfig {args.name}")
+        for kind in ("clusterrolebindings", "rolebindings"):
+            for b in kube.list(kind, None, selector=f"{hset.KC_LABEL}={args.name}"):
+                kube.delete(kind, b["metadata"].get("namespace"), b["metadata"]["name"])
+        kube.delete("serviceaccounts", hset.KC_NS, f"kc-{args.name}")
+        step("kubeconfig", "done", f"kubeconfig {args.name} revoked: its token no longer works")
+        return EXIT_OK
+    sa, binding, seconds = hset.kubeconfig_objects({"name": args.name, "role": args.role, "namespace": args.namespace or "",
+                                                    "duration": args.duration, "description": args.description or ""})
+    if kube.get("clusterroles", None, args.role) is None:
+        raise ValueError(f"the role {args.role} does not exist on this cluster")
+    if args.namespace and kube.get("namespaces", None, args.namespace) is None:
+        raise ValueError(f"no namespace {args.namespace}")
+    if kube.get("serviceaccounts", hset.KC_NS, sa["metadata"]["name"]) is not None:
+        raise ValueError(f"a kubeconfig {args.name} exists already: revoke it first")
+    if kube.get("namespaces", None, hset.KC_NS) is None:
+        kube.create({"apiVersion": "v1", "kind": "Namespace",
+                     "metadata": {"name": hset.KC_NS, "labels": {"harvester-ops.io/managed": "true"}}})
+    kube.create(sa)
+    kube.create(binding)
+    step("kubeconfig", "running", f"account kc-{args.name} with the role {args.role} "
+                                  + (f"in {args.namespace}" if args.namespace else "on the cluster"))
+    token = kube.run("create", "token", sa["metadata"]["name"], "-n", hset.KC_NS, f"--duration={seconds}s").strip()
+    vip = ((kube.get("configmaps", "harvester-system", "vip") or {}).get("data") or {}).get("ip") or kube.server_host()
+    ca = ((kube.get("configmaps", hset.KC_NS, "kube-root-ca.crt") or {}).get("data") or {}).get("ca.crt") or ""
+    text = hset.kubeconfig_yaml(args.cluster_name or args.cluster or "harvester", f"https://{vip}:6443", ca, token,
+                                sa["metadata"]["name"])
+    out = Path(args.out)
+    out.touch(mode=0o600)
+    out.write_text(text)
+    step("kubeconfig", "done", f"kubeconfig {args.name} written, expires {sa['metadata']['annotations'][hset.KC_EXPIRES]}")
+    return EXIT_OK
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(prog="harvester-resources", description=__doc__.split("\n\n")[0])
     sub = ap.add_subparsers(dest="cmd", required=True)
@@ -2687,6 +2793,37 @@ def main(argv=None):
     sp.add_argument("--name", required=True, choices=("storage-network", "vm-migration-network", "rwx-network"))
     sp.add_argument("--spec", help="set: JSON request")
     sp.add_argument("--timeout", type=int, default=1800)
+    # v1.67.0 : réglages, paquet de support, kubeconfig
+    sp = sub.add_parser("setting", help="change or reset a Harvester setting; test the backup target")
+    sp.set_defaults(fn=cmd_setting)
+    sp.add_argument("action", choices=("set", "reset", "test-backup-target"))
+    sp.add_argument("--cluster")
+    sp.add_argument("--kubeconfig")
+    sp.add_argument("--name")
+    sp.add_argument("--value-file", help="set: the new value, in a file (it may hold secrets)")
+    sp.add_argument("--timeout", type=int, default=300)
+
+    sp = sub.add_parser("supportbundle", help="Harvester's support bundle")
+    sp.set_defaults(fn=cmd_supportbundle)
+    sp.add_argument("action", choices=("create", "delete"))
+    sp.add_argument("--cluster")
+    sp.add_argument("--kubeconfig")
+    sp.add_argument("--spec")
+    sp.add_argument("--name")
+    sp.add_argument("--timeout", type=int, default=3600)
+
+    sp = sub.add_parser("kubeconfig", help="a kubeconfig limited to a role, with a token that expires")
+    sp.set_defaults(fn=cmd_kubeconfig)
+    sp.add_argument("action", choices=("create", "revoke"))
+    sp.add_argument("--cluster")
+    sp.add_argument("--kubeconfig")
+    sp.add_argument("--name", required=True)
+    sp.add_argument("--role", default="view")
+    sp.add_argument("--namespace", default="", help="create: limit the role to this namespace")
+    sp.add_argument("--duration", default="24h")
+    sp.add_argument("--description")
+    sp.add_argument("--out", help="create: where to write the file (mode 0600)")
+    sp.add_argument("--cluster-name", help="create: the cluster name written in the file")
     args = ap.parse_args(argv)
     signal.signal(signal.SIGTERM, _on_signal)
     try:

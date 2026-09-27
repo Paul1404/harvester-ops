@@ -13,6 +13,11 @@ const Sections = (() => {
                                           images: { list: 'images' },
                                           classes: { list: 'storageclasses' } } },
     network: { first: 'vmnets', panes: { vmnets: { board: 'network' },
+                                         // v1.65.0 : le menu Networks de Harvester
+                                         clusternets: { mod: 'NetAdmin' },
+                                         lbs: { list: 'loadbalancers' },
+                                         pools: { list: 'ippools' },
+                                         hostnets: { list: 'hostnetworks' },
                                          overlay: { board: 'vpc' },
                                          underlay: { board: 'fabric' } } },
     addons: { first: 'list', panes: { list: { list: 'addons' } } },
@@ -51,6 +56,14 @@ const Sections = (() => {
     const spec = DEF[sec].panes[pane];
     const cluster = window.App && App.getCurrentCluster();
     if (!cluster) return Promise.resolve();
+    if (window.NetAdmin && !spec.mod) NetAdmin.stop();
+    if (spec.mod) {
+      // v1.65.0 : un onglet tenu par son propre module (Cluster networks)
+      if (window.ResourceViews) ResourceViews.stop();
+      if (window.App) App.stopBoards(null);
+      const host = document.querySelector(`#tab-${sec} .section-pane[data-pane="${pane}"] .na-host`);
+      return window[spec.mod] && host ? window[spec.mod].start(cluster, host) : Promise.resolve();
+    }
     if (spec.board) {
       if (window.ResourceViews) ResourceViews.stop();
       return App.mountTopology(spec.board) || Promise.resolve();

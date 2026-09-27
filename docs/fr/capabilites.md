@@ -518,9 +518,11 @@ connaissent de Harvester, pour le cluster choisi :
   s'en servent) et Classes de stockage (répliques, récupération, liaison,
   extension, l'image pour laquelle une classe a été faite, combien de
   volumes l'utilisent).
-- **Réseau** : Réseaux des VMs (un bloc par réseau), Réseaux overlay (les
-  VPC et subnets kube-ovn, avec leurs formulaires) et Réseaux underlay (la
-  fabrique : cartes physiques, switchs virtuels, LLDP). Ces vues ont quitté
+- **Réseau** : Réseaux des VMs (un bloc par réseau), Réseaux de cluster,
+  Équilibreurs de charge, Pools d'adresses et Réseaux d'hôte (1.65.0, voir
+  plus bas), Réseaux overlay (les VPC et subnets kube-ovn, avec leurs
+  formulaires) et Réseaux underlay (la fabrique : cartes physiques, switchs
+  virtuels, LLDP). Ces vues ont quitté
   l'Aperçu, qui garde Métriques et la vue Cluster.
 - **Add-ons** : chaque add-on de Harvester, son chart et sa version, son
   état, et Activer / Désactiver pour les administrateurs, suivi dans le dock
@@ -911,6 +913,66 @@ banc à trois nœuds.
   par une ligne de commande.
 - **Clés SSH** : **modifier** la clé publique et la description ; Harvester
   calcule la nouvelle empreinte.
+
+### Réseaux, comme dans Harvester (1.65.0)
+
+La section Network suit le menu Networks de Harvester, en onglets : VM
+Networks, Cluster Networks, Load Balancers, IP Pools, Host Networks, puis
+les onglets Overlay et Underlay de kube-ovn. Tout changement est réservé
+aux administrateurs, contrôlé avant de partir et suivi dans le dock.
+
+- **Réseaux de cluster** : un bloc par réseau de cluster (son pont, son MTU,
+  s'il est prêt) avec ses **configurations** : quelles cartes de quels hôtes
+  forment son bond (tous les hôtes, un hôte, ou des hôtes par étiquettes),
+  le mode du bond, miimon et le MTU, et l'état sur chaque hôte tel que
+  l'agent de Harvester le donne. Seules les cartes présentes et libres sur
+  tous les hôtes choisis sont proposées ; jamais celle de la gestion. Une
+  configuration se modifie, se **déplace vers un autre réseau de cluster**
+  (Migrate de Harvester) ou se supprime ; un réseau de cluster se supprime
+  quand il n'a plus ni configuration ni réseau de VM. Une VM en marche sur
+  le réseau bloque ce que Harvester refuserait (un nouveau lien, un hôte qui
+  sort), pas un changement de description. L'agent d'un hôte peut signaler
+  une première erreur puis réussir : la console attend une minute avant d'y
+  voir un échec.
+- **Réseaux de stockage, de migration des VMs et RWX** : trois tuiles en
+  tête de l'onglet, chacune sur le réseau de gestion ou sur un VLAN dédié
+  d'un réseau de cluster (plage, adresses exclues ; pour le stockage, un
+  VLAN qui lui est réservé ; pour RWX, partagé avec le stockage). Le réseau
+  de stockage est refusé tant qu'une VM tourne, comme Harvester l'exige ; la
+  console attend ensuite que Harvester le dise appliqué (il arrête la
+  supervision, attend que chaque volume soit détaché, puis donne le nouveau
+  réseau à Longhorn).
+- **Réseaux de VM** : VLAN, sans étiquette, et **trunk** (plages de VLAN
+  comme `100-199, 300`) ; une route (DHCP, ou un réseau et une passerelle
+  manuels, avec un serveur DHCP facultatif) et une description. **Modifier**
+  sur le bloc d'un réseau change sa description et sa route, et son VLAN ou
+  ses plages de trunk tant qu'aucune de ses VMs ne tourne. Harvester sonde
+  la passerelle d'une route connue ; le résultat est montré.
+- **Équilibreurs de charge** : devant les VMs en marche d'un namespace
+  choisies par étiquettes (`clé=valeur[,valeur]` par ligne), avec une
+  adresse du **DHCP** ou d'un **pool** (fixé à la création), des écouteurs
+  (port, et port sur les VMs, TCP ou UDP) et une sonde TCP facultative. La
+  liste montre l'adresse, les VMs derrière et l'état.
+- **Pools d'adresses** : des plages (sous-réseau, première et dernière
+  adresse, passerelle), un réseau de VM facultatif, une priorité et un
+  namespace (`*` rend le pool global). Une adresse encore tenue par un
+  équilibreur disparu se **libère** depuis la fenêtre du pool.
+- **Réseaux d'hôte** : une interface `<réseau>-br.<VLAN>` sur chaque hôte
+  choisi, en DHCP ou avec une adresse fixe par hôte (même sous-réseau),
+  éventuellement underlay des réseaux overlay. Harvester ne pose aucune
+  route.
+
+En ligne de commande : `harvester-resources clusternetwork`, `netconfig`,
+`vmnet`, `lb`, `ippool`, `hostnet` et `netsetting`.
+
+Essayé pour de vrai sur le banc à trois nœuds : réseau de cluster et
+configuration créés, MTU changé puis rétabli, configuration déplacée vers un
+autre réseau de cluster et revenue, réseaux VLAN, trunk et sans étiquette
+créés et modifiés (sonde de passerelle répondue), un réseau d'hôte fixe sur
+les trois hôtes, le réseau de migration prouvé par une migration à chaud,
+les réseaux de stockage et RWX appliqués VMs arrêtées puis rétablis, des
+équilibreurs par DHCP et par pool joints en SSH depuis l'extérieur, une
+adresse orpheline libérée.
 
 ## 4. Cluster API : clusters RKE2 en aval (console + CLI)
 

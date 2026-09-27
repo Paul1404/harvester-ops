@@ -1,8 +1,8 @@
 # Parité avec l'interface de Harvester
 
-État au 2026-09-27, console **v1.64.0**, comparée à l'interface de **Harvester v1.9** (menus relevés dans le code de harvester-ui-extension v1.9.0 et la documentation v1.9).
+État au 2026-09-27, console **v1.65.0**, comparée à l'interface de **Harvester v1.9** (menus relevés dans le code de harvester-ui-extension v1.9.0 et la documentation v1.9).
 
-Sur 135 fonctions de l'interface de Harvester : **100 faites**, **11 partielles**, **24 manquantes** ; 2 hors périmètre. Une fonction manquante porte la version où elle est prévue.
+Sur 135 fonctions de l'interface de Harvester : **108 faites**, **9 partielles**, **18 manquantes** ; 2 hors périmètre. Une fonction manquante porte la version où elle est prévue.
 
 Statuts : Fait, Partiel (ce qui manque est dit), Manquant (version prévue), Console seulement (ce que Harvester n'a pas), Hors périmètre.
 
@@ -15,8 +15,8 @@ Menu Harvester : *Dashboard*
 | Compteurs nœuds, VMs, volumes | Fait | 1.2 | Vue d'ensemble |
 | Capacité CPU, mémoire, stockage | Fait | 1.62 | usage réel (metrics.k8s.io), réservé, stockage écrit et promis |
 | Événements du cluster (hôtes, VMs, volumes, images) | Fait | 1.62 | onglet Événements de l'aperçu, filtre avertissements |
-| Métriques du cluster et des VMs (rancher-monitoring) | Manquant | prévue 1.67 |  |
-| Bouton Mettre à jour Harvester | Manquant | prévue 1.67 |  |
+| Métriques du cluster et des VMs (rancher-monitoring) | Manquant | prévue 1.68 |  |
+| Bouton Mettre à jour Harvester | Manquant | prévue 1.68 |  |
 
 ## Hôtes
 
@@ -89,7 +89,7 @@ Menu Harvester : *Create / Edit VM*
 | Placement sur les nœuds (sélecteur, règles) | Fait | 1.13 |  |
 | Affinité / anti-affinité entre VMs | Fait | 1.13 |  |
 | Périphériques PCI | Fait | 1.15 |  |
-| Périphériques USB | Manquant | prévue 1.66 |  |
+| Périphériques USB | Manquant | prévue 1.67 |  |
 | Access credentials (mot de passe, clés par l'agent) | Fait | 1.61 | appliqués au prochain redémarrage |
 | Volume de système de fichiers (virtiofs, v1.9) | Fait | 1.62 | à la création ; le noyau invité doit connaître virtiofs |
 | Labels, labels d'instance, annotations | Fait | 1.62 |  |
@@ -153,15 +153,15 @@ Menu Harvester : *Networks*
 
 | Fonction | Statut | Version | Précision |
 |---|---|---|---|
-| Réseaux de cluster et configurations (liaisons, bond, MTU) | Partiel | 1.39 | vue Fabrique en lecture ; création en 1.65 |
-| Déplacer une configuration vers un autre réseau de cluster | Manquant | prévue 1.65 |  |
-| Réseaux de VMs (VLAN, sans étiquette) | Partiel | 1.59 | créer, supprimer ; pas encore modifier ni le mode trunk |
+| Réseaux de cluster et configurations (cartes, bond, MTU, hôtes visés, état par hôte) | Fait | 1.65 |  |
+| Déplacer une configuration vers un autre réseau de cluster | Fait | 1.65 |  |
+| Réseaux de VMs (VLAN, sans étiquette, trunk : créer, modifier, supprimer) | Fait | 1.65 |  |
 | Réseau overlay (kube-ovn) | Fait | 1.49 |  |
-| Mode trunk (plages de VLAN), serveur DHCP | Manquant | prévue 1.65 |  |
-| Load balancers | Manquant | prévue 1.65 |  |
-| IP pools | Manquant | prévue 1.65 |  |
-| Réseaux d'hôte (HostNetworkConfig) | Manquant | prévue 1.65 |  |
-| Réseau de stockage, de migration, RWX | Manquant | prévue 1.65 |  |
+| Mode trunk (plages de VLAN), route et serveur DHCP | Fait | 1.65 |  |
+| Load balancers | Fait | 1.65 |  |
+| IP pools | Fait | 1.65 |  |
+| Réseaux d'hôte (HostNetworkConfig) | Fait | 1.65 |  |
+| Réseau de stockage, de migration, RWX | Fait | 1.65 |  |
 | Chemin réseau d'une VM jusqu'au switch (LLDP) | Console seulement | 1.36 | propre à la console |
 
 ## Réseaux overlay et underlay (kube-ovn)
@@ -172,9 +172,9 @@ Menu Harvester : *Overlay / Underlay Networks*
 |---|---|---|---|
 | VPC : créer, routes statiques, peerings | Fait | 1.49 |  |
 | Sous-réseaux (CIDR, passerelle, NAT sortant, DHCP, ACL) | Fait | 1.49 |  |
-| Politiques réseau (isolation des VMs) | Manquant | prévue 1.65 |  |
-| Passerelles NAT, IP externes, règles SNAT / DNAT | Manquant | prévue 1.65 |  |
-| Underlay : réseaux fournisseurs, VLANs | Manquant | prévue 1.65 |  |
+| Politiques réseau (isolation des VMs) | Manquant | prévue 1.66 |  |
+| Passerelles NAT, IP externes, règles SNAT / DNAT | Manquant | prévue 1.66 |  |
+| Underlay : réseaux fournisseurs, VLANs | Manquant | prévue 1.66 |  |
 
 ## Sauvegardes et instantanés
 
@@ -184,10 +184,10 @@ Menu Harvester : *Backup & Snapshots*
 |---|---|---|---|
 | Planifications (créer, suspendre, reprendre, supprimer) | Partiel | 1.58 | pas encore modifier |
 | Sauvegardes : restaurer en nouvelle VM ou remplacer | Fait | 1.58 |  |
-| Remplacer en supprimant les anciens volumes ; délai de gel du système de fichiers | Manquant | prévue 1.66 |  |
+| Remplacer en supprimant les anciens volumes ; délai de gel du système de fichiers | Manquant | prévue 1.67 |  |
 | Instantanés de VM : restaurer, supprimer | Fait | 1.58 |  |
 | Instantanés de volume : restaurer, supprimer | Fait | 1.58 |  |
-| Cible de sauvegarde (NFS, S3) | Partiel | 1.58 | affichée ; modifiable en 1.66 |
+| Cible de sauvegarde (NFS, S3) | Partiel | 1.58 | affichée ; modifiable en 1.67 |
 | YAML des sauvegardes et planifications | Fait | 1.60 |  |
 
 ## Monitoring et logging
@@ -197,8 +197,8 @@ Menu Harvester : *Monitoring & Logging*
 | Fonction | Statut | Version | Précision |
 |---|---|---|---|
 | Activer rancher-monitoring / rancher-logging et leur configuration | Fait | 1.57 | par les add-ons |
-| Configurations Alertmanager (récepteurs) | Manquant | prévue 1.67 |  |
-| Flows, cluster flows, outputs, cluster outputs | Manquant | prévue 1.67 |  |
+| Configurations Alertmanager (récepteurs) | Manquant | prévue 1.68 |  |
+| Flows, cluster flows, outputs, cluster outputs | Manquant | prévue 1.68 |  |
 
 ## Avancé
 
@@ -210,13 +210,13 @@ Menu Harvester : *Advanced*
 | Clés SSH (créer, lire depuis un fichier, modifier, supprimer) | Fait | 1.64 |  |
 | Modèles de configuration cloud (user / network data) | Fait | 1.64 |  |
 | Classes de stockage (Longhorn v1, chiffrement, topologies, par défaut, supprimer) | Partiel | 1.64 | LVM et Longhorn v2 proposés mais pas vérifiés en réel (absents des bancs) |
-| Périphériques PCI | Partiel | 1.15 | liste et attache aux VMs ; activer le passthrough en 1.66 |
-| SR-IOV réseau (nombre de VF) | Manquant | prévue 1.66 |  |
-| GPU SR-IOV, vGPU, configurations MIG | Manquant | prévue 1.66 | à documenter comme non vérifié : aucun GPU compatible sous Harvester |
-| Périphériques USB (passthrough) | Manquant | prévue 1.66 |  |
+| Périphériques PCI | Partiel | 1.15 | liste et attache aux VMs ; activer le passthrough en 1.67 |
+| SR-IOV réseau (nombre de VF) | Manquant | prévue 1.67 |  |
+| GPU SR-IOV, vGPU, configurations MIG | Manquant | prévue 1.67 | à documenter comme non vérifié : aucun GPU compatible sous Harvester |
+| Périphériques USB (passthrough) | Manquant | prévue 1.67 |  |
 | Add-ons : activer, désactiver, configurer | Fait | 1.57 |  |
 | Secrets (Opaque, TLS, Basic, Registry, SSH, chiffrement : créer, nouvelles valeurs, supprimer) | Fait | 1.64 |  |
-| Réglages de Harvester (les 40 : NTP, proxy, CA, TLS, overcommit…) | Manquant | prévue 1.66 |  |
+| Réglages de Harvester (les 40 : NTP, proxy, CA, TLS, overcommit…) | Manquant | prévue 1.67 |  |
 
 ## Mise à jour de Harvester
 
@@ -224,8 +224,8 @@ Menu Harvester : *Upgrade*
 
 | Fonction | Statut | Version | Précision |
 |---|---|---|---|
-| Mettre à jour (version, notes, suivi par nœud, journaux) | Manquant | prévue 1.67 |  |
-| Mise à jour airgap (image envoyée) | Manquant | prévue 1.67 |  |
+| Mettre à jour (version, notes, suivi par nœud, journaux) | Manquant | prévue 1.68 |  |
+| Mise à jour airgap (image envoyée) | Manquant | prévue 1.68 |  |
 
 ## Support
 
@@ -233,8 +233,8 @@ Menu Harvester : *Support*
 
 | Fonction | Statut | Version | Précision |
 |---|---|---|---|
-| Bundle de support | Partiel | 1.1 | celui de la console (anonymisé) ; celui de Harvester en 1.66 |
-| Télécharger le kubeconfig du cluster | Manquant | prévue 1.66 |  |
+| Bundle de support | Partiel | 1.1 | celui de la console (anonymisé) ; celui de Harvester en 1.67 |
+| Télécharger le kubeconfig du cluster | Manquant | prévue 1.67 |  |
 | Accès aux interfaces Rancher et Longhorn embarquées | Hors périmètre |  | hors périmètre : la console couvre ces vues |
 
 ## Utilisateurs et accès
@@ -245,7 +245,7 @@ Menu Harvester : *Authentication / Rancher*
 |---|---|---|---|
 | Connexion par Rancher (ses fournisseurs d'identité), droits de la personne | Fait | 1.50 | comme Harvester importé dans Rancher (Virtualization Management) : les appels partent avec le jeton de la personne, les droits Rancher du cluster et du projet s'appliquent |
 | Rôles de virtualisation (chart Harvester RBAC, Rancher 2.14.1, expérimental) | Partiel | 1.50 | appliqués d'office par le jeton Rancher ; vérifié avec un membre du cluster, pas encore avec les rôles de ce chart |
-| Projets Rancher : namespaces rangés par projet, quotas de ressources | Manquant | prévue 1.67 |  |
+| Projets Rancher : namespaces rangés par projet, quotas de ressources | Manquant | prévue 1.68 |  |
 | Membres du cluster | Partiel | 1.31 | comptes du cluster : activer, désactiver, admin ; pas encore les rôles Rancher |
 | Connexion obligatoire, comptes et rôles propres à la console | Console seulement | 1.57 | sans Rancher ; Harvester seul n'a qu'un compte admin |
 
@@ -255,7 +255,7 @@ Menu Harvester : *VM Imports / VM Migration*
 
 | Fonction | Statut | Version | Précision |
 |---|---|---|---|
-| Imports de VM (VMware, OpenStack, OVA) | Manquant | prévue 1.67 |  |
+| Imports de VM (VMware, OpenStack, OVA) | Manquant | prévue 1.68 |  |
 | Migration par forklift-operator | Hors périmètre |  | add-on absent de la documentation 1.9 |
 
 ## Ce que la console ajoute

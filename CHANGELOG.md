@@ -4,6 +4,59 @@ All notable changes to this project will be documented here.
 Format inspired by [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 This file summarises each minor release; per-patch detail lives in `git log`.
 
+## [1.65.0] - 2026-09-27 - Networks, as in Harvester
+
+### Added
+- The Network section follows Harvester's Networks menu: **Cluster
+  Networks**, **Load Balancers**, **IP Pools** and **Host Networks** tabs
+  beside VM, Overlay and Underlay networks.
+- **Cluster networks and their configurations**: create and delete a
+  cluster network; bond NICs of all hosts, one host or hosts by labels
+  (only the NICs present and free on every chosen host are offered, never
+  the management one), with bond mode, miimon and MTU; the state on each
+  host; edit, **move to another cluster network**, delete.
+- **Storage, VM migration and RWX networks**: on the management network or
+  a dedicated VLAN (range, excluded addresses, a VLAN kept for storage, RWX
+  shared with storage), followed until Harvester says they are applied.
+- **VM networks**: trunk networks (VLAN ranges), a DHCP server in the route,
+  a description, and **Edit** on a network's block (description, route,
+  VLAN or trunk ranges).
+- **Load balancers** (DHCP or IP pool, listeners, VM label selector, TCP
+  health check), **IP pools** (ranges, VM network, priority, namespace;
+  release of an orphan address) and **host networks** (DHCP or one static
+  address per host, underlay).
+- `harvester-resources clusternetwork|netconfig|vmnet|lb|ippool|hostnet|netsetting`.
+- Test bench: `harvlab.sh data-nic` gives every nested node a second NIC.
+
+### Fixed (found by the real tests)
+- A configuration window could be sent before its NIC list had loaded, with
+  no NIC at all; it now waits for the list.
+- The first error a host's network agent reports is often followed by
+  success a few seconds later; the console waits a minute before calling a
+  configuration failed.
+- The storage network needs every volume detached, not only every VM
+  stopped (a VM just stopped keeps its volumes a few seconds): the check
+  says which volumes are still attached, as Harvester counts them.
+
+### Tests
+- Library, command line and routes: every object shape of Harvester 1.9's
+  network menu, the refusals said before acting (a NIC in use, VMs under a
+  changed uplink, a network still in use, allocated addresses, the storage
+  network with running VMs or attached volumes), administrator-only routes.
+- In Chromium: the Cluster Networks tab and its windows, the load balancer,
+  IP pool and host network lists and forms, a trunk network, editing a VM
+  network.
+- Real, on the three-node bench (a second NIC per node): cluster network
+  and configuration created in 3 s, MTU changed and restored, the
+  configuration moved to another cluster network and back (7 s each); VLAN,
+  trunk and untagged networks created and changed, gateway probe answered;
+  a static host network on the three nodes; the migration network proven by
+  a live migration (22 s); the storage network refused with VMs running,
+  then applied and reverted with them stopped (Longhorn switched in 11 s),
+  RWX shared and reverted; load balancers by DHCP (172.16.10.190) and by
+  pool (172.16.2.90) answering SSH from outside; an orphan address (its
+  load balancer deleted while the controller was down) released.
+
 ## [1.64.0] - 2026-09-27 - Templates, cloud configs, storage classes, secrets and SSH keys, as in Harvester
 
 ### Added

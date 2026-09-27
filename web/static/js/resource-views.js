@@ -116,13 +116,20 @@ const ResourceViews = (() => {
   // v1.60.0 : le type YAML de chaque liste (« Edit YAML » de Harvester)
   const YAML_KIND = { images: 'image', storageclasses: 'storageclass', sshkeys: 'sshkey', secrets: 'secret',
                       addons: 'addon', schedules: 'schedule', vmbackups: 'vmbackup', vmsnapshots: 'vmbackup',
-                      volsnaps: 'volsnap' };
+                      volsnaps: 'volsnap', loadbalancers: 'loadbalancer', ippools: 'ippool',
+                      hostnetworks: 'hostnetwork' };
+  // v1.65.0 : les listes du menu Networks, dont les fenêtres sont celles de NetAdmin
+  const NET_KIND = { loadbalancers: 'lb', ippools: 'pool', hostnetworks: 'hostnet' };
   const YAML_ADMIN = new Set(['secrets', 'addons']);
   const yamlAct = (kind) => act('yaml', false, '', YAML_ADMIN.has(kind));
   function sectionAction(cur, a, row) {
-    if (!window.ObjectForms) return;
     const done = (id) => { if (id) { if (window.Dock && Dock.poll) Dock.poll(); say(cur, esc(tr('bk.started', { id }))); setTimeout(() => load(cur), 3000); } };
     const fail = (err) => say(cur, `<span class="res-error">${esc(err.message)}</span>`);
+    if (NET_KIND[cur.kind]) {
+      if (window.NetAdmin) Promise.resolve(NetAdmin.listAction(NET_KIND[cur.kind], a, cur.cluster, row, () => load(cur))).then(done).catch(fail);
+      return;
+    }
+    if (!window.ObjectForms) return;
     if (a === 'delete') ObjectForms.remove(OBJ_KIND[cur.kind], cur.cluster, row).then(done).catch(fail);
     else if (a === 'default') ObjectForms.setDefaultClass(cur.cluster, row.name).then(done).catch(fail);
     else if (a === 'configure') ObjectForms.openAddonValues(cur.cluster, row, () => load(cur));
@@ -213,6 +220,66 @@ const ResourceViews = (() => {
       text: (r) => `${r.namespace}/${r.name} ${r.chart}`,
       sort: [(r) => r.name, (r) => r.chart, (r) => r.status, null],
     },
+    // v1.65.0 : équilibreurs, pools d'adresses, réseaux d'hôte (menu Networks)
+    loadbalancers: {
+      create: 'lb',
+      cols: () => [tr('res.col.name'), tr('na.col.address'), 'IPAM', tr('na.col.listeners'), tr('na.col.backends'),
+                   tr('res.col.state'), tr('res.col.age'), ''],
+      row: (r) => [
+        `<strong>${esc(r.name)}</strong><div class="res-dim">${esc(r.namespace)}</div>${r.description ? `<div class="res-desc">${esc(r.description)}</div>` : ''}`,
+        r.address ? `<code>${esc(r.address)}</code>` : '–',
+        esc(r.ipam === 'dhcp' ? 'DHCP' : (r.ip_pool || tr('na.ipam.pool'))),
+        (r.listeners || []).map(l => `<code class="res-key tip" data-tip="${esc(tr('na.t.listener'))}">${esc(l.protocol)} ${esc(l.port)}:${esc(l.backendPort)}</code>`).join(' ') || '–',
+        (r.backends || []).map(ip => `<code class="res-key">${esc(ip)}</code>`).join(' ') || `<span class="res-dim">${esc(tr('na.noBackend'))}</span>`,
+        r.ready ? badge('ok', tr('na.ready')) : badge(r.ready === false ? 'warn' : 'info', r.ready === false ? tr('na.notReady') : tr('na.pending'), r.message),
+        age(r.created), act('edit', false, '', true) + act('delete', false, '', true) + yamlAct('loadbalancers')],
+      details: (r) => [[tr('na.f.selector'), Object.entries(r.selector || {}).map(([k, v]) => `<code>${esc(k)} in (${esc(v.join(', '))})</code>`).join(' ') || '–'],
+                       [tr('na.f.health'), r.health && r.health.port ? esc(tr('na.hcText', { port: r.health.port, period: r.health.periodSeconds || 5 })) : '–']],
+      text: (r) => `${r.namespace}/${r.name} ${r.address || ''} ${r.ip_pool || ''} ${(r.backends || []).join(' ')}`,
+      sort: [(r) => r.name, (r) => r.address, (r) => r.ipam, (r) => (r.listeners || []).length, (r) => (r.backends || []).length,
+             (r) => (r.ready ? 1 : 0), (r) => r.created, null],
+    },
+    ippools: {
+      create: 'pool',
+      cols: () => [tr('res.col.name'), tr('na.f.ranges'), tr('na.f.poolNet'), tr('na.col.scope'), tr('na.col.available'),
+                   tr('res.col.state'), tr('res.col.age'), ''],
+      row: (r) => [
+        `<strong>${esc(r.name)}</strong> ${r.global ? badge('info', tr('na.global'), tr('na.t.global')) : ''}${r.description ? `<div class="res-desc">${esc(r.description)}</div>` : ''}`,
+        (r.ranges || []).map(x => `<code class="res-key">${esc(x.subnet)}${x.rangeStart ? ` ${esc(x.rangeStart)}-${esc(x.rangeEnd || '')}` : ''}</code>`).join(' '),
+        r.network ? `<code>${esc(r.network)}</code>` : `<span class="res-dim">${esc(tr('na.poolAnyNet'))}</span>`,
+        esc((r.scope || []).map(x => Object.entries(x).map(([k, v]) => `${k}=${v}`).join(' ')).join('; ') || '–'),
+        `${esc(r.available ?? '–')} / ${esc(r.total ?? '–')}`,
+        r.ready ? badge('ok', tr('na.ready')) : badge('info', tr('na.pending'), r.message),
+        age(r.created),
+        act('edit', false, '', true) + act('delete', Object.keys(r.allocated || {}).length > 0, tr('na.t.poolInUse'), true) + yamlAct('ippools')],
+      details: (r) => [[tr('na.allocated'), Object.entries(r.allocated || {}).map(([ip, lb]) => `<code>${esc(ip)}</code> ${esc(lb)}`).join('<br>') || '–']],
+      text: (r) => `${r.name} ${(r.ranges || []).map(x => x.subnet).join(' ')} ${r.network || ''}`,
+      sort: [(r) => r.name, (r) => (r.ranges[0] || {}).subnet, (r) => r.network, null, (r) => r.available || 0,
+             (r) => (r.ready ? 1 : 0), (r) => r.created, null],
+    },
+    hostnetworks: {
+      create: 'hostnet',
+      cols: () => [tr('res.col.name'), tr('na.col.interface'), tr('na.f.mode'), tr('na.col.addresses'), tr('na.f.underlay'),
+                   tr('res.col.state'), tr('res.col.age'), ''],
+      row: (r) => [
+        `<strong>${esc(r.name)}</strong>${r.description ? `<div class="res-desc">${esc(r.description)}</div>` : ''}`,
+        `<code>${esc(r.interface)}</code>`,
+        esc(r.mode === 'static' ? tr('na.static') : 'DHCP'),
+        Object.entries(r.ips || {}).map(([n, ip]) => `<div><code>${esc(ip)}</code> <span class="res-dim">${esc(n)}</span></div>`).join('')
+          || `<span class="res-dim">${esc((r.nodes || []).join(', ') || tr('na.allNodes'))}</span>`,
+        r.underlay ? icon('ok') : '–',
+        (() => {
+          const bad = Object.entries(r.node_status || {}).filter(([, s]) => s.ready === false);
+          if (bad.length) return badge('fail', tr('na.failed'), bad.map(([n, s]) => `${n}: ${s.message}`).join('; '));
+          return r.ready ? badge('ok', tr('na.ready')) : badge('info', tr('na.pending'));
+        })(),
+        age(r.created),
+        act('edit', false, '', true) + act('delete', r.underlay, tr('na.t.underlayOn'), true) + yamlAct('hostnetworks')],
+      details: (r) => Object.entries(r.node_status || {}).map(([n, st]) => [n, st.ready ? badge('ok', tr('na.ready')) : esc(st.message || tr('na.pending'))]),
+      text: (r) => `${r.name} ${r.interface} ${Object.values(r.ips || {}).join(' ')}`,
+      sort: [(r) => r.name, (r) => r.interface, (r) => r.mode, null, (r) => (r.underlay ? 1 : 0), (r) => (r.ready ? 1 : 0),
+             (r) => r.created, null],
+    },
     // v1.58.0 : la fenêtre Backups
     schedules: {
       cols: () => [tr('res.col.name'), tr('bk.col.vm'), tr('res.col.type'), tr('bk.col.when'), tr('bk.col.keep'),
@@ -282,7 +349,7 @@ const ResourceViews = (() => {
           ${k === 'secrets' ? `<label class="res-system tip" data-tip="${esc(tr('res.sec.systemTip'))}">
               <input type="checkbox" class="res-system-box" ${cur.showSystem ? 'checked' : ''}> <span>${esc(tr('res.sec.system'))}</span></label>` : ''}
           <button type="button" class="btn btn-sm btn-secondary res-refresh tip" data-tip="${esc(tr('res.refreshTip'))}">${icon('refresh')} ${esc(tr('overview.refresh'))}</button>
-          ${VIEWS[k].create && !(cur.opts && cur.opts.onAction) ? `<button type="button" class="btn btn-sm btn-primary res-new tip${k === 'storageclasses' ? ' needs-admin' : ''}"
+          ${VIEWS[k].create && !(cur.opts && cur.opts.onAction) ? `<button type="button" class="btn btn-sm btn-primary res-new tip${k === 'storageclasses' || NET_KIND[k] ? ' needs-admin' : ''}"
               data-tip="${esc(tr('of.t.new'))}">${icon('add')} ${esc(tr('of.new'))}</button>` : ''}
           ${k === 'images' && !(cur.opts && cur.opts.onAction) ? `<button type="button" class="btn btn-sm btn-secondary res-upload tip"
               data-tip="${esc(tr('sta.up.tip'))}">${icon('upload')} ${esc(tr('sta.up.button'))}</button>` : ''}
@@ -394,6 +461,10 @@ const ResourceViews = (() => {
     }
     if (e.target.closest('.res-upload') && window.StorageActions) {
       StorageActions.uploadDialog(cur.cluster, () => setTimeout(() => load(cur), 1500));
+      return;
+    }
+    if (e.target.closest('.res-new') && NET_KIND[cur.kind] && window.NetAdmin) {
+      NetAdmin.openNew(NET_KIND[cur.kind], cur.cluster, () => load(cur));
       return;
     }
     if (e.target.closest('.res-new') && window.ObjectForms) {

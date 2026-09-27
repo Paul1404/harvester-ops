@@ -83,6 +83,17 @@ il s'utilise aussi seul.
   harvester-resources secret create|update --cluster harv1 --namespace default --name reg --spec s.json
   harvester-resources sshkey update --cluster harv1 --namespace default --name ops --public-key-file k.pub [--description ..]
 
+  harvester-resources clusternetwork create|delete --cluster harv1 --name data [--description ..]
+  harvester-resources netconfig create|update --cluster harv1 --spec vc.json          (cartes, bond, MTU, nœuds)
+  harvester-resources netconfig migrate --cluster harv1 --name data-all --target data2
+  harvester-resources netconfig delete --cluster harv1 --name data-all
+  harvester-resources vmnet update --cluster harv1 --namespace default --name vlan20 --spec n.json   (VLAN, plages, route)
+  harvester-resources lb create|update --cluster harv1 --spec lb.json ; lb delete --namespace default --name web
+  harvester-resources ippool create|update --cluster harv1 --spec p.json ; ippool delete|release --name lan [--ip 10.0.0.7]
+  harvester-resources hostnet create|update --cluster harv1 --spec h.json ; hostnet delete --name stor
+  harvester-resources netsetting set --cluster harv1 --name storage-network|vm-migration-network|rwx-network --spec s.json
+  harvester-resources netsetting clear --cluster harv1 --name storage-network
+
 Sorties : 0 fait, 1 échec, 2 refusé par le contrôle, 3 annulé. Les étapes
 s'écrivent sur stderr en `STEP_EVENT|étape|statut|message`, que la console
 relaie au dock.
@@ -106,6 +117,7 @@ import hv_host as hh  # noqa: E402
 import hv_ns as hn  # noqa: E402
 import hv_storage as hs  # noqa: E402
 import hv_advanced as hadv  # noqa: E402
+import hv_net as hnet  # noqa: E402
 
 EXIT_OK, EXIT_FAIL, EXIT_BLOCKED, EXIT_CANCELLED = 0, 1, 2, 3
 K_ADDON = "addons.harvesterhci.io"
@@ -2087,6 +2099,257 @@ def cmd_sshkey(args):
     return _wait(kube, "keypairs.harvesterhci.io", args.namespace, args.name, done, 120, label="sshkey")
 
 
+# ---------------------------------------------------------------------------
+# v1.65.0 : le menu Networks de Harvester
+# ---------------------------------------------------------------------------
+
+def _gone(what):
+    def done(o):
+        return (True, f"{what} deleted") if o is None else (None, "deleting")
+    return done
+
+
+def cmd_clusternetwork(args):
+    kube = kube_from(args)
+    name = args.name
+    if args.action == "create":
+        obj = hnet.cluster_network(name, args.description or "")
+        if kube.get(hnet.K_CN, None, name) is not None:
+            raise ValueError(f"the cluster network {name} already exists")
+        kube.create(obj)
+        step("clusternetwork", "done", f"cluster network {name} created; give it a network configuration")
+        return EXIT_OK
+    rows = hnet.cluster_network_rows(kube.list(hnet.K_CN), kube.list(hnet.K_VC), [], kube.list(hnet.K_NAD), [])
+    row = next((r for r in rows if r["name"] == name), None)
+    if row is None:
+        raise ValueError(f"no cluster network {name}")
+    hnet.delete_cluster_network_check(row)
+    kube.delete(hnet.K_CN, None, name)
+    return _wait(kube, hnet.K_CN, None, name, _gone(f"cluster network {name}"), args.timeout, label="clusternetwork")
+
+
+def _config_wait(kube, name, timeout, now=time.time):
+    nodes = kube.list("nodes")
+    t0 = now()
+
+    def done(o):
+        if o is None:
+            return False, f"the configuration {name} disappeared"
+        return hnet.config_settled(o, kube.list(hnet.K_VS), nodes, elapsed=now() - t0)
+    return _wait(kube, hnet.K_VC, None, name, done, timeout, label="netconfig")
+
+
+def _config_blockers(kube, vc):
+    """Les VMs en marche sur les réseaux de VM du réseau de cluster d'une
+    configuration : Harvester refuse de toucher au lien sous elles."""
+    cn = ((vc or {}).get("spec") or {}).get("clusterNetwork")
+    refs = [f"{n['metadata']['namespace']}/{n['metadata']['name']}" for n in kube.list(hnet.K_NAD)
+            if hnet.nad_cluster_network(n) == cn]
+    return hnet.vms_on(kube.list("virtualmachineinstances.kubevirt.io"), refs)
+
+
+def cmd_netconfig(args):
+    kube = kube_from(args)
+    if args.action in ("create", "update"):
+        spec = _read_json(args.spec)
+        name = spec.get("name")
+        cur = kube.get(hnet.K_VC, None, name) if name else None
+        if args.action == "create":
+            if cur is not None:
+                raise ValueError(f"the configuration {name} already exists")
+            obj = hnet.vlan_config(spec)
+            if kube.get(hnet.K_CN, None, obj["spec"]["clusterNetwork"]) is None:
+                raise ValueError(f"no cluster network {obj['spec']['clusterNetwork']}")
+            kube.create(obj)
+            step("netconfig", "running", f"configuration {name}: {', '.join(obj['spec']['uplink']['nics'])} "
+                                         f"bonded ({obj['spec']['uplink']['bondOptions']['mode']})")
+        else:
+            if cur is None:
+                raise ValueError(f"no configuration {name}")
+            new = hnet.vlan_config(spec, current=cur)
+            blockers = hnet.update_blockers(cur, new, kube.list("nodes"),
+                                            kube.list("virtualmachineinstances.kubevirt.io"), kube.list(hnet.K_NAD))
+            if blockers:
+                raise ValueError("stop these VMs first, they use this cluster network: " + ", ".join(blockers))
+            kube.replace(new)
+            step("netconfig", "running", f"configuration {name} changed")
+        return _config_wait(kube, name, args.timeout)
+    name = args.name
+    cur = kube.get(hnet.K_VC, None, name)
+    if cur is None:
+        raise ValueError(f"no configuration {name}")
+    if ((cur.get("spec") or {}).get("clusterNetwork")) == "mgmt":
+        raise ValueError("the configurations of mgmt are managed by Harvester")
+    blockers = _config_blockers(kube, cur)
+    if blockers:
+        raise ValueError("stop these VMs first, they use this cluster network: " + ", ".join(blockers))
+    if args.action == "migrate":
+        patch = hnet.migrate_patch(args.target)
+        if kube.get(hnet.K_CN, None, args.target) is None:
+            raise ValueError(f"no cluster network {args.target}")
+        kube.patch(hnet.K_VC, None, name, patch)
+        step("netconfig", "running", f"configuration {name} moves to {args.target}")
+        return _config_wait(kube, name, args.timeout)
+    kube.delete(hnet.K_VC, None, name)
+    return _wait(kube, hnet.K_VC, None, name, _gone(f"configuration {name}"), args.timeout, label="netconfig")
+
+
+def cmd_vmnet(args):
+    kube = kube_from(args)
+    ns, name = args.namespace, args.name
+    nad = kube.get(hnet.K_NAD, ns, name)
+    if nad is None:
+        raise ValueError(f"no VM network {ns}/{name}")
+    out, changed = hnet.network_update(nad, _read_json(args.spec))
+    if changed:
+        running = hnet.vms_on(kube.list("virtualmachineinstances.kubevirt.io"), [f"{ns}/{name}"])
+        if running:
+            raise ValueError("its VLANs change only with its VMs stopped: " + ", ".join(running))
+    kube.replace(out)
+    step("vmnet", "done", f"VM network {ns}/{name} changed" + (" (VLANs)" if changed else ""))
+    return EXIT_OK
+
+
+def cmd_lb(args):
+    kube = kube_from(args)
+    if args.action == "delete":
+        kube.delete(hnet.K_LB, args.namespace, args.name)
+        return _wait(kube, hnet.K_LB, args.namespace, args.name,
+                     _gone(f"load balancer {args.namespace}/{args.name}"), args.timeout, label="lb")
+    spec = _read_json(args.spec)
+    ns, name = spec.get("namespace") or "default", spec.get("name")
+    cur = kube.get(hnet.K_LB, ns, name) if name else None
+    if args.action == "create":
+        if cur is not None:
+            raise ValueError(f"the load balancer {ns}/{name} already exists")
+        obj = hnet.load_balancer(spec)
+        if obj["spec"].get("ipPool") and kube.get(hnet.K_POOL, None, obj["spec"]["ipPool"]) is None:
+            raise ValueError(f"no IP pool {obj['spec']['ipPool']}")
+        kube.create(obj)
+        step("lb", "running", f"load balancer {ns}/{name} ({obj['spec']['ipam']})")
+    else:
+        if cur is None:
+            raise ValueError(f"no load balancer {ns}/{name}")
+        kube.replace(hnet.load_balancer(spec, current=cur))
+        step("lb", "running", f"load balancer {ns}/{name} changed")
+
+    def done(o):
+        [row] = hnet.lb_rows([o]) if o else [{}]
+        if not o:
+            return False, "the load balancer disappeared"
+        if row["address"] and row["ready"]:
+            return True, f"{row['address']} -> {', '.join(row['backends']) or 'no backend'}"
+        if row["address"]:
+            # adresse obtenue, pas encore de VM prête derrière : c'est l'état
+            # d'un équilibreur sans VM, pas un échec
+            return True, f"{row['address']} ({row['message'] or 'no backend ready yet'})"
+        return None, row["message"] or "waiting for an address"
+    return _wait(kube, hnet.K_LB, ns, name, done, args.timeout, label="lb")
+
+
+def cmd_ippool(args):
+    kube = kube_from(args)
+    if args.action in ("delete", "release"):
+        pool = kube.get(hnet.K_POOL, None, args.name)
+        if pool is None:
+            raise ValueError(f"no IP pool {args.name}")
+        if args.action == "release":
+            kube.patch(hnet.K_POOL, None, args.name, hnet.release_patch(pool, args.ip))
+            step("ippool", "running", f"{args.ip} released from {args.name}")
+
+            def freed(o):
+                left = ((o or {}).get("status") or {}).get("allocated") or {}
+                return (True, f"{args.ip} is free") if args.ip not in left else (None, "releasing")
+            return _wait(kube, hnet.K_POOL, None, args.name, freed, args.timeout, label="ippool")
+        hnet.delete_pool_check(pool)
+        kube.delete(hnet.K_POOL, None, args.name)
+        return _wait(kube, hnet.K_POOL, None, args.name, _gone(f"IP pool {args.name}"), args.timeout, label="ippool")
+    spec = _read_json(args.spec)
+    name = spec.get("name")
+    cur = kube.get(hnet.K_POOL, None, name) if name else None
+    if args.action == "create":
+        if cur is not None:
+            raise ValueError(f"the IP pool {name} already exists")
+        kube.create(hnet.ip_pool(spec))
+    else:
+        if cur is None:
+            raise ValueError(f"no IP pool {name}")
+        kube.replace(hnet.ip_pool(spec, current=cur))
+
+    def done(o):
+        [row] = hnet.pool_rows([o]) if o else [{}]
+        if not o:
+            return False, "the IP pool disappeared"
+        if row["ready"]:
+            return True, f"{row['available']} of {row['total']} addresses free"
+        return (False, row["message"]) if row["ready"] is False and row["message"] else (None, "waiting for Harvester")
+    return _wait(kube, hnet.K_POOL, None, name, done, args.timeout, label="ippool")
+
+
+def cmd_hostnet(args):
+    kube = kube_from(args)
+    if args.action == "delete":
+        cur = kube.get(hnet.K_HNC, None, args.name)
+        if cur is None:
+            raise ValueError(f"no host network {args.name}")
+        hnet.delete_hostnet_check(cur)
+        kube.delete(hnet.K_HNC, None, args.name)
+        return _wait(kube, hnet.K_HNC, None, args.name, _gone(f"host network {args.name}"), args.timeout, label="hostnet")
+    spec = _read_json(args.spec)
+    name = spec.get("name")
+    nodes = kube.list("nodes")
+    cur = kube.get(hnet.K_HNC, None, name) if name else None
+    if args.action == "create":
+        if cur is not None:
+            raise ValueError(f"the host network {name} already exists")
+        obj = hnet.host_network(spec, nodes)
+        if kube.get(hnet.K_CN, None, obj["spec"]["clusterNetwork"]) is None:
+            raise ValueError(f"no cluster network {obj['spec']['clusterNetwork']}")
+        kube.create(obj)
+        step("hostnet", "running", f"host network {name}: {obj['spec']['clusterNetwork']}-br.{obj['spec']['vlanID']} "
+                                   f"({obj['spec']['mode']})")
+    else:
+        if cur is None:
+            raise ValueError(f"no host network {name}")
+        kube.replace(hnet.host_network(spec, nodes, current=cur))
+        step("hostnet", "running", f"host network {name} changed")
+    t0 = time.time()
+    return _wait(kube, hnet.K_HNC, None, name, lambda o: hnet.hostnet_settled(o, nodes, elapsed=time.time() - t0),
+                 args.timeout, label="hostnet")
+
+
+def cmd_netsetting(args):
+    kube = kube_from(args)
+    kind = args.name
+    if kind not in hnet.NET_SETTINGS:
+        raise ValueError("setting: " + ", ".join(hnet.NET_SETTINGS))
+    spec = {"disable": True} if args.action == "clear" else _read_json(args.spec)
+    value = hnet.setting_value(kind, spec)
+    if kind == "storage-network" and value:
+        running = [f"{v['metadata']['namespace']}/{v['metadata']['name']}"
+                   for v in kube.list("virtualmachineinstances.kubevirt.io")]
+        if running:
+            raise ValueError("Harvester changes the storage network with every VM stopped; still running: "
+                             + ", ".join(sorted(running)[:12]) + (" ..." if len(running) > 12 else ""))
+        # le webhook compte les volumes, pas les VMs : une VM à peine arrêtée
+        # garde ses volumes attachés quelques secondes (vu en réel sur harvlab)
+        busy = hnet.attached_volumes(kube.list("volumes.longhorn.io", "longhorn-system"),
+                                     kube.list("persistentvolumeclaims"))
+        if busy:
+            raise ValueError("Harvester changes the storage network with every volume detached; still attached: "
+                             + ", ".join(busy[:12]) + (" ..." if len(busy) > 12 else ""))
+    before = kube.get(hnet.K_SETTING, None, kind) or {}
+    kube.patch(hnet.K_SETTING, None, kind, {"value": value})
+    step("netsetting", "running", f"{kind}: " + (value or "back to the management network"))
+
+    def done(o):
+        # la condition d'avant peut encore dire True : attendre qu'elle bouge
+        if (o or {}).get("metadata", {}).get("resourceVersion") == before.get("metadata", {}).get("resourceVersion"):
+            return None, "waiting for Harvester"
+        return hnet.setting_settled(o)
+    return _wait(kube, hnet.K_SETTING, None, kind, done, args.timeout, label="netsetting")
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(prog="harvester-resources", description=__doc__.split("\n\n")[0])
     sub = ap.add_subparsers(dest="cmd", required=True)
@@ -2358,6 +2621,72 @@ def main(argv=None):
     sp.add_argument("--name", required=True)
     sp.add_argument("--public-key-file")
     sp.add_argument("--description")
+    # v1.65.0 : le menu Networks de Harvester
+    sp = sub.add_parser("clusternetwork", help="create or delete a cluster network")
+    sp.set_defaults(fn=cmd_clusternetwork)
+    sp.add_argument("action", choices=("create", "delete"))
+    sp.add_argument("--cluster")
+    sp.add_argument("--kubeconfig")
+    sp.add_argument("--name", required=True)
+    sp.add_argument("--description")
+    sp.add_argument("--timeout", type=int, default=300)
+
+    sp = sub.add_parser("netconfig", help="a cluster network's configurations: NICs, bond, MTU, nodes")
+    sp.set_defaults(fn=cmd_netconfig)
+    sp.add_argument("action", choices=("create", "update", "migrate", "delete"))
+    sp.add_argument("--cluster")
+    sp.add_argument("--kubeconfig")
+    sp.add_argument("--spec", help="create/update: JSON request")
+    sp.add_argument("--name", help="migrate/delete: the configuration")
+    sp.add_argument("--target", help="migrate: the cluster network it moves to")
+    sp.add_argument("--timeout", type=int, default=600)
+
+    sp = sub.add_parser("vmnet", help="change a VM network: VLAN, trunk ranges, route, description")
+    sp.set_defaults(fn=cmd_vmnet)
+    sp.add_argument("action", choices=("update",))
+    sp.add_argument("--cluster")
+    sp.add_argument("--kubeconfig")
+    sp.add_argument("--namespace", required=True)
+    sp.add_argument("--name", required=True)
+    sp.add_argument("--spec", required=True)
+
+    sp = sub.add_parser("lb", help="Harvester load balancers for VMs")
+    sp.set_defaults(fn=cmd_lb)
+    sp.add_argument("action", choices=("create", "update", "delete"))
+    sp.add_argument("--cluster")
+    sp.add_argument("--kubeconfig")
+    sp.add_argument("--spec", help="create/update: JSON request")
+    sp.add_argument("--namespace", default="default")
+    sp.add_argument("--name")
+    sp.add_argument("--timeout", type=int, default=300)
+
+    sp = sub.add_parser("ippool", help="IP pools of the load balancers")
+    sp.set_defaults(fn=cmd_ippool)
+    sp.add_argument("action", choices=("create", "update", "delete", "release"))
+    sp.add_argument("--cluster")
+    sp.add_argument("--kubeconfig")
+    sp.add_argument("--spec", help="create/update: JSON request")
+    sp.add_argument("--name")
+    sp.add_argument("--ip", help="release: the allocated address to free")
+    sp.add_argument("--timeout", type=int, default=120)
+
+    sp = sub.add_parser("hostnet", help="host networks (an address per node on a VLAN)")
+    sp.set_defaults(fn=cmd_hostnet)
+    sp.add_argument("action", choices=("create", "update", "delete"))
+    sp.add_argument("--cluster")
+    sp.add_argument("--kubeconfig")
+    sp.add_argument("--spec", help="create/update: JSON request")
+    sp.add_argument("--name")
+    sp.add_argument("--timeout", type=int, default=300)
+
+    sp = sub.add_parser("netsetting", help="storage, VM migration and RWX networks (Harvester settings)")
+    sp.set_defaults(fn=cmd_netsetting)
+    sp.add_argument("action", choices=("set", "clear"))
+    sp.add_argument("--cluster")
+    sp.add_argument("--kubeconfig")
+    sp.add_argument("--name", required=True, choices=("storage-network", "vm-migration-network", "rwx-network"))
+    sp.add_argument("--spec", help="set: JSON request")
+    sp.add_argument("--timeout", type=int, default=1800)
     args = ap.parse_args(argv)
     signal.signal(signal.SIGTERM, _on_signal)
     try:

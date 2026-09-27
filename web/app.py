@@ -667,6 +667,7 @@ ADMIN_ONLY_PREFIXES = (
     "/api/host/",               # v1.62.0 : disques, CPU manager, BMC, suppression d'un hôte
     "/api/ns-admin/",           # v1.62.0 : créer, modifier, supprimer un namespace
     "/api/templates/",          # v1.64.0 : versions des modèles partagés du cluster
+    "/api/net-admin/",          # v1.65.0 : réseaux de cluster, liens, équilibreurs, réglages réseau
     "/api/users",               # gestion des comptes de la console
     "/api/harvester-users",     # comptes du cluster Harvester
     "/api/kubeovn/",            # réseaux kube-ovn : un changement peut couper des VMs
@@ -10686,6 +10687,7 @@ def api_my_password():
 # ---------------------------------------------------------------------------
 import cluster_objects as _co  # noqa: E402
 import hv_backups as _hb  # noqa: E402
+import hv_net as _hnet  # noqa: E402
 import hv_objects as _ho  # noqa: E402
 
 # v1.58.0 : les listes de la fenêtre Backups, servies par la même route
@@ -10702,7 +10704,13 @@ _CO_KIND_OF = {_hb.K_BACKUP: "VirtualMachineBackup", _hb.K_SCHEDULE: "ScheduleVM
                "persistentvolumeclaims": "PersistentVolumeClaim",
                "storageclasses.storage.k8s.io": "StorageClass",
                "keypairs.harvesterhci.io": "KeyPair", "secrets": "Secret",
-               "addons.harvesterhci.io": "Addon"}
+               "addons.harvesterhci.io": "Addon",
+               # v1.65.0 : le menu Networks de Harvester
+               _hnet.K_CN: "ClusterNetwork", _hnet.K_VC: "VlanConfig", _hnet.K_VS: "VlanStatus",
+               _hnet.K_NAD: "NetworkAttachmentDefinition", _hnet.K_HNC: "HostNetworkConfig",
+               _hnet.K_LB: "LoadBalancer", _hnet.K_POOL: "IPPool", _hnet.K_SETTING: "Setting",
+               "nodes": "Node", "virtualmachineinstances.kubevirt.io": "VirtualMachineInstance"}
+_NET_KINDS = {"loadbalancers": _hnet.K_LB, "ippools": _hnet.K_POOL, "hostnetworks": _hnet.K_HNC}
 
 
 def _kubectl_kinds(kc, kinds, cluster):
@@ -10729,8 +10737,8 @@ def _kubectl_kinds(kc, kinds, cluster):
 def api_cluster_objects(cluster, kind):
     """Une liste de la vue Storage, Security ou Add-ons, avec qui s'en sert.
     Un Secret ne sort qu'avec le nom de ses clés, jamais ses valeurs."""
-    if kind not in _co.KINDS and kind not in _BACKUP_KINDS:
-        kinds_all = ", ".join(list(_co.KINDS) + list(_BACKUP_KINDS))
+    if kind not in _co.KINDS and kind not in _BACKUP_KINDS and kind not in _NET_KINDS:
+        kinds_all = ", ".join(list(_co.KINDS) + list(_BACKUP_KINDS) + list(_NET_KINDS))
         return jsonify({"error": f"kind must be one of {kinds_all}"}), 400
     kc = _kubectl_for_cluster(cluster)
     if not kc:
@@ -10753,6 +10761,13 @@ def api_cluster_objects(cluster, kind):
         else:
             rows = _hb.volume_snapshots(got)
         rows.sort(key=lambda r: r.get("created") or "", reverse=True)
+        return jsonify({"cluster": cluster, "kind": kind, "items": rows})
+    if kind in _NET_KINDS:
+        # v1.65.0 : équilibreurs, pools d'adresses, réseaux d'hôte
+        got = _kubectl_kinds(kc, [_NET_KINDS[kind]], cluster)[_NET_KINDS[kind]]
+        rows = {"loadbalancers": _hnet.lb_rows, "ippools": _hnet.pool_rows,
+                "hostnetworks": _hnet.hostnet_rows}[kind](got)
+        rows.sort(key=lambda r: (r.get("namespace") or "", r.get("name") or ""))
         return jsonify({"cluster": cluster, "kind": kind, "items": rows})
     main = _co.FETCH[kind]
     kinds = [main] + [_CO_KIND_NAMES[u] for u in _co.NEEDS_USAGE[kind]]
@@ -12230,6 +12245,177 @@ def api_cloud_template_do(cluster, namespace, name, action):
     run, err = _res_cli(cluster, kc, f"cloudtpl:{action}:{namespace}/{name}",
                         ["cloudtpl", action, "--namespace", namespace, "--name", name] + extra, files)
     return _res_reply(run, err, template=f"{namespace}/{name}", action=action)
+
+
+# ---------------------------------------------------------------------------
+# v1.65.0 : le menu Networks de Harvester (réseaux de cluster et leurs
+# configurations, réseaux d'hôte, réseaux de stockage / migration / RWX,
+# équilibreurs et pools ; modifier un réseau de VM). Toute écriture passe par
+# bin/harvester-resources.py ; les demandes par un fichier privé.
+# ---------------------------------------------------------------------------
+
+_NET_READ = [_hnet.K_CN, _hnet.K_VC, _hnet.K_VS, _hnet.K_NAD, "nodes", _hnet.K_SETTING]
+
+
+def _net_nodes(nodes):
+    return [{"name": (n.get("metadata") or {}).get("name"),
+             "witness": _hnet.WITNESS in ((n.get("metadata") or {}).get("labels") or {})} for n in nodes]
+
+
+@app.route("/api/net-admin/<cluster>")
+@requires_auth
+def api_net_admin(cluster):
+    """L'onglet Cluster networks : chaque réseau et ses configurations (état
+    par nœud), les réseaux d'hôte, les trois réglages réseau."""
+    kc = _kubectl_for_cluster(cluster)
+    if not kc:
+        return jsonify({"error": f"unknown cluster: {cluster}"}), 404
+    if _cluster_reachable(kc) is False:
+        return jsonify(_unreachable_payload(cluster, kc)), 200
+    got = _kubectl_kinds(kc, _NET_READ, cluster)
+    nodes = got["nodes"]
+    settings = [s for s in got[_hnet.K_SETTING] if (s.get("metadata") or {}).get("name") in _hnet.NET_SETTINGS]
+    return jsonify({"cluster": cluster,
+                    "cluster_networks": _hnet.cluster_network_rows(got[_hnet.K_CN], got[_hnet.K_VC], got[_hnet.K_VS],
+                                                                   got[_hnet.K_NAD], nodes),
+                    "settings": _hnet.setting_rows(settings), "nodes": _net_nodes(nodes)})
+
+
+@app.route("/api/net-admin/<cluster>/nics")
+@requires_auth
+def api_net_admin_nics(cluster):
+    """Les cartes proposables pour une configuration sur ces nœuds (toutes
+    les cartes libres présentes partout, comme le formulaire de Harvester)."""
+    kc = _kubectl_for_cluster(cluster)
+    if not kc:
+        return jsonify({"error": f"unknown cluster: {cluster}"}), 404
+    lm = _kubectl_json(kc, "get", _hnet.K_LM, "nic", cluster=cluster) or {}
+    nodes = [n for n in (request.args.get("nodes") or "").split(",") if n]
+    if not all(_K8S_SUBDOMAIN_RE.match(n) for n in nodes):
+        return jsonify({"error": "invalid node name"}), 400
+    link = (lm.get("status") or {}).get("linkStatus") or {}
+    if not nodes:
+        got = _kubectl_json(kc, "get", "nodes", cluster=cluster) or {}
+        nodes = [x["name"] for x in _net_nodes(got.get("items") or []) if not x["witness"]]
+    current = [n for n in (request.args.get("current") or "").split(",") if n]
+    return jsonify({"cluster": cluster, "nodes": nodes, "nics": _hnet.nic_choices(link, nodes, current),
+                    "monitor": bool(link)})
+
+
+@app.route("/api/net-admin/<cluster>/vmnet/<namespace>/<name>")
+@requires_auth
+def api_net_admin_vmnet(cluster, namespace, name):
+    """Un réseau de VM tel que sa fenêtre de modification le montre, et les
+    VMs en marche dessus (elles empêchent de changer ses VLAN)."""
+    kc = _kubectl_for_cluster(cluster)
+    if not kc:
+        return jsonify({"error": f"unknown cluster: {cluster}"}), 404
+    nad = _kubectl_json(kc, "get", _hnet.K_NAD, name, "-n", namespace, cluster=cluster)
+    if not nad:
+        return jsonify({"error": f"no VM network {namespace}/{name}"}), 404
+    vmis = (_kubectl_json(kc, "get", "virtualmachineinstances.kubevirt.io", "-A", cluster=cluster) or {}).get("items") or []
+    return jsonify({**_hnet.vmnet_row(nad), "running": _hnet.vms_on(vmis, [f"{namespace}/{name}"])})
+
+
+def _net_spec_file(files, spec):
+    wd = _capi_work_dir()
+    fd, path = tempfile.mkstemp(prefix="net-", suffix=".json", dir=str(wd) if wd else None)
+    with os.fdopen(fd, "w") as f:
+        json.dump(spec, f)
+    os.chmod(path, 0o600)
+    files.append(path)
+    return path
+
+
+_NET_DO = ("cn-create", "cn-delete", "config-create", "config-update", "config-migrate", "config-delete",
+           "hostnet-create", "hostnet-update", "hostnet-delete", "setting-set", "setting-clear",
+           "lb-create", "lb-update", "lb-delete", "pool-create", "pool-update", "pool-delete", "pool-release",
+           "vmnet-update")
+
+
+@app.route("/api/net-admin/<cluster>/do/<action>", methods=["POST"])
+@requires_auth
+@_rate_limit("30/minute")
+def api_net_admin_do(cluster, action):
+    """Un geste du menu Networks, contrôlé d'avance par les mêmes fonctions
+    que le script, puis suivi dans le dock."""
+    if action not in _NET_DO:
+        return jsonify({"error": f"action must be one of {', '.join(_NET_DO)}"}), 400
+    kc = _kubectl_for_cluster(cluster)
+    if not kc:
+        return jsonify({"error": f"unknown cluster: {cluster}"}), 404
+    b = request.get_json(silent=True) or {}
+    spec = b.get("spec") if isinstance(b.get("spec"), dict) else {}
+    files, label = [], action
+    try:
+        name = lambda what, key="name": _hnet.check_name(str(b.get(key) or ""), what)  # noqa: E731
+        if action == "cn-create":
+            _hnet.cluster_network(name("cluster network", "name"), str(b.get("description") or ""))
+            args = ["clusternetwork", "create", "--name", b["name"]]
+            if b.get("description"):
+                args += ["--description", str(b["description"])[:1000]]
+            label = f"clusternetwork:create:{b['name']}"
+        elif action == "cn-delete":
+            args = ["clusternetwork", "delete", "--name", name("cluster network")]
+            label = f"clusternetwork:delete:{b['name']}"
+        elif action in ("config-create", "config-update"):
+            _hnet.vlan_config(spec)
+            args = ["netconfig", action.split("-")[1], "--spec", _net_spec_file(files, spec)]
+            label = f"netconfig:{action.split('-')[1]}:{spec['name']}"
+        elif action == "config-migrate":
+            _hnet.migrate_patch(str(b.get("target") or ""))
+            args = ["netconfig", "migrate", "--name", name("configuration"), "--target", b["target"]]
+            label = f"netconfig:migrate:{b['name']}"
+        elif action == "config-delete":
+            args = ["netconfig", "delete", "--name", name("configuration")]
+            label = f"netconfig:delete:{b['name']}"
+        elif action in ("hostnet-create", "hostnet-update"):
+            _hnet.host_network(spec, [{"metadata": {"name": n}} for n in (spec.get("ips") or {})] or [])
+            args = ["hostnet", action.split("-")[1], "--spec", _net_spec_file(files, spec)]
+            label = f"hostnet:{action.split('-')[1]}:{spec['name']}"
+        elif action == "hostnet-delete":
+            args = ["hostnet", "delete", "--name", name("host network")]
+            label = f"hostnet:delete:{b['name']}"
+        elif action in ("setting-set", "setting-clear"):
+            kind = str(b.get("name") or "")
+            if kind not in _hnet.NET_SETTINGS:
+                raise ValueError("setting: " + ", ".join(_hnet.NET_SETTINGS))
+            if action == "setting-set":
+                _hnet.setting_value(kind, spec)
+                args = ["netsetting", "set", "--name", kind, "--spec", _net_spec_file(files, spec)]
+            else:
+                args = ["netsetting", "clear", "--name", kind]
+            label = f"netsetting:{action.split('-')[1]}:{kind}"
+        elif action in ("lb-create", "lb-update"):
+            _hnet.load_balancer(spec)
+            args = ["lb", action.split("-")[1], "--spec", _net_spec_file(files, spec)]
+            label = f"lb:{action.split('-')[1]}:{spec.get('namespace') or 'default'}/{spec['name']}"
+        elif action == "lb-delete":
+            args = ["lb", "delete", "--namespace", name("namespace", "namespace"), "--name", name("load balancer")]
+            label = f"lb:delete:{b['namespace']}/{b['name']}"
+        elif action in ("pool-create", "pool-update"):
+            _hnet.ip_pool(spec)
+            args = ["ippool", action.split("-")[1], "--spec", _net_spec_file(files, spec)]
+            label = f"ippool:{action.split('-')[1]}:{spec['name']}"
+        elif action in ("pool-delete", "pool-release"):
+            args = ["ippool", action.split("-")[1], "--name", name("IP pool")]
+            if action == "pool-release":
+                import ipaddress as _ipa
+                _ipa.IPv4Address(str(b.get("ip") or ""))
+                args += ["--ip", str(b["ip"])]
+            label = f"ippool:{action.split('-')[1]}:{b['name']}"
+        else:
+            ns, nm = name("namespace", "namespace"), str(b.get("name") or "")
+            if not _K8S_SUBDOMAIN_RE.match(nm):
+                raise ValueError("VM network name")
+            args = ["vmnet", "update", "--namespace", ns, "--name", nm, "--spec", _net_spec_file(files, spec)]
+            label = f"vmnet:update:{ns}/{nm}"
+    except (ValueError, KeyError, TypeError) as e:
+        for f in files:
+            Path(f).unlink(missing_ok=True)
+        return jsonify({"error": str(e) if not isinstance(e, KeyError) else f"missing {e}"}), 400
+    run, err = _res_cli(cluster, kc, label, args, files)
+    return _res_reply(run, err, action=action)
 
 
 @app.route("/api/storage-options/<cluster>")

@@ -4998,3 +4998,36 @@ body.login-page {
 .tpl-head .tpl-acts { flex: 0 0 auto; display: flex; gap: 6px; }
 td.tpl-acts { text-align: right; white-space: nowrap; }
 td.tpl-acts .btn + .btn { margin-left: 4px; }
+
+/* v1.65.0 : le menu Networks (onglet Cluster networks et ses fenêtres) */
+.na-card { padding: 0; }
+.na-card > .res-tools, .na-card > .res-feedback { padding: 8px 10px 0; }
+.na-card [data-na="body"] { padding: 8px 10px 10px; }
+.na-tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 10px; margin-bottom: 12px; }
+.na-tile { display: flex; flex-direction: column; gap: 4px; padding: 10px; border: 1px solid var(--border);
+  border-radius: 6px; background: var(--bg-panel); }
+.na-tile .btn { align-self: flex-start; margin-top: 4px; }
+.na-tile-title { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.na-node { white-space: nowrap; }
+.na-nets { padding: 6px 10px 10px; font-size: 12px; color: var(--text-dim); }
+.na-pad { padding: 4px 10px; }
+.na-nics, .na-nodes { display: flex; flex-direction: column; gap: 4px; }
+.na-nic code, .na-nodes code { min-width: 7em; display: inline-block; }
+.na-ip { margin-left: 8px; max-width: 14em; }
+.na-listener, .na-range { display: grid; gap: 6px; margin-bottom: 6px; align-items: center; }
+.na-listener { grid-template-columns: 1.2fr 0.8fr 0.7fr 0.8fr auto; }
+.na-range { grid-template-columns: 1.4fr 1fr 1fr 1fr auto; }
+.na-alloc { margin: 8px 0; padding: 8px; border: 1px dashed var(--border); border-radius: 6px; }
+.na-alloc-row { display: flex; align-items: center; gap: 8px; margin-top: 4px; }
+@media (max-width: 640px) {
+  .na-listener, .na-range { grid-template-columns: 1fr 1fr; }
+}
+/* v1.65.0 : sept onglets sous Network : ils passent sous le titre, sur une
+   ligne à eux, plutôt que de couper leurs libellés et le titre en morceaux */
+#tab-network .shutdown-header { grid-template-columns: 1fr auto; align-items: center; }
+#tab-network .shutdown-header > .automation-header-text { grid-column: 1 / -1; grid-row: 1; }
+#tab-network .shutdown-header > .sub-tabs-inline { grid-column: 1; grid-row: 2; justify-self: start; flex-wrap: wrap; }
+/* le bouton « Nouveau réseau de VMs » reste sur la bande des onglets, à leur
+   droite (remarque de ju en 1.60.0), à l'écart des boutons ronds du coin */
+#tab-network .shutdown-header > .section-actions { grid-column: 2; grid-row: 2; align-self: center; margin: 0 156px 0 0; }
+#tab-network .sub-tab { white-space: nowrap; }

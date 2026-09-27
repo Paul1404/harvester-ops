@@ -22,6 +22,10 @@
 #                             une igb (SR-IOV) pour le passthrough PCI
 #   harvlab.sh tidy           éjecte l'ISO, active le discard, lance fstrim :
 #                             rend à node2 la place que Longhorn a libérée
+#   harvlab.sh data-nic       branche à chaud une seconde carte virtio (sur
+#                             br0) à chaque nœud : un lien libre pour essayer
+#                             réseaux de cluster, configurations et bonds sans
+#                             toucher à celui de la gestion
 set -euo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -46,6 +50,8 @@ PORT="${HARVLAB_PORT:-8099}"
 VIP="${HARVLAB_VIP:-172.16.2.60}"
 IP_PREFIX="${HARVLAB_IP_PREFIX:-172.16.2.6}"
 MAC_PREFIX="${HARVLAB_MAC_PREFIX:-52:54:00:4c:ab:6}"
+# v1.65.0 : les secondes cartes (data-nic), dans leur propre plage de MAC
+DATA_MAC_PREFIX="${HARVLAB_DATA_MAC_PREFIX:-52:54:00:4c:ad:6}"
 VCPUS="${HARVLAB_VCPUS:-8}"
 MEMORY_MB="${HARVLAB_MEMORY_MB:-20480}"
 DISK_GB="${HARVLAB_DISK_GB:-250}"
@@ -284,6 +290,19 @@ cmd_pci() {
     say "$name : IOMMU virtuel, e1000e (04:00.0) et igb SR-IOV (05:00.0) ajoutés"
 }
 
+cmd_data_nic() {
+    local n name mac
+    for n in $NODES; do
+        name="$(name_of "$n")"; mac="${DATA_MAC_PREFIX}$n"
+        if on_node2 "sudo virsh domiflist $name" | grep -qi "$mac"; then
+            say "$name a déjà sa seconde carte ($mac)"; continue
+        fi
+        on_node2 "sudo virsh attach-interface --domain $name --type bridge --source br0 --model virtio \
+            --mac $mac --live --config >/dev/null"
+        say "$name : seconde carte virtio $mac branchée sur br0"
+    done
+}
+
 case "${1:-}" in
     secrets)    cmd_secrets ;;
     serve)      cmd_serve ;;
@@ -298,5 +317,6 @@ case "${1:-}" in
     destroy)    cmd_destroy ;;
     pci)        cmd_pci ;;
     tidy)       cmd_tidy ;;
+    data-nic)   cmd_data_nic ;;
     *) sed -n '2,/^set -euo/p' "$0" | sed '$d'; exit 1 ;;
 esac

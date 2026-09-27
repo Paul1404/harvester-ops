@@ -50,6 +50,9 @@ KINDS = {
                "loadbalancer.harvesterhci.io/v1beta1", "IPPool"),
     "loadbalancer": ("loadbalancers.loadbalancer.harvesterhci.io", True, "viewer", "operator",
                      "loadbalancer.harvesterhci.io/v1beta1", "LoadBalancer"),
+    # v1.65.0 : les réseaux d'hôte
+    "hostnetwork": ("hostnetworkconfigs.network.harvesterhci.io", False, "viewer", "admin",
+                    "network.harvesterhci.io/v1beta1", "HostNetworkConfig"),
     "setting": ("settings.harvesterhci.io", False, "admin", "admin", "harvesterhci.io/v1beta1", "Setting"),
     "node": ("nodes", False, "viewer", "admin", "v1", "Node"),
     "cloudtemplate": ("configmaps", True, "viewer", "operator", "v1", "ConfigMap"),

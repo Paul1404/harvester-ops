@@ -131,12 +131,17 @@ const ObjectForms = (() => {
       const fab = await getJSON(`/api/network-fabric/${enc(cluster)}`);
       const cns = ((fab && fab.cluster_networks) || []).map(c => (typeof c === 'string' ? c : c.name)).filter(Boolean);
       return ns + name()
-        + field('type', tr('res.col.type'), `<select name="type">${opts([['vlan', tr('of.net.vlan')], ['untagged', tr('of.net.untagged')]], 'vlan')}</select>`, tr('of.t.netType'))
+        + field('type', tr('res.col.type'), `<select name="type">${opts([['vlan', tr('of.net.vlan')], ['untagged', tr('of.net.untagged')],
+            ['trunk', tr('na.trunk')]], 'vlan')}</select>`, tr('of.t.netType'))
         + field('vlan', tr('of.f.vlan'), `<input name="vlan" type="number" min="1" max="4094" required>`, tr('of.t.vlan'))
+        // v1.65.0 : un trunk porte des plages de VLAN (« 100-199, 300 »)
+        + field('ranges', tr('na.f.trunk'), `<input name="ranges" placeholder="100-199, 300">`, tr('na.t.trunk'))
         + field('cluster_network', tr('of.f.clusterNetwork'), `<select name="cluster_network">${opts(cns.length ? cns : ['mgmt'], 'mgmt')}</select>`, tr('of.t.clusterNetwork'))
         + field('route_mode', tr('of.f.route'), `<select name="route_mode">${opts([['auto', tr('of.route.auto')], ['manual', tr('of.route.manual')]], 'auto')}</select>`, tr('of.t.route'))
         + field('cidr', 'CIDR', `<input name="cidr" placeholder="192.168.10.0/24">`, tr('of.t.cidr'))
-        + field('gateway', tr('of.f.gateway'), `<input name="gateway" placeholder="192.168.10.1">`, tr('of.t.gateway'));
+        + field('gateway', tr('of.f.gateway'), `<input name="gateway" placeholder="192.168.10.1">`, tr('of.t.gateway'))
+        + field('dhcp_server', tr('na.f.dhcpServer'), `<input name="dhcp_server" placeholder="192.168.10.2">`, tr('na.t.dhcpServer'))
+        + field('description', tr('of.f.description'), `<input name="description">`, tr('of.t.description'));
     }
     // volume
     const sc = await getJSON(`/api/cluster-objects/${enc(cluster)}/storageclasses`);
@@ -161,10 +166,16 @@ const ObjectForms = (() => {
     const val = (n) => form.querySelector(`[name="${n}"]`)?.value;
     const show = (n, on) => { const el = form.querySelector(`[data-f="${n}"]`); if (el) el.hidden = !on; };
     if (kind === 'network') {
+      const trunk = val('type') === 'trunk';
       show('vlan', val('type') === 'vlan');
       form.querySelector('[name="vlan"]').required = val('type') === 'vlan';
-      show('cidr', val('route_mode') === 'manual');
-      show('gateway', val('route_mode') === 'manual');
+      show('ranges', trunk);
+      form.querySelector('[name="ranges"]').required = trunk;
+      // comme Harvester : pas de route sur un trunk
+      show('route_mode', !trunk);
+      show('dhcp_server', !trunk);
+      show('cidr', !trunk && val('route_mode') === 'manual');
+      show('gateway', !trunk && val('route_mode') === 'manual');
     }
     if (kind === 'volume') {
       show('storage_class', val('source') === 'empty');
@@ -227,6 +238,12 @@ const ObjectForms = (() => {
       delete o.source;
     }
     if (kind === 'network' && o.type !== 'vlan') delete o.vlan;
+    if (kind === 'network') {
+      if (o.type === 'trunk') {
+        o.ranges = window.NetAdmin ? NetAdmin.parseRanges(o.ranges) : [];
+        ['route_mode', 'cidr', 'gateway', 'dhcp_server'].forEach(k => delete o[k]);
+      } else delete o.ranges;
+    }
     return o;
   }
 

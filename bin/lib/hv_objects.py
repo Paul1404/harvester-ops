@@ -142,17 +142,20 @@ def secret_manifest(spec):
 
 def network_manifest(spec):
     """Un réseau de VMs (NetworkAttachmentDefinition), comme ceux que crée
-    Harvester : un pont sur le réseau de cluster, VLAN ou sans étiquette."""
+    Harvester : un pont sur le réseau de cluster, VLAN, sans étiquette ou
+    trunk (plages de VLAN, v1.65.0), avec sa route (DHCP ou manuelle)."""
+    import hv_net  # noqa: E402  (même répertoire bin/lib)
     name = _name(spec.get("name"))
     ns = _name(spec.get("namespace") or "default", "namespace")
     cn = _name(spec.get("cluster_network") or "mgmt", "cluster network")
     kind = spec.get("type") or "vlan"
-    if kind not in ("vlan", "untagged"):
-        raise ValueError("type: vlan or untagged")
+    if kind not in ("vlan", "untagged", "trunk"):
+        raise ValueError("type: vlan, untagged or trunk")
     config = {"cniVersion": "0.3.1", "name": name, "type": "bridge", "bridge": f"{cn}-br",
               "promiscMode": True, "ipam": {}}
     labels = {"network.harvesterhci.io/clusternetwork": cn, "network.harvesterhci.io/ready": "true",
-              "network.harvesterhci.io/type": "L2VlanNetwork" if kind == "vlan" else "UntaggedNetwork"}
+              "network.harvesterhci.io/type": {"vlan": "L2VlanNetwork", "untagged": "UntaggedNetwork",
+                                               "trunk": "L2VlanTrunkNetwork"}[kind]}
     if kind == "vlan":
         try:
             vlan = int(spec.get("vlan"))
@@ -162,21 +165,20 @@ def network_manifest(spec):
             raise ValueError("vlan: a number from 1 to 4094")
         config["vlan"] = vlan
         labels["network.harvesterhci.io/vlan-id"] = str(vlan)
-    mode = spec.get("route_mode") or "auto"
-    route = {"mode": mode, "serverIPAddr": "", "cidr": "", "gateway": ""}
-    if mode == "manual":
-        cidr, gw = str(spec.get("cidr") or "").strip(), str(spec.get("gateway") or "").strip()
-        if not re.match(r"^\d{1,3}(\.\d{1,3}){3}/\d{1,2}$", cidr):
-            raise ValueError("cidr: an IPv4 network like 192.168.10.0/24")
-        if not re.match(r"^\d{1,3}(\.\d{1,3}){3}$", gw):
-            raise ValueError("gateway: an IPv4 address")
-        route.update(cidr=cidr, gateway=gw)
-    elif mode != "auto":
-        raise ValueError("route: auto (DHCP) or manual")
+    annotations = {}
+    if kind == "trunk":
+        # comme Harvester : vlan 0 et les plages ; pas de route en trunk
+        config["vlan"] = 0
+        config["vlanTrunk"] = hv_net.trunk_ranges(spec.get("ranges"))
+    else:
+        annotations["network.harvesterhci.io/route"] = hv_net.route_annotation(spec)
+    if spec.get("description"):
+        annotations[hv_net.DESC] = str(spec["description"])[:1000]
+    meta = {"name": name, "namespace": ns, "labels": labels}
+    if annotations:
+        meta["annotations"] = annotations
     return {"apiVersion": "k8s.cni.cncf.io/v1", "kind": "NetworkAttachmentDefinition",
-            "metadata": {"name": name, "namespace": ns, "labels": labels,
-                         "annotations": {"network.harvesterhci.io/route": json.dumps(route, separators=(",", ":"))}},
-            "spec": {"config": json.dumps(config, separators=(",", ":"))}}
+            "metadata": meta, "spec": {"config": json.dumps(config, separators=(",", ":"))}}
 
 
 def volume_manifest(spec, image=None):

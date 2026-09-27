@@ -85,6 +85,18 @@ l'éditeur de VM de la console, sont arrivées sur le bus PCI de l'invité
 (`virsh qemu-monitor-command ... "info pci"` dans le virt-launcher).
 
 
+## Un second lien pour les réseaux (v1.65.0)
+
+`harvlab.sh data-nic` branche à chaud une seconde carte virtio sur `br0` à
+chaque nœud (MAC `52:54:00:4c:ad:6N`, variable `HARVLAB_DATA_MAC_PREFIX`) ;
+les nœuds la voient comme `enp4s0`, libre. Elle sert à essayer réseaux de
+cluster, configurations, bonds, réseaux d'hôte et réseaux de stockage ou de
+migration sans jamais toucher au lien de la gestion. `br0` est un pont Linux
+sans filtrage de VLAN : les trames étiquetées passent d'un nœud à l'autre,
+un réseau de migration sur un VLAN marche donc réellement. L'agent réseau
+de Harvester peut signaler une première erreur (« set vlan filtering
+failed ») puis réussir quelques secondes après.
+
 ## Réglages pour les démonstrations
 
 Vider un nœud de trois attend Longhorn, pas les VMs : les machines migrent

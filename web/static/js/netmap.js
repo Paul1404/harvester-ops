@@ -199,6 +199,13 @@ const NetMap = (() => {
       data-tip-i18n="yw.act.yamlTip">${esc(tr('yw.act.yaml', 'YAML'))}</button>`;
   }
 
+  // v1.65.0 : modifier un réseau de VMs (VLAN, plages du trunk, route, description)
+  function editBtn(b) {
+    if (!/^nad-/.test(b.id) || !window.NetAdmin) return '';
+    return `<button type="button" class="vsw-more tip needs-admin" data-netmap-vmnet="${esc(b.id.slice(4))}"
+      data-tip-i18n="na.t.editVmNet">${esc(tr('na.edit', 'Edit'))}</button>`;
+  }
+
   function blockHtml(b) {
     return `<section class="vsw vsw-net${b.pod ? ' vsw-pod' : ''}" data-block="${esc(b.id)}">
       <header class="vsw-head">
@@ -207,7 +214,7 @@ const NetMap = (() => {
         <span class="vsw-sub">${esc(b.tag)}</span>
         ${b.ready === false ? `<span class="vsw-badge warn">${esc(tr('fabric.notReady', 'not ready'))}</span>` : ''}
         <span class="vsw-sub vsw-ports">${b.attached.length} VM</span>
-        ${yamlBtn(b)}
+        ${editBtn(b)}${yamlBtn(b)}
       </header>
       <div class="vsw-body">
         <div class="vsw-col vsw-left">
@@ -293,6 +300,12 @@ const NetMap = (() => {
       if (edit && window.VMEdit) {
         const [ns, name] = edit.dataset.netmapEdit.split('/');
         window.VMEdit.open(cluster, ns, name);
+        return;
+      }
+      const vmnet = e.target.closest('[data-netmap-vmnet]');
+      if (vmnet && window.NetAdmin) {
+        const [ns, name] = vmnet.dataset.netmapVmnet.split('/');
+        NetAdmin.editVmNet(cluster, ns, name, () => refresh());
         return;
       }
       const yml = e.target.closest('[data-netmap-yaml]');

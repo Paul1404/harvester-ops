@@ -449,9 +449,10 @@ for whichever cluster is selected:
   Images (source, size, state, storage class, the VMs using them) and
   Storage Classes (replicas, reclaim, binding, expansion, the image a class
   was made for, how many volumes use it).
-- **Network**: VM Networks (one block per network), Overlay Networks (the
-  kube-ovn VPCs and subnets, with their forms) and Underlay Networks (the
-  fabric: physical cards, virtual switches, LLDP). These views left the
+- **Network**: VM Networks (one block per network), Cluster Networks,
+  Load Balancers, IP Pools and Host Networks (1.65.0, see below), Overlay
+  Networks (the kube-ovn VPCs and subnets, with their forms) and Underlay
+  Networks (the fabric: physical cards, virtual switches, LLDP). These views left the
   Overview, which keeps Metrics and the Cluster board.
 - **Add-ons**: every Harvester add-on, its chart and version, its state, and
   Enable / Disable for administrators, followed in the dock
@@ -806,6 +807,61 @@ cancel of a frozen expansion on the three-node bench.
   Values travel through a private file, never on a command line.
 - **SSH keys**: **edit** the public key and the description; Harvester
   computes the new fingerprint.
+
+### Networks, as in Harvester (1.65.0)
+
+The Network section follows Harvester's Networks menu, in tabs: VM Networks,
+Cluster Networks, Load Balancers, IP Pools, Host Networks, then the
+kube-ovn Overlay and Underlay tabs. Every change is for administrators,
+checked before it runs, and followed in the dock.
+
+- **Cluster Networks**: one block per cluster network (its bridge, MTU,
+  readiness) with its **configurations**: which NICs of which hosts form its
+  bond (all hosts, one host, or hosts by labels), the bond mode, miimon and
+  MTU, and the state on each host as Harvester's agent reports it. Only the
+  NICs present and free on every chosen host are offered; the management
+  NIC never is. A configuration can be edited, **moved to another cluster
+  network** (Harvester's Migrate), or deleted; a cluster network is deleted
+  once it has no configuration and no VM network. A running VM on the
+  network blocks what Harvester would refuse (a new uplink, a host leaving),
+  not a description change. The agent of a host may report a first error
+  and then succeed: the console waits a minute before calling it a failure.
+- **Storage, VM migration and RWX networks**: three tiles at the top of the
+  tab, each on the management network or on a dedicated VLAN of a cluster
+  network (range, excluded addresses; for storage, a VLAN kept for it; for
+  RWX, shared with the storage network). The storage network is refused
+  while a VM runs, as Harvester requires; the console then waits until
+  Harvester says it is applied (it stops monitoring, waits for every volume
+  to detach, and gives Longhorn the new network).
+- **VM networks**: VLAN, untagged, and **trunk** (VLAN ranges like
+  `100-199, 300`); a route (DHCP, or a manual network and gateway, with an
+  optional DHCP server) and a description. **Edit** on a network's block
+  changes its description and route, and its VLAN or trunk ranges while
+  none of its VMs runs. Harvester probes the gateway of a known route; the
+  result is shown.
+- **Load Balancers**: in front of the running VMs of a namespace chosen by
+  labels (`key=value[,value]` per line), with an address from **DHCP** or
+  from an **IP pool** (fixed once created), listeners (port and port on the
+  VMs, TCP or UDP), and an optional TCP health check. The list shows the
+  address, the VMs behind and the state.
+- **IP Pools**: ranges (subnet, first and last address, gateway), an
+  optional VM network, priority and namespace (`*` makes the pool global).
+  An address still held by a vanished load balancer is **released** from
+  the pool's window.
+- **Host Networks**: an interface `<network>-br.<VLAN>` on each chosen host,
+  with DHCP or one static address per host (same subnet), optionally the
+  underlay of the overlay networks. Harvester sets no route.
+
+On the command line: `harvester-resources clusternetwork`, `netconfig`,
+`vmnet`, `lb`, `ippool`, `hostnet` and `netsetting`.
+
+Tried for real on the three-node bench: cluster network and configuration
+created, MTU changed and restored, the configuration moved to another
+cluster network and back, VLAN, trunk and untagged networks created and
+changed (gateway probe answered), a static host network on the three hosts,
+the migration network proven by a live migration, the storage and RWX
+networks applied with the VMs stopped and restored, load balancers by DHCP
+and by pool reached over SSH from outside, an orphan address released.
 
 ## 4. Cluster API: downstream RKE2 clusters (console + CLI)
 

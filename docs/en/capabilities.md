@@ -1100,6 +1100,51 @@ in Harvester), opens a window per cluster.
 Administrators only. On the command line: `harvester-resources upgrade
 version-add|version-delete|start|follow|logs|dismiss|abort|resume-node`.
 
+### Monitoring and logging (1.70.0)
+
+**Monitoring & Logging**, in the Cluster menu, gathers what Harvester spreads
+over its Monitoring and Logging pages, in four tabs.
+
+- **Metrics**: without rancher-monitoring, what the cluster knows right now
+  (metrics-server): each host's CPU and memory, and each running VM's CPU in
+  cores and as a share of its vCPUs, and its memory. With rancher-monitoring,
+  Prometheus adds the cluster's CPU, memory, disk and network, and per VM its
+  CPU share, memory used, network and disk traffic. The VM CPU from Prometheus
+  is the time the guest spends on its vCPUs (Harvester's own VM dashboards
+  divide it by 1000 and show near zero); the current view counts the VM's
+  container, QEMU included, and reads higher (on harvlab, 0.2 % against 3.8 %
+  for idle VMs). The add-ons are one click away when monitoring is off.
+- **Alerts**: the AlertmanagerConfig objects of the namespaces, with their
+  receivers (webhook, Slack, email, PagerDuty, Opsgenie, Microsoft Teams) and
+  their route (grouping, delays, matchers). A receiver's secret values are
+  typed in the form and become a Secret of the namespace; only the reference
+  is kept. The events Kubernetes records against a configuration (Alertmanager
+  refusing it, for instance) are shown with it.
+- **Flows**: Flow (one namespace) and ClusterFlow (whole cluster) objects of
+  the logging operator, of three kinds as in Harvester: logging, audit (the
+  API server's audit log, through Harvester's `harvester-kube-audit-log-ref`)
+  and event (the Kubernetes events collected by Harvester's event tailer).
+  The form only offers the outputs a flow may use (its namespace's outputs,
+  the cluster outputs, audit outputs for an audit flow), with selection rules
+  (labels, hosts, namespaces, include or exclude) and filters in YAML.
+- **Outputs**: Output and ClusterOutput objects, with a form per target
+  (Elasticsearch, OpenSearch, Loki, Splunk HEC, syslog, Kafka, forward, S3,
+  HTTP, file, null). Secret fields work as for receivers. An output used by a
+  flow cannot be deleted until the flow changes. A file output's path must
+  contain `${tag}` (fluentd splits its buffer by tag); the form proposes one.
+
+Every object shows the state the logging operator gives it: applied,
+inactive (no flow uses it yet), problems (with the operator's words), pending.
+Saving waits for the operator, then for fluentd's configuration check: when
+fluentd refuses the new configuration, it keeps the previous one and nothing
+changes in the log flow, so the console says it with fluentd's own error
+instead of "saved". A failed check of a Logging is also shown above the
+lists. Saving an unchanged object writes nothing.
+
+Reading is open to every role; changing is for administrators. On the command
+line: `harvester-resources monlog output-apply|output-delete|flow-apply|
+flow-delete|amc-apply|amc-delete`.
+
 ## 4. Cluster API: downstream RKE2 clusters (console + CLI)
 
 Create and operate Kubernetes clusters whose nodes are Harvester VMs,

@@ -107,6 +107,8 @@ il s'utilise aussi seul.
   harvester-resources upgrade start --cluster harv1 --version v1.9.0 [--version-file version.yaml] [--no-log]
   harvester-resources upgrade start --cluster harv1 --iso harvester-v1.9.0-amd64.iso --checksum SHA512   (airgap)
   harvester-resources upgrade follow|logs|dismiss|abort --cluster harv1 --name hvst-upgrade-xxxxx [--out logs.zip]
+  harvester-resources monlog output-apply|flow-apply|amc-apply --cluster harv1 --spec request.json
+  harvester-resources monlog output-delete|flow-delete|amc-delete --cluster harv1 --kind Flow --namespace ns --name n
   harvester-resources kubeconfig revoke --cluster harv1 --name ci
 
 Sorties : 0 fait, 1 échec, 2 refusé par le contrôle, 3 annulé. Les étapes
@@ -139,6 +141,7 @@ import hv_net as hnet  # noqa: E402
 import hv_settings as hset  # noqa: E402
 import hv_devices as hdev  # noqa: E402
 import hv_upgrade as hup  # noqa: E402
+import hv_monlog as hml  # noqa: E402
 
 EXIT_OK, EXIT_FAIL, EXIT_BLOCKED, EXIT_CANCELLED = 0, 1, 2, 3
 K_ADDON = "addons.harvesterhci.io"
@@ -2856,6 +2859,135 @@ def cmd_upgrade(args):
             srv.server_close()
 
 
+# ---------------------------------------------------------------------------
+# v1.70.0 : Monitoring & Logging (sorties, flux, AlertmanagerConfig)
+# ---------------------------------------------------------------------------
+
+_ML_KINDS = {"Output": hml.K_OUTPUT, "ClusterOutput": hml.K_COUTPUT, "Flow": hml.K_FLOW, "ClusterFlow": hml.K_CFLOW,
+             "AlertmanagerConfig": hml.K_AMC}
+
+
+def _ml_secrets(kube, ns, secrets):
+    """Les valeurs saisies d'un champ secret deviennent un Secret du
+    namespace de l'objet (créé ou complété) ; seule la référence reste.
+    Rend True si une valeur a été écrite."""
+    import base64
+    wrote = False
+    for field, ref in (secrets or {}).items():
+        if not ref or ref.get("value") in (None, ""):
+            continue
+        name, key = hml.check_name(ref.get("name"), "secret"), str(ref.get("key") or "").strip()
+        if not key:
+            raise ValueError(f"{field}: the key of the secret")
+        data = {key: base64.b64encode(str(ref["value"]).encode()).decode()}
+        cur = kube.get("secrets", ns, name)
+        if cur is None:
+            kube.create({"apiVersion": "v1", "kind": "Secret", "type": "Opaque",
+                         "metadata": {"name": name, "namespace": ns, "labels": {"harvester-ops.io/managed": "true"}},
+                         "data": data})
+            step("monlog", "running", f"secret {ns}/{name} created for {field}")
+        else:
+            kube.patch("secrets", ns, name, {"data": data})
+            step("monlog", "running", f"secret {ns}/{name}: key {key} set")
+        ref.pop("value", None)
+        wrote = True
+    return wrote
+
+
+def _ml_put(kube, obj):
+    kind = _ML_KINDS[obj["kind"]]
+    ns, name = obj["metadata"]["namespace"], obj["metadata"]["name"]
+    cur = kube.get(kind, ns, name)
+    if cur is None:
+        kube.create(obj)
+        return "created"
+    if cur.get("spec") == obj["spec"]:
+        return "unchanged"
+    obj["metadata"]["resourceVersion"] = cur["metadata"]["resourceVersion"]
+    kube.replace(obj)
+    return "updated"
+
+
+def cmd_monlog(args):
+    kube = kube_from(args)
+    act = args.action
+    if act.endswith("-delete"):
+        kind = args.kind
+        if kind not in _ML_KINDS:
+            raise ValueError("--kind: " + ", ".join(_ML_KINDS))
+        ns, name = hml.check_name(args.namespace, "namespace"), hml.check_name(args.name)
+        if kind in ("Output", "ClusterOutput"):
+            flows = hml.flow_rows(kube.list(hml.K_FLOW, None) + kube.list(hml.K_CFLOW, None))
+            users = [f"{f['namespace']}/{f['name']}" for f in flows
+                     if (kind == "Output" and f["namespace"] == ns and name in f["local"])
+                     or (kind == "ClusterOutput" and name in f["global"])]
+            if users:
+                raise ValueError(f"{kind} {name} is used by " + ", ".join(users) + ": change or delete them first")
+        kube.delete(_ML_KINDS[kind], ns, name)
+        step("monlog", "done", f"{kind} {ns}/{name} deleted")
+        return EXIT_OK
+    spec = _read_json(args.spec)
+    if act == "output-apply":
+        obj = hml.output_manifest(spec)
+    elif act == "flow-apply":
+        outs = hml.output_rows(kube.list(hml.K_OUTPUT, None) + kube.list(hml.K_COUTPUT, None))
+        obj = hml.flow_manifest(spec, outs)
+    else:
+        obj = hml.amc_manifest(spec)
+        for r in spec.get("receivers") or []:
+            _ml_secrets(kube, obj["metadata"]["namespace"], {k: v for k, v in r.items() if isinstance(v, dict)})
+        obj = hml.amc_manifest(spec)
+    kind, ns, name = obj["kind"], obj["metadata"]["namespace"], obj["metadata"]["name"]
+    audit = (obj["spec"].get("loggingRef") or "") == hml.AUDIT_REF
+    lg = hml.logging_of(kube.list(hml.K_LOGGING, None), audit) if kind != "AlertmanagerConfig" else None
+    before = hml.checks(lg)
+    wrote = act == "output-apply" and _ml_secrets(kube, ns, spec.get("secrets"))
+    what = _ml_put(kube, obj)
+    if what == "unchanged" and wrote:
+        what = "updated (secret)"          # fluentd reçoit la nouvelle valeur : un contrôle suit
+    step("monlog", "running", f"{kind} {ns}/{name} {what}")
+    if kind == "AlertmanagerConfig":
+        addon = hml.addon_state([kube.get("addons.harvesterhci.io", *hml.ADDON_MON)], hml.ADDON_MON)
+        step("monlog", "done", f"{name} saved" + ("" if addon["enabled"] else
+                                                  " (rancher-monitoring is disabled: it takes effect once enabled)"))
+        return EXIT_OK
+    addon = hml.addon_state([kube.get("addons.harvesterhci.io", *hml.ADDON_LOG)], hml.ADDON_LOG)
+    if not addon["enabled"]:
+        step("monlog", "done", f"{name} saved (rancher-logging is disabled: it takes effect once enabled)")
+        return EXIT_OK
+    t0, seen = time.time(), {}
+
+    def done(o):
+        # l'objet accepté par l'opérateur, puis la configuration de fluentd
+        # qu'il en tire acceptée par son contrôle : sinon fluentd garde
+        # l'ancienne et rien n'arrive, sans autre signe
+        res, msg = hml.settled(o, deadline_passed=time.time() - t0 > args.grace)
+        if res is not True or lg is None or what == "unchanged" or (kind.endswith("Output") and not (o.get("status") or {}).get("active")):
+            return res, msg
+        seen.setdefault("at", time.time())
+        v = hml.config_verdict(before, hml.checks(hml.logging_of(kube.list(hml.K_LOGGING, None), audit)))
+        if v is None:
+            if time.time() - seen["at"] > ML_CHECK_GRACE:
+                return True, msg + "; fluentd's configuration unchanged"
+            return None, "waiting for fluentd's configuration check"
+        if v[0]:
+            return True, f"{msg}; fluentd configuration {v[1]} checked"
+        return False, (f"fluentd refused its new configuration ({v[1]}): {_ml_config_error(kube, v[1]) or 'see the configcheck pod'}; "
+                       "the previous configuration stays in place")
+    return _wait(kube, _ML_KINDS[kind], ns, name, done, args.timeout, label="monlog")
+
+
+ML_CHECK_GRACE = 180
+
+
+def _ml_config_error(kube, conf_hash):
+    try:
+        return hml.config_error(kube.run("logs", "-n", hml.CTRL_NS, "-l", f"logging.banzaicloud.io/config-hash={conf_hash}",
+                                         "--tail", "40", timeout=30))
+    except Exception:      # noqa: BLE001 : le journal manque, le verdict reste
+        return ""
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(prog="harvester-resources", description=__doc__.split("\n\n")[0])
     sub = ap.add_subparsers(dest="cmd", required=True)
@@ -3254,6 +3386,17 @@ def main(argv=None):
     sp.add_argument("--node", help="resume-node: the paused host")
     sp.add_argument("--out", help="logs: where to write the archive (mode 0600)")
     sp.add_argument("--timeout", type=int, default=6 * 3600)
+    sp = sub.add_parser("monlog", help="logging outputs and flows, Alertmanager configurations")
+    sp.set_defaults(fn=cmd_monlog)
+    sp.add_argument("action", choices=("output-apply", "output-delete", "flow-apply", "flow-delete", "amc-apply", "amc-delete"))
+    sp.add_argument("--cluster")
+    sp.add_argument("--kubeconfig")
+    sp.add_argument("--spec", help="apply: the request as JSON (secret values are turned into Secrets)")
+    sp.add_argument("--kind", help="delete: Output, ClusterOutput, Flow, ClusterFlow or AlertmanagerConfig")
+    sp.add_argument("--namespace")
+    sp.add_argument("--name")
+    sp.add_argument("--grace", type=int, default=90, help="apply: seconds before an unprocessed object is an error")
+    sp.add_argument("--timeout", type=int, default=480, help="apply: seconds for the operator, then fluentd's check")
     args = ap.parse_args(argv)
     signal.signal(signal.SIGTERM, _on_signal)
     try:

@@ -672,6 +672,7 @@ ADMIN_ONLY_PREFIXES = (
     "/api/hv-support/",         # v1.67.0 : paquet de support, kubeconfigs délivrés
     "/api/devices/",            # v1.68.0 : passthrough PCI et USB, SR-IOV (détache un périphérique de l'hôte)
     "/api/upgrade/",            # v1.69.0 : mise à jour de Harvester (redémarre les hôtes)
+    "/api/monlog/",             # v1.70.0 : sorties et flux de journaux, AlertmanagerConfig
     "/api/users",               # gestion des comptes de la console
     "/api/harvester-users",     # comptes du cluster Harvester
     "/api/kubeovn/",            # réseaux kube-ovn : un changement peut couper des VMs
@@ -10840,6 +10841,7 @@ import hv_net as _hnet  # noqa: E402
 import hv_settings as _hset  # noqa: E402
 import hv_devices as _hdev  # noqa: E402
 import hv_upgrade as _hup  # noqa: E402
+import hv_monlog as _hml  # noqa: E402
 import hv_objects as _ho  # noqa: E402
 
 # v1.58.0 : les listes de la fenêtre Backups, servies par la même route
@@ -13069,6 +13071,145 @@ def api_upgrade_logs(cluster, token):
     return Response(data, mimetype="application/zip",
                     headers={"Content-Disposition": f'attachment; filename="{cluster}-upgrade-logs.zip"',
                              "Cache-Control": "no-store"})
+
+
+# ---------------------------------------------------------------------------
+# v1.70.0 : Monitoring & Logging de Harvester. Écritures par
+# bin/harvester-resources.py monlog ; les valeurs secrètes par fichier privé.
+# ---------------------------------------------------------------------------
+
+_MONLOG_DO = ("output-apply", "output-delete", "flow-apply", "flow-delete", "amc-apply", "amc-delete")
+
+
+def _alertmanager_enabled(addon):
+    try:
+        import yaml
+        vals = yaml.safe_load(((addon or {}).get("spec") or {}).get("valuesContent") or "") or {}
+    except Exception:  # noqa: BLE001 - valeurs illisibles : on ne conclut rien
+        return None
+    am = (vals.get("alertmanager") or {}) if isinstance(vals, dict) else {}
+    return am.get("enabled", True) is not False
+
+
+@app.route("/api/monlog/<cluster>")
+@requires_auth
+def api_monlog(cluster):
+    """Sorties, flux et AlertmanagerConfig, avec l'état réel lu dans status
+    et dans les événements ; l'état des deux add-ons."""
+    kc = _kubectl_for_cluster(cluster)
+    if not kc:
+        return jsonify({"error": f"unknown cluster: {cluster}"}), 404
+    if _cluster_reachable(kc) is False:
+        return jsonify(_unreachable_payload(cluster, kc)), 200
+    from concurrent.futures import ThreadPoolExecutor
+    reads = {"addons": ("addons.harvesterhci.io", "-A"), "outputs": (_hml.K_OUTPUT, "-A"), "coutputs": (_hml.K_COUTPUT, "-A"),
+             "flows": (_hml.K_FLOW, "-A"), "cflows": (_hml.K_CFLOW, "-A"), "loggings": (_hml.K_LOGGING,),
+             "amcs": (_hml.K_AMC, "-A"),
+             "events": ("events", "-A", "--field-selector", "involvedObject.kind=AlertmanagerConfig"),
+             "namespaces": ("namespaces",)}
+    with ThreadPoolExecutor(max_workers=len(reads)) as pool:
+        futs = {k: pool.submit(_kubectl_json, kc, "get", *a, timeout=30, cluster=cluster) for k, a in reads.items()}
+        got = {k: ((f.result() or {}).get("items") or []) for k, f in futs.items()}
+    mon_addon = next((a for a in got["addons"] if (a.get("metadata") or {}).get("name") == _hml.ADDON_MON[1]), None)
+    return jsonify({"cluster": cluster,
+                    "logging": _hml.addon_state(got["addons"], _hml.ADDON_LOG),
+                    "monitoring": dict(_hml.addon_state(got["addons"], _hml.ADDON_MON), alertmanager=_alertmanager_enabled(mon_addon)),
+                    "outputs": _hml.output_rows([dict(o, kind="Output") for o in got["outputs"]] +
+                                                [dict(o, kind="ClusterOutput") for o in got["coutputs"]]),
+                    "flows": _hml.flow_rows([dict(o, kind="Flow") for o in got["flows"]] +
+                                            [dict(o, kind="ClusterFlow") for o in got["cflows"]]),
+                    "loggings": _hml.logging_health(got["loggings"]),
+                    "amcs": _hml.amc_rows(got["amcs"], got["events"]), "shapes": _hml.OUTPUTS, "receiver_types": _hml.RECEIVERS,
+                    "namespaces": sorted((n.get("metadata") or {}).get("name") for n in got["namespaces"])})
+
+
+@app.route("/api/monlog/<cluster>/metrics")
+@requires_auth
+def api_monlog_metrics(cluster):
+    """L'instantané metrics.k8s.io (hôtes, VMs) et, si rancher-monitoring
+    répond, les jauges du cluster et des VMs tirées de Prometheus."""
+    kc = _kubectl_for_cluster(cluster)
+    if not kc:
+        return jsonify({"error": f"unknown cluster: {cluster}"}), 404
+    if _cluster_reachable(kc) is False:
+        return jsonify(_unreachable_payload(cluster, kc)), 200
+    from concurrent.futures import ThreadPoolExecutor
+    reads = {"nm": ("nodes.metrics.k8s.io",), "pm": ("pods.metrics.k8s.io", "-A", "-l", "kubevirt.io=virt-launcher"),
+             "nodes": ("nodes",), "vmis": ("virtualmachineinstances.kubevirt.io", "-A"),
+             "addon": ("addons.harvesterhci.io", _hml.ADDON_MON[1], "-n", _hml.ADDON_MON[0])}
+    with ThreadPoolExecutor(max_workers=len(reads)) as pool:
+        futs = {k: pool.submit(_kubectl_json, kc, "get", *a, timeout=30, cluster=cluster) for k, a in reads.items()}
+        got = {k: f.result() for k, f in futs.items()}
+    items = lambda k: (got[k] or {}).get("items") or []  # noqa: E731
+    snap = _hml.snapshot(items("nm"), items("pm"), items("nodes"), items("vmis"))
+    prom = None
+    if ((got["addon"] or {}).get("spec") or {}).get("enabled"):
+        def q(query):
+            r = _kubectl_run(["kubectl", "--kubeconfig", kc, "get", "--raw", _hml.prom_path(query)],
+                             capture_output=True, text=True, timeout=20)
+            return json.loads(r.stdout) if r.returncode == 0 and r.stdout else None
+        with ThreadPoolExecutor(max_workers=9) as pool:
+            cl = {k: pool.submit(q, v) for k, v in _hml.Q_CLUSTER.items()}
+            vm = {k: pool.submit(q, v) for k, v in (("cpu", _hml.Q_VM_CPU), ("memory", _hml.Q_VM_MEM),
+                                                     ("net", _hml.Q_VM_NET), ("disk", _hml.Q_VM_DISK))}
+            clr = {k: f.result() for k, f in cl.items()}
+            vmr = {k: _hml.prom_vector(f.result()) for k, f in vm.items()}
+        if any(clr.values()):
+            keys = set().union(*[set(v) for v in vmr.values()]) - {""}
+            prom = {"cluster": {k: _hml.prom_vector(v).get("") for k, v in clr.items()},
+                    "vms": sorted([{"namespace": ns, "name": n, **{k: vmr[k].get((ns, n)) for k in vmr}} for ns, n in keys],
+                                  key=lambda r: -(r["cpu"] or 0))}
+    return jsonify({"cluster": cluster, **snap, "prometheus": prom,
+                    "monitoring": bool(((got["addon"] or {}).get("spec") or {}).get("enabled"))})
+
+
+@app.route("/api/monlog/<cluster>/do/<action>", methods=["POST"])
+@requires_auth
+@_rate_limit("30/minute")
+def api_monlog_do(cluster, action):
+    if action not in _MONLOG_DO:
+        return jsonify({"error": "action: " + ", ".join(_MONLOG_DO)}), 400
+    kc = _kubectl_for_cluster(cluster)
+    if not kc:
+        return jsonify({"error": f"unknown cluster: {cluster}"}), 404
+    b = request.get_json(silent=True) or {}
+    files = []
+    try:
+        if action.endswith("-delete"):
+            kind = str(b.get("kind") or "")
+            if kind not in ("Output", "ClusterOutput", "Flow", "ClusterFlow", "AlertmanagerConfig"):
+                raise ValueError("kind: Output, ClusterOutput, Flow, ClusterFlow or AlertmanagerConfig")
+            ns, name = _hml.check_name(b.get("namespace"), "namespace"), _hml.check_name(b.get("name"))
+            args = ["monlog", action, "--kind", kind, "--namespace", ns, "--name", name]
+            label = f"monlog:{action}:{ns}/{name}"
+        else:
+            spec = b.get("spec") if isinstance(b.get("spec"), dict) else {}
+            if spec.get("filters_yaml"):
+                import yaml
+                try:
+                    spec["filters"] = yaml.safe_load(spec.pop("filters_yaml")) or []
+                except yaml.YAMLError as e:
+                    raise ValueError(f"filters: not YAML ({e})") from None
+            spec.pop("filters_yaml", None)
+            clean = json.loads(json.dumps(spec))
+            if action == "output-apply":
+                for ref in (clean.get("secrets") or {}).values():
+                    if isinstance(ref, dict):
+                        ref.pop("value", None)
+                _hml.output_manifest(clean)
+            elif action == "flow-apply":
+                _hml.flow_manifest(clean)
+            else:
+                _hml.amc_manifest(clean)
+            # le fichier porte les valeurs secrètes saisies : privé, effacé après l'action
+            args = ["monlog", action, "--spec", _private_file(files, json.dumps(spec), "monlog-")]
+            label = f"monlog:{action}:{spec.get('namespace') or ''}/{spec.get('name')}"
+    except (ValueError, TypeError) as e:
+        for f in files:
+            Path(f).unlink(missing_ok=True)
+        return jsonify({"error": str(e)}), 400
+    run, err = _res_cli(cluster, kc, label, args, files)
+    return _res_reply(run, err, action=action)
 
 
 @app.route("/api/storage-options/<cluster>")

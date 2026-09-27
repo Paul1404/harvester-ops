@@ -1,8 +1,8 @@
 # Parité avec l'interface de Harvester
 
-État au 2026-09-27, console **v1.69.0**, comparée à l'interface de **Harvester v1.9** (menus relevés dans le code de harvester-ui-extension v1.9.0 et la documentation v1.9).
+État au 2026-09-27, console **v1.70.0**, comparée à l'interface de **Harvester v1.9** (menus relevés dans le code de harvester-ui-extension v1.9.0 et la documentation v1.9).
 
-Sur 135 fonctions de l'interface de Harvester : **125 faites**, **4 partielles**, **6 manquantes** ; 2 hors périmètre. Une fonction manquante porte la version où elle est prévue.
+Sur 135 fonctions de l'interface de Harvester : **128 faites**, **4 partielles**, **3 manquantes** ; 2 hors périmètre. Une fonction manquante porte la version où elle est prévue.
 
 Statuts : Fait, Partiel (ce qui manque est dit), Manquant (version prévue), Console seulement (ce que Harvester n'a pas), Hors périmètre.
 
@@ -15,7 +15,7 @@ Menu Harvester : *Dashboard*
 | Compteurs nœuds, VMs, volumes | Fait | 1.2 | Vue d'ensemble |
 | Capacité CPU, mémoire, stockage | Fait | 1.62 | usage réel (metrics.k8s.io), réservé, stockage écrit et promis |
 | Événements du cluster (hôtes, VMs, volumes, images) | Fait | 1.62 | onglet Événements de l'aperçu, filtre avertissements |
-| Métriques du cluster et des VMs (rancher-monitoring) | Manquant | prévue 1.70 |  |
+| Métriques du cluster et des VMs (rancher-monitoring) | Fait | 1.70 | onglet Métriques : Prometheus quand rancher-monitoring est actif, metrics-server sinon ; CPU de VM juste (Harvester le divise par 1000) |
 | Bouton Mettre à jour Harvester | Fait | 1.69 | dans l'en-tête de l'aperçu et sur server-version |
 
 ## Hôtes
@@ -198,8 +198,9 @@ Menu Harvester : *Monitoring & Logging*
 | Fonction | Statut | Version | Précision |
 |---|---|---|---|
 | Activer rancher-monitoring / rancher-logging et leur configuration | Fait | 1.57 | par les add-ons |
-| Configurations Alertmanager (récepteurs) | Manquant | prévue 1.70 |  |
-| Flows, cluster flows, outputs, cluster outputs | Manquant | prévue 1.70 |  |
+| Configurations Alertmanager (récepteurs) | Fait | 1.70 | webhook, Slack, e-mail, PagerDuty, Opsgenie, Teams ; route et filtres ; secrets saisis devenus Secrets ; livraison vérifiée en réel |
+| Flows, cluster flows, outputs, cluster outputs | Fait | 1.70 | journaux, audit, événements ; 11 cibles ; sortie utilisée protégée |
+| Configuration de fluentd refusée dite à l'enregistrement | Console seulement | 1.70 | Harvester enregistre et fluentd garde l'ancienne configuration sans rien dire |
 
 ## Avancé
 

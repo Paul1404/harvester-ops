@@ -1233,6 +1233,58 @@ passée à une VM d'un autre hôte puis rendue.
 Réservé aux administrateurs. En ligne de commande : `harvester-resources
 upgrade version-add|version-delete|start|follow|logs|dismiss|abort|resume-node`.
 
+### Surveillance et journaux (1.70.0)
+
+**Monitoring & Logging**, dans le menu Cluster, réunit ce que Harvester
+répartit entre ses pages Monitoring et Logging, en quatre onglets.
+
+- **Métriques** : sans rancher-monitoring, ce que le cluster sait à l'instant
+  (metrics-server) : le CPU et la mémoire de chaque hôte, et pour chaque VM en
+  marche son CPU en cœurs et en part de ses vCPU, et sa mémoire. Avec
+  rancher-monitoring, Prometheus ajoute le CPU, la mémoire, le disque et le
+  réseau du cluster, et par VM la part de CPU, la mémoire utilisée, le trafic
+  réseau et disque. Le CPU d'une VM selon Prometheus est le temps que passe
+  l'invité sur ses vCPU (les tableaux de bord de VM de Harvester le divisent
+  par 1000 et affichent presque zéro) ; la vue de l'instant compte le
+  conteneur de la VM, QEMU compris, et affiche plus (sur harvlab, 0,2 % contre
+  3,8 % pour des VMs au repos). Les add-ons sont à un clic quand la
+  surveillance est éteinte.
+- **Alertes** : les objets AlertmanagerConfig des namespaces, avec leurs
+  receivers (webhook, Slack, e-mail, PagerDuty, Opsgenie, Microsoft Teams) et
+  leur route (regroupement, délais, filtres). Les valeurs secrètes d'un
+  receiver se saisissent dans le formulaire et deviennent un Secret du
+  namespace ; seule la référence est gardée. Les événements que Kubernetes
+  enregistre sur une configuration (Alertmanager qui la refuse, par exemple)
+  sont montrés avec elle.
+- **Flux** : les objets Flow (un namespace) et ClusterFlow (tout le cluster)
+  de l'opérateur de journaux, de trois natures comme dans Harvester :
+  journaux, audit (le journal d'audit du serveur d'API, par le
+  `harvester-kube-audit-log-ref` de Harvester) et événements (les événements
+  Kubernetes que recueille le collecteur d'événements de Harvester). Le
+  formulaire ne propose que les sorties qu'un flux peut utiliser (celles de
+  son namespace, celles du cluster, les sorties d'audit pour un flux d'audit),
+  avec des règles de sélection (labels, hôtes, namespaces, inclure ou
+  exclure) et des filtres en YAML.
+- **Sorties** : les objets Output et ClusterOutput, avec un formulaire par
+  cible (Elasticsearch, OpenSearch, Loki, Splunk HEC, syslog, Kafka, forward,
+  S3, HTTP, fichier, null). Les champs secrets fonctionnent comme pour les
+  receivers. Une sortie utilisée par un flux ne peut pas être supprimée tant
+  que le flux ne change pas. Le chemin d'une sortie fichier doit contenir
+  `${tag}` (fluentd découpe son tampon par tag) ; le formulaire en propose un.
+
+Chaque objet montre l'état que lui donne l'opérateur : appliqué, inactif
+(aucun flux ne s'en sert encore), problèmes (avec les mots de l'opérateur),
+en attente. L'enregistrement attend l'opérateur, puis le contrôle de
+configuration de fluentd : quand fluentd refuse la nouvelle configuration, il
+garde l'ancienne et rien ne change dans l'acheminement des journaux, alors la
+console le dit avec l'erreur de fluentd au lieu de « enregistré ». Un
+contrôle en échec d'un Logging s'affiche aussi au-dessus des listes.
+Enregistrer un objet inchangé n'écrit rien.
+
+La lecture est ouverte à tous les rôles ; la modification est réservée aux
+administrateurs. En ligne de commande : `harvester-resources monlog
+output-apply|output-delete|flow-apply|flow-delete|amc-apply|amc-delete`.
+
 ## 4. Cluster API : clusters RKE2 en aval (console + CLI)
 
 Créer et exploiter des clusters Kubernetes dont les nœuds sont des VMs

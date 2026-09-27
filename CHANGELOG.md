@@ -4,6 +4,66 @@ All notable changes to this project will be documented here.
 Format inspired by [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 This file summarises each minor release; per-patch detail lives in `git log`.
 
+## [1.70.0] - 2026-09-27 - Monitoring and logging
+
+### Added
+- **Monitoring & Logging** section in the Cluster menu, four tabs:
+  - **Metrics**: hosts and running VMs from metrics-server, and with
+    rancher-monitoring the cluster's CPU, memory, disk and network and per VM
+    CPU share, memory, network and disk traffic from Prometheus. The VM CPU is
+    the share of its vCPUs used (Harvester's VM dashboards divide it by 1000).
+  - **Alerts**: AlertmanagerConfig objects with their receivers (webhook,
+    Slack, email, PagerDuty, Opsgenie, Microsoft Teams), route and matchers,
+    and the events Kubernetes records against them.
+  - **Flows**: Flow and ClusterFlow objects of the three kinds of Harvester
+    (logging, audit, event), offering only the outputs a flow may use,
+    selection rules and filters in YAML.
+  - **Outputs**: Output and ClusterOutput objects with a form per target
+    (Elasticsearch, OpenSearch, Loki, Splunk HEC, syslog, Kafka, forward, S3,
+    HTTP, file, null).
+- Secret values typed in a form become a Secret of the namespace; only the
+  reference is kept in the object, never in a response or a command line.
+- Every object shows the operator's state (applied, inactive, problems,
+  pending); a failed configuration check of a Logging is shown above the lists.
+- `harvester-resources monlog output-apply|output-delete|flow-apply|flow-delete|amc-apply|amc-delete`.
+
+### Fixed (found by the real test on harv1)
+- Saving waits for fluentd's configuration check after the operator: a
+  refused configuration left fluentd on the previous one while the console
+  said "saved"; it now fails with fluentd's own error.
+- A file output's path must contain `${tag}` (fluentd splits its buffer by
+  tag, the check failed without it); the form proposes a valid path.
+- A "New" button clicked before the section's data arrived did nothing; the
+  click is replayed once the data is there.
+- Saving an unchanged object writes nothing (unless a secret value changed).
+
+### Tests
+- Library: outputs and flows as the operator reads them, secret references,
+  states, the Logging a configuration belongs to, the configuration check's
+  verdict and fluentd's error, AlertmanagerConfig receivers and routes,
+  Prometheus queries.
+- Command line and routes: typed secrets become Secrets, a used output
+  cannot be deleted, waiting for the operator then for fluentd's check,
+  refusal in fluentd's words, admin-only writes, private spec file removed.
+- In Chromium: metrics with and without Prometheus, output and flow forms,
+  the AlertmanagerConfig form, a click before the data arrives.
+- Real, on harv1 (Harvester 1.9.0, rancher-logging on): a file path without
+  ${tag} refused before reaching fluentd; a cluster file output and an event
+  flow created through the forms, fluentd's configuration check waited for
+  and passed, the Kubernetes events actually written by fluentd; an audit
+  output and flow on Harvester's audit logging; a Loki output of a namespace
+  with its password typed (a Secret, only its reference in the output) and a
+  flow by labels, the used output not deletable; an output whose secret is
+  missing refused in the operator's words and shown in the tab; all deleted
+  through the interface, fluentd back to its first configuration.
+- Real, on the three-node bench harvlab (Harvester 1.8.2, rancher-monitoring
+  enabled with reduced volumes): the cluster gauges and the four VMs' CPU,
+  memory, network and disk from Prometheus; an AlertmanagerConfig with a
+  webhook receiver created by the form, merged by the operator, and a test
+  alert delivered to the webhook through its route; a configuration with a
+  missing secret shown rejected with the operator's reason; all removed,
+  monitoring disabled again.
+
 ## [1.69.0] - 2026-09-27 - Upgrading Harvester
 
 ### Added

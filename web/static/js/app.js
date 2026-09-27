@@ -247,7 +247,7 @@ const App = (() => {
       jobs.push(window.CAPI.reactivate());
     }
     // v1.57.0 : les sections de Harvester relisent le nouveau cluster
-    if (['storage', 'network', 'addons', 'security', 'advanced'].includes(active) && window.Sections) {
+    if (['storage', 'network', 'addons', 'security', 'monlog', 'advanced'].includes(active) && window.Sections) {
       jobs.push(Sections.activate(active));
     }
     // allSettled : un onglet en erreur ne doit pas laisser le voile en place.

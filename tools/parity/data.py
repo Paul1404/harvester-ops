@@ -3,7 +3,7 @@
 # Statuts : ok (fait), part (partiel), todo (manquant), plus (console seulement), na (hors périmètre).
 # v : version où c'est arrivé (ok/part) ou prévue (todo).
 
-AS_OF = "1.69.0"
+AS_OF = "1.70.0"
 DATE = "2026-09-27"
 
 S = []  # sections
@@ -21,7 +21,9 @@ sec("dashboard", "Tableau de bord", "Dashboard", "Dashboard", "Dashboard")
 r("ok", "1.2", "Compteurs nœuds, VMs, volumes", "Host, VM and volume counts", "Vue d'ensemble", "Overview tiles")
 r("ok", "1.62", "Capacité CPU, mémoire, stockage", "CPU, memory and storage capacity", "usage réel (metrics.k8s.io), réservé, stockage écrit et promis", "live usage (metrics.k8s.io), reserved, storage written and promised")
 r("ok", "1.62", "Événements du cluster (hôtes, VMs, volumes, images)", "Cluster events (hosts, VMs, volumes, images)", "onglet Événements de l'aperçu, filtre avertissements", "Overview Events tab, warnings filter")
-r("todo", "1.70", "Métriques du cluster et des VMs (rancher-monitoring)", "Cluster and VM metrics (rancher-monitoring)", "", "")
+r("ok", "1.70", "Métriques du cluster et des VMs (rancher-monitoring)", "Cluster and VM metrics (rancher-monitoring)",
+  "onglet Métriques : Prometheus quand rancher-monitoring est actif, metrics-server sinon ; CPU de VM juste (Harvester le divise par 1000)",
+  "Metrics tab: Prometheus when rancher-monitoring is on, metrics-server otherwise; correct VM CPU (Harvester divides it by 1000)")
 r("ok", "1.69", "Bouton Mettre à jour Harvester", "Upgrade Harvester button", "dans l'en-tête de l'aperçu et sur server-version", "in the Overview header and on server-version")
 
 sec("hosts", "Hôtes", "Hosts", "Hosts", "Hosts")
@@ -157,8 +159,13 @@ r("ok", "1.60", "YAML des sauvegardes et planifications", "Backup and schedule Y
 
 sec("monitoring", "Monitoring et logging", "Monitoring and logging", "Monitoring & Logging", "Monitoring & Logging")
 r("ok", "1.57", "Activer rancher-monitoring / rancher-logging et leur configuration", "Enable rancher-monitoring / rancher-logging and their configuration", "par les add-ons", "through add-ons")
-r("todo", "1.70", "Configurations Alertmanager (récepteurs)", "Alertmanager configurations (receivers)")
-r("todo", "1.70", "Flows, cluster flows, outputs, cluster outputs", "Flows, cluster flows, outputs, cluster outputs")
+r("ok", "1.70", "Configurations Alertmanager (récepteurs)", "Alertmanager configurations (receivers)",
+  "webhook, Slack, e-mail, PagerDuty, Opsgenie, Teams ; route et filtres ; secrets saisis devenus Secrets ; livraison vérifiée en réel",
+  "webhook, Slack, email, PagerDuty, Opsgenie, Teams; route and matchers; typed secrets become Secrets; delivery checked for real")
+r("ok", "1.70", "Flows, cluster flows, outputs, cluster outputs", "Flows, cluster flows, outputs, cluster outputs",
+  "journaux, audit, événements ; 11 cibles ; sortie utilisée protégée", "logging, audit, event; 11 targets; used output protected")
+r("plus", "1.70", "Configuration de fluentd refusée dite à l'enregistrement", "Refused fluentd configuration said when saving",
+  "Harvester enregistre et fluentd garde l'ancienne configuration sans rien dire", "Harvester saves and fluentd keeps the previous configuration silently")
 
 sec("advanced", "Avancé", "Advanced", "Advanced", "Advanced")
 r("ok", "1.64", "Templates : versions, par défaut, lancer une version, supprimer", "Templates: versions, default, launch a version, delete")

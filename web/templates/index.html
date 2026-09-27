@@ -83,6 +83,10 @@
             <span class="tab-icon" data-icon="shield"></span>
             <span class="sidebar-label" data-i18n="tab.security">Security</span>
           </a>
+          <a class="tab tab-child" data-tab="monlog" href="#monlog" data-i18n-title="tab.monlogTip" title="Metrics, alerting and log forwarding of the cluster">
+            <span class="tab-icon" data-icon="activity"></span>
+            <span class="sidebar-label" data-i18n="tab.monlog">Monitoring &amp; Logging</span>
+          </a>
           <a class="tab tab-child" data-tab="advanced" href="#advanced" data-i18n-title="tab.advancedTip" title="Harvester settings, devices, backup target, support bundles and kubeconfigs">
             <span class="tab-icon" data-icon="settings"></span>
             <span class="sidebar-label" data-i18n="tab.advanced">Advanced</span>
@@ -306,6 +310,25 @@
       </div>
       <div class="section-pane" data-pane="secrets" hidden><div class="resource-host" data-resource="secrets"></div></div>
       <div class="section-pane" data-pane="sshkeys" hidden><div class="resource-host" data-resource="sshkeys"></div></div>
+    </section>
+
+    <!-- v1.70.0 : MONITORING & LOGGING -->
+    <section id="tab-monlog" class="tab-content" data-section="monlog">
+      <div class="shutdown-header">
+        <div class="automation-header-text">
+          <h1><span data-i18n="tab.monlog">Monitoring &amp; Logging</span> · <span class="cluster-name"></span></h1>
+        </div>
+        <div class="sub-tabs sub-tabs-inline" role="tablist">
+          <button type="button" class="sub-tab tip" role="tab" data-section-tab="metrics" data-i18n-title="section.metricsTip" title="Hosts and VMs: current use, and history when rancher-monitoring runs"><span class="tab-icon" data-icon="metrics"></span> <span data-i18n="section.metrics">Metrics</span></button>
+          <button type="button" class="sub-tab tip" role="tab" data-section-tab="alerts" data-i18n-title="section.alertsTip" title="Alertmanager configurations: where alerts go"><span class="tab-icon" data-icon="warn"></span> <span data-i18n="section.alerts">Alertmanager</span></button>
+          <button type="button" class="sub-tab tip" role="tab" data-section-tab="flows" data-i18n-title="section.flowsTip" title="Which logs, audit records or events are sent, and where"><span class="tab-icon" data-icon="activity"></span> <span data-i18n="section.flows">Flows</span></button>
+          <button type="button" class="sub-tab tip" role="tab" data-section-tab="outputs" data-i18n-title="section.outputsTip" title="Where logs are sent: Elasticsearch, Loki, Splunk, syslog, S3..."><span class="tab-icon" data-icon="upload"></span> <span data-i18n="section.outputs">Outputs</span></button>
+        </div>
+      </div>
+      <div class="section-pane" data-pane="metrics" hidden><div class="na-host" data-ml="metrics"></div></div>
+      <div class="section-pane" data-pane="alerts" hidden><div class="na-host" data-ml="alerts"></div></div>
+      <div class="section-pane" data-pane="flows" hidden><div class="na-host" data-ml="flows"></div></div>
+      <div class="section-pane" data-pane="outputs" hidden><div class="na-host" data-ml="outputs"></div></div>
     </section>
 
     <!-- v1.67.0 : ADVANCED (Settings, Support) -->
@@ -1053,6 +1076,7 @@
   <script src="/static/js/advanced.js"></script>
   <script src="/static/js/devices.js"></script>
   <script src="/static/js/upgrade.js"></script>
+  <script src="/static/js/monlog.js"></script>
 <script src="/static/js/versions.js"></script>
 <script src="/static/js/console-accounts.js"></script>
 <script src="/static/js/user-menu.js"></script>

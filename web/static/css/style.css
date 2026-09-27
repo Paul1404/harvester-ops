@@ -5088,3 +5088,7 @@ td.tpl-acts .btn + .btn { margin-left: 4px; }
 .upg-vlist li { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .upg-versions summary { cursor: pointer; margin: 6px 0; }
 /* v1.70.0 : Monitoring & Logging */
+.ml-secret-row { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 6px; }
+.ml-rule { display: grid; grid-template-columns: 110px 1fr 1fr auto auto; gap: 6px; margin-bottom: 6px; align-items: center; }
+.ml-rec { border: 1px solid var(--border); border-radius: 8px; padding: 6px 10px; margin: 0 0 8px; }
+.ml-rec legend { font-size: 12px; color: var(--text-dim); }

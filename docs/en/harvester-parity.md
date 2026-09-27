@@ -1,8 +1,8 @@
 # Parity with the Harvester UI
 
-Status on 2026-09-27, console **v1.69.0**, compared with the **Harvester v1.9** UI (menus taken from the harvester-ui-extension v1.9.0 source and the v1.9 documentation).
+Status on 2026-09-27, console **v1.70.0**, compared with the **Harvester v1.9** UI (menus taken from the harvester-ui-extension v1.9.0 source and the v1.9 documentation).
 
-Of 135 functions of the Harvester UI: **125 done**, **4 partial**, **6 missing**; 2 out of scope. A missing function shows the version it is planned for.
+Of 135 functions of the Harvester UI: **128 done**, **4 partial**, **3 missing**; 2 out of scope. A missing function shows the version it is planned for.
 
 Statuses: Done, Partial (what is missing is said), Missing (planned version), Console only (what Harvester does not have), Out of scope.
 
@@ -15,7 +15,7 @@ Harvester menu: *Dashboard*
 | Host, VM and volume counts | Done | 1.2 | Overview tiles |
 | CPU, memory and storage capacity | Done | 1.62 | live usage (metrics.k8s.io), reserved, storage written and promised |
 | Cluster events (hosts, VMs, volumes, images) | Done | 1.62 | Overview Events tab, warnings filter |
-| Cluster and VM metrics (rancher-monitoring) | Missing | planned 1.70 |  |
+| Cluster and VM metrics (rancher-monitoring) | Done | 1.70 | Metrics tab: Prometheus when rancher-monitoring is on, metrics-server otherwise; correct VM CPU (Harvester divides it by 1000) |
 | Upgrade Harvester button | Done | 1.69 | in the Overview header and on server-version |
 
 ## Hosts
@@ -198,8 +198,9 @@ Harvester menu: *Monitoring & Logging*
 | Function | Status | Version | Note |
 |---|---|---|---|
 | Enable rancher-monitoring / rancher-logging and their configuration | Done | 1.57 | through add-ons |
-| Alertmanager configurations (receivers) | Missing | planned 1.70 |  |
-| Flows, cluster flows, outputs, cluster outputs | Missing | planned 1.70 |  |
+| Alertmanager configurations (receivers) | Done | 1.70 | webhook, Slack, email, PagerDuty, Opsgenie, Teams; route and matchers; typed secrets become Secrets; delivery checked for real |
+| Flows, cluster flows, outputs, cluster outputs | Done | 1.70 | logging, audit, event; 11 targets; used output protected |
+| Refused fluentd configuration said when saving | Console only | 1.70 | Harvester saves and fluentd keeps the previous configuration silently |
 
 ## Advanced
 

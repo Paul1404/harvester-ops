@@ -771,6 +771,39 @@ cannot be deleted. **New namespace** (name, description, labels); **edit**
 namespace, kept in Harvester's `default-resource-quota`); **YAML**;
 **delete** after typing the name, the window saying what goes with it.
 
+### Rancher projects and quotas (1.72.0)
+
+The **Namespaces** window has a **Project** column and a **Projects** tab,
+as Harvester's Projects/Namespaces page under Rancher.
+
+- A namespace's project is read in its `field.cattle.io/projectId`
+  annotation, and compared with the cluster: a namespace whose annotation
+  names a project of another cluster (an earlier import of the cluster into
+  Rancher: 17 of them on harv1 at the time of writing) is flagged, since
+  Rancher treats it as not in a project and applies no quota to it.
+- Signed in through Rancher, the console reads the projects with your token:
+  their names, their quotas and how much is used, the namespace default,
+  the VM default limit. **New project** and **edit**: name, description,
+  resource quotas (each line a project limit and the share of each
+  namespace; CPU in cores or millicores, memory and storage in Gi or Mi),
+  and the default limit given to VMs that set none. Rancher's own rules are
+  checked before writing (the project limit and the namespace default go
+  together, on the same resources, the default within the limit; requests
+  within limits). Rancher's Default and System projects, and a project that
+  still holds namespaces, cannot be deleted.
+- **Move** puts a namespace in a project, or takes it out of any project
+  (Rancher then removes its quota). A new namespace can be created directly
+  in a project. In a project with quotas, a namespace's **edit** shows its
+  own quota, only for the resources the project limits and within its
+  limit: above it, Rancher would set the quota to zero and no VM could
+  start. The console waits for Rancher to apply it.
+- Everything goes through Rancher with your token, so Rancher applies your
+  rights there. Signed in with a console account, the window shows the
+  grouping from the annotations but cannot change it.
+
+On the command line, with the kubeconfig of a Rancher session:
+`harvester-resources project create|update|delete|move|ns-quota`.
+
 ### Dashboard events and usage (1.62.0)
 
 The Overview has an **Events** tab: the cluster events, grouped as on

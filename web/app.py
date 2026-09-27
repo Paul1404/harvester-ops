@@ -11910,8 +11910,34 @@ def api_host_do(cluster, node, action):
 # bin/harvester-resources.py namespace (admin), en actions suivies.
 # ---------------------------------------------------------------------------
 import hv_ns as _hn  # noqa: E402
+import hv_projects as _hpj  # noqa: E402
 
 _NS_DO = ("update", "quota", "delete")
+
+
+def _rancher_projects(cluster, kc):
+    """v1.72.0 : les projets Rancher du cluster, lus avec le jeton de la
+    personne quand la requête vient d'une session Rancher (son kubeconfig
+    vise le mandataire de Rancher). Un compte local ne les lit pas : seul
+    l'id Rancher du cluster, s'il est connu, sert à repérer les annotations
+    d'un autre cluster."""
+    try:
+        r = _hpj.rancher_of(Path(kc).read_text())
+    except OSError:
+        r = None
+    if r is None:
+        entry = next((c for c in load_config().get("clusters", []) if c["name"] == cluster), {})
+        return {"managed": False, "cid": entry.get("rancher_cluster") or _SSO_CLUSTER_IDS.get(cluster), "items": None}
+    try:
+        token = Path(r["token_file"]).read_text().strip() if r.get("token_file") else r.get("token")
+        st, out = _rs.Http(ca_file=r.get("ca_file")).request(
+            "GET", f"{r['url']}/v3/projects?clusterId={r['cid']}",
+            headers={"Authorization": f"Bearer {token}", "Accept": "application/json"})
+    except (_rs.SSOError, OSError) as e:
+        return {"managed": True, "cid": r["cid"], "items": [], "error": str(e)[:200]}
+    if st != 200:
+        return {"managed": True, "cid": r["cid"], "items": [], "error": f"Rancher answered {st}"}
+    return {"managed": True, "cid": r["cid"], "items": _hpj.project_rows((out or {}).get("data") or [], r["cid"])}
 
 
 @app.route("/api/ns-admin/<cluster>")
@@ -11925,9 +11951,11 @@ def api_ns_admin_list(cluster):
     from concurrent.futures import ThreadPoolExecutor
     reads = {"ns": ("namespaces",), "vms": ("virtualmachines.kubevirt.io", "-A"),
              "pvcs": ("persistentvolumeclaims", "-A"), "quotas": (_hn.K_QUOTA, "-A")}
-    with ThreadPoolExecutor(max_workers=len(reads)) as pool:
+    with ThreadPoolExecutor(max_workers=len(reads) + 1) as pool:
         futs = {k: pool.submit(_kubectl_json, kc, "get", *a, cluster=cluster) for k, a in reads.items()}
+        fproj = pool.submit(_rancher_projects, cluster, kc)
         got = {k: (f.result() or {}).get("items") or [] for k, f in futs.items()}
+        projects = fproj.result()
     if not got["ns"]:
         return jsonify({"error": "cannot list the namespaces"}), 502
     count = lambda items: _TallyCounter((o.get("metadata") or {}).get("namespace") for o in items)  # noqa: E731
@@ -11944,9 +11972,64 @@ def api_ns_admin_list(cluster):
                      "description": (meta.get("annotations") or {}).get(_hn.DESC) or "",
                      "labels": _hn._visible(meta.get("labels")), "annotations": _hn._visible(meta.get("annotations")),
                      "created": meta.get("creationTimestamp"), "vms": vms.get(name, 0), "volumes": pvcs.get(name, 0),
-                     "snapshot_quota": quota.get(name), "project": (meta.get("labels") or {}).get("field.cattle.io/projectId")})
+                     "snapshot_quota": quota.get(name),
+                     # v1.72.0 : l'annotation fait foi (le label peut manquer : vu sur harv1)
+                     "project": _hpj.ns_project(o, projects["cid"], projects["items"])})
     rows.sort(key=lambda r: (r["system"], r["name"]))
-    return jsonify({"cluster": cluster, "items": rows})
+    return jsonify({"cluster": cluster, "items": rows, "projects": projects,
+                    "quota_keys": list(_hpj.QUOTA_KEYS), "limit_keys": list(_hpj.LIMIT_KEYS)})
+
+
+_PROJECT_DO = ("create", "update", "delete", "move", "ns-quota")
+
+
+@app.route("/api/projects/<cluster>/do/<action>", methods=["POST"])
+@requires_auth
+@_rate_limit("30/minute")
+def api_projects_do(cluster, action):
+    """v1.72.0 : les projets passent par l'API de Rancher avec le jeton de
+    la personne (Rancher applique ses droits) : il faut une session Rancher."""
+    if action not in _PROJECT_DO:
+        return jsonify({"error": "action: " + ", ".join(_PROJECT_DO)}), 400
+    kc = _kubectl_for_cluster(cluster)
+    if not kc:
+        return jsonify({"error": f"unknown cluster: {cluster}"}), 404
+    try:
+        r = _hpj.rancher_of(Path(kc).read_text())
+    except OSError:
+        r = None
+    if r is None:
+        return jsonify({"error": "projects live in Rancher", "code": "rancher-session-needed",
+                        "hint": "sign in to the console through Rancher to manage projects"}), 409
+    b = request.get_json(silent=True) or {}
+    files = []
+    try:
+        args = ["project", action]
+        if action in ("create", "update"):
+            spec = b.get("spec") if isinstance(b.get("spec"), dict) else {}
+            _hpj.project_body(json.loads(json.dumps(spec)), r["cid"])
+            args += ["--spec", _private_file(files, json.dumps(spec), "project-")]
+            label = f"project:{action}:{spec.get('name')}"
+        if action in ("update", "delete") or (action == "move" and b.get("id")):
+            args += ["--id", _hpj.check_pid(b.get("id"))]
+        if action in ("move", "ns-quota"):
+            ns = _hpj.check_name(b.get("namespace"), "namespace")
+            args += ["--namespace", ns]
+            label = f"project:{action}:{ns}"
+        if action == "ns-quota":
+            limit = b.get("limit") if isinstance(b.get("limit"), dict) else {}
+            for k, v in limit.items():
+                if v not in (None, ""):
+                    _hpj.normalize(k, v)
+            args += ["--spec", _private_file(files, json.dumps({"limit": limit}), "project-")]
+        if action == "delete":
+            label = f"project:delete:{b.get('id')}"
+    except (ValueError, TypeError) as e:
+        for f in files:
+            Path(f).unlink(missing_ok=True)
+        return jsonify({"error": str(e)}), 400
+    run, err = _res_cli(cluster, kc, label, args, files)
+    return _res_reply(run, err, action=action)
 
 
 def _ns_kv_file(files, data, key):

@@ -110,6 +110,8 @@ il s'utilise aussi seul.
   harvester-resources monlog output-apply|flow-apply|amc-apply --cluster harv1 --spec request.json
   harvester-resources vmimport source-apply|import-create --cluster harv1 --spec request.json
   harvester-resources vmimport import-follow|import-delete --cluster harv1 --namespace ns --name imp
+  harvester-resources project create|update --kubeconfig rancher-session.yaml --spec project.json [--id p-xxxxx]
+  harvester-resources project move|ns-quota --kubeconfig rancher-session.yaml --namespace ns [--id p-xxxxx] [--spec quota.json]
   harvester-resources monlog output-delete|flow-delete|amc-delete --cluster harv1 --kind Flow --namespace ns --name n
   harvester-resources kubeconfig revoke --cluster harv1 --name ci
 
@@ -145,6 +147,7 @@ import hv_devices as hdev  # noqa: E402
 import hv_upgrade as hup  # noqa: E402
 import hv_monlog as hml  # noqa: E402
 import hv_vmimport as hvi  # noqa: E402
+import hv_projects as hpj  # noqa: E402
 
 EXIT_OK, EXIT_FAIL, EXIT_BLOCKED, EXIT_CANCELLED = 0, 1, 2, 3
 K_ADDON = "addons.harvesterhci.io"
@@ -3191,6 +3194,124 @@ def cmd_vmimport(args):
     raise ValueError("action: source-apply, source-recheck, source-delete, import-create, import-follow, import-delete")
 
 
+# ---------------------------------------------------------------------------
+# v1.72.0 : projets Rancher (API de Rancher avec le jeton de la personne)
+# ---------------------------------------------------------------------------
+
+def _rancher_session(kubeconfig):
+    """Rancher, lu dans le kubeconfig de la session (mandataire + fichier de
+    jeton). Un kubeconfig direct ne donne pas de projets."""
+    r = hpj.rancher_of(Path(kubeconfig).read_text()) if kubeconfig and Path(kubeconfig).exists() else None
+    if r is None:
+        raise ValueError("projects live in Rancher: sign in to the console through Rancher to manage them")
+    return r
+
+
+def _rancher_call(r, method, path, body=None):
+    import ssl
+    import urllib.error
+    import urllib.request
+    token = Path(r["token_file"]).read_text().strip() if r.get("token_file") else r.get("token")
+    ctx = ssl.create_default_context(cafile=r["ca_file"]) if r.get("ca_file") else ssl.create_default_context()
+    req = urllib.request.Request(r["url"] + path, method=method, data=json.dumps(body).encode() if body is not None else None,
+                                 headers={"Authorization": f"Bearer {token}", "Accept": "application/json",
+                                          "Content-Type": "application/json"})
+    try:
+        with urllib.request.urlopen(req, timeout=30, context=ctx) as resp:
+            raw = resp.read().decode()
+            return resp.status, json.loads(raw) if raw else {}
+    except urllib.error.HTTPError as e:
+        raw = e.read().decode(errors="replace")
+        try:
+            msg = (json.loads(raw) or {}).get("message") or raw
+        except ValueError:
+            msg = raw
+        raise ValueError(f"Rancher refused ({e.code}): {str(msg)[:300]}") from None
+    except (urllib.error.URLError, OSError) as e:
+        raise ValueError(f"Rancher unreachable: {getattr(e, 'reason', e)}") from None
+
+
+def _project_members(kube, cid, pid):
+    out = []
+    for n in kube.list("namespaces", None):
+        p = hpj.ns_project(n, cid)
+        if p["project"] == pid and p["state"] != "foreign":
+            out.append((n.get("metadata") or {}).get("name"))
+    return out
+
+
+def cmd_project(args):
+    r = _rancher_session(args.kubeconfig)
+    cid = r["cid"]
+    act = args.action
+    if act == "create":
+        body = hpj.project_body(_read_json(args.spec), cid)
+        _, out = _rancher_call(r, "POST", "/v3/projects", body)
+        step("project", "done", f"project {body['name']} created ({(out or {}).get('id', '?').split(':')[-1]})")
+        return EXIT_OK
+    if act in ("update", "delete"):
+        pid = hpj.check_pid(args.id)
+        _, cur = _rancher_call(r, "GET", f"/v3/projects/{cid}:{pid}")
+        row = (hpj.project_rows([cur], cid) or [{}])[0]
+        if act == "delete":
+            if row.get("system") or row.get("default"):
+                raise ValueError(f"{row.get('name')} is Rancher's {'System' if row.get('system') else 'Default'} project: it stays")
+            kube = kube_from(args)
+            left = _project_members(kube, cid, pid)
+            if left:
+                raise ValueError(f"project {row.get('name')} still holds namespaces ({', '.join(left)}): move them out first")
+            _rancher_call(r, "DELETE", f"/v3/projects/{cid}:{pid}")
+            step("project", "done", f"project {row.get('name')} deleted")
+            return EXIT_OK
+        body = hpj.project_body(_read_json(args.spec), cid)
+        new = dict(cur)
+        for k in ("name", "description", "resourceQuota", "namespaceDefaultResourceQuota", "containerDefaultResourceLimit"):
+            new[k] = body[k]
+        _rancher_call(r, "PUT", f"/v3/projects/{cid}:{pid}", new)
+        step("project", "done", f"project {body['name']} saved")
+        return EXIT_OK
+    kube = kube_from(args)
+    ns = hpj.check_name(args.namespace, "namespace")
+    if act == "move":
+        pid = hpj.check_pid(args.id) if args.id else None
+        if pid:
+            _rancher_call(r, "GET", f"/v3/projects/{cid}:{pid}")        # le projet existe et se lit
+            # le webhook de Rancher sur le cluster vérifie le droit manage-namespaces de la personne
+            kube.run("annotate", "namespace", ns, f"{hpj.ANN_PROJECT}={cid}:{pid}", "--overwrite")
+            kube.run("label", "namespace", ns, f"{hpj.ANN_PROJECT}={pid}", "--overwrite")
+            step("project", "done", f"namespace {ns} moved to project {pid}")
+        else:
+            kube.run("annotate", "namespace", ns, f"{hpj.ANN_PROJECT}-", f"{hpj.ANN_QUOTA}-")
+            kube.run("label", "namespace", ns, f"{hpj.ANN_PROJECT}-")
+            step("project", "done", f"namespace {ns} out of any project")
+        return EXIT_OK
+    if act == "ns-quota":
+        cur = kube.get("namespaces", None, ns)
+        if cur is None:
+            raise ValueError(f"no namespace {ns}")
+        p = hpj.ns_project(cur, cid)
+        if p["state"] == "none" or p["state"] == "foreign":
+            raise ValueError(f"namespace {ns} is not in a project of this cluster: its quota would be ignored")
+        _, proj = _rancher_call(r, "GET", f"/v3/projects/{cid}:{p['project']}")
+        lim = hpj.check_ns_quota(_read_json(args.spec).get("limit") or {}, (hpj.project_rows([proj], cid) or [{}])[0])
+        value = hpj.ns_quota(lim)
+        if value:
+            kube.run("annotate", "namespace", ns, f"{hpj.ANN_QUOTA}={value}", "--overwrite")
+        else:
+            kube.run("annotate", "namespace", ns, f"{hpj.ANN_QUOTA}-")
+        step("project", "running", f"namespace {ns}: quota " + (value or "back to the project default"))
+
+        def done(o):
+            q = hpj.ns_project(o, cid)
+            if q["quota_ok"] is False:
+                return False, q["quota_message"] or "Rancher refused the quota"
+            if q["quota_ok"] and (not value or q["quota"] == lim):
+                return True, f"namespace {ns}: quota applied by Rancher"
+            return None, "waiting for Rancher to apply the quota"
+        return _wait(kube, "namespaces", None, ns, done, args.timeout, label="project")
+    raise ValueError("action: create, update, delete, move, ns-quota")
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(prog="harvester-resources", description=__doc__.split("\n\n")[0])
     sub = ap.add_subparsers(dest="cmd", required=True)
@@ -3611,6 +3732,15 @@ def main(argv=None):
     sp.add_argument("--name")
     sp.add_argument("--with-secret", action="store_true", help="source-delete: also delete the secret the console created")
     sp.add_argument("--timeout", type=int, default=4 * 3600, help="seconds: source check, or the import to the running VM")
+    sp = sub.add_parser("project", help="Rancher projects of the cluster: create, change, delete, move a namespace, namespace quota")
+    sp.set_defaults(fn=cmd_project)
+    sp.add_argument("action", choices=("create", "update", "delete", "move", "ns-quota"))
+    sp.add_argument("--cluster")
+    sp.add_argument("--kubeconfig", help="the kubeconfig of a Rancher session (it points at Rancher's proxy)")
+    sp.add_argument("--spec", help="create, update: {name, description, quota, ns_default, container}; ns-quota: {limit}")
+    sp.add_argument("--id", help="update, delete, move: the project id (p-xxxxx); move without it: out of any project")
+    sp.add_argument("--namespace")
+    sp.add_argument("--timeout", type=int, default=120)
     args = ap.parse_args(argv)
     signal.signal(signal.SIGTERM, _on_signal)
     try:

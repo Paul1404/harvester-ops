@@ -3,7 +3,7 @@
 # Statuts : ok (fait), part (partiel), todo (manquant), plus (console seulement), na (hors périmètre).
 # v : version où c'est arrivé (ok/part) ou prévue (todo).
 
-AS_OF = "1.71.0"
+AS_OF = "1.72.0"
 DATE = "2026-09-27"
 
 S = []  # sections
@@ -206,8 +206,11 @@ r("part", "1.50", "Rôles de virtualisation (chart Harvester RBAC, Rancher 2.14.
   "Virtualization roles (Harvester RBAC chart, Rancher 2.14.1, experimental)",
   "appliqués d'office par le jeton Rancher ; vérifié avec un membre du cluster, pas encore avec les rôles de ce chart",
   "applied by the Rancher token; checked with a cluster member, not yet with this chart's roles")
-r("todo", "1.71", "Projets Rancher : namespaces rangés par projet, quotas de ressources",
-  "Rancher projects: namespaces grouped by project, resource quotas")
+r("ok", "1.72", "Projets Rancher : namespaces rangés par projet, quotas de ressources", "Rancher projects: namespaces by project, resource quotas",
+  "créer, modifier, supprimer un projet, déplacer un namespace, quota du namespace, limite par défaut des VMs ; par Rancher avec le jeton de la personne",
+  "create, edit, delete a project, move a namespace, namespace quota, VM default limit; through Rancher with the person's token")
+r("plus", "1.72", "Annotations de projet d'un autre cluster signalées", "Project annotations of another cluster flagged",
+  "Harvester montre ces namespaces hors projet sans dire pourquoi", "Harvester shows these namespaces as not in a project without saying why")
 r("part", "1.31", "Membres du cluster", "Cluster members", "comptes du cluster : activer, désactiver, admin ; pas encore les rôles Rancher", "cluster accounts: enable, disable, admin; Rancher roles not yet")
 r("plus", "1.57", "Connexion obligatoire, comptes et rôles propres à la console",
   "Mandatory sign-in, the console's own accounts and roles",

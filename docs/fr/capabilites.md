@@ -874,6 +874,41 @@ description, labels) ; **modifier** (description, labels, annotations, et le
 `default-resource-quota` de Harvester) ; **YAML** ; **supprimer** après avoir
 tapé le nom, la fenêtre disant ce qui part avec.
 
+### Projets Rancher et quotas (1.72.0)
+
+La fenêtre **Namespaces** a une colonne **Projet** et un onglet **Projets**,
+comme la page Projects/Namespaces de Harvester sous Rancher.
+
+- Le projet d'un namespace est lu dans son annotation
+  `field.cattle.io/projectId`, et comparé au cluster : un namespace dont
+  l'annotation désigne un projet d'un autre cluster (un import précédent du
+  cluster dans Rancher : 17 sur harv1 au moment d'écrire) est signalé, car
+  Rancher le traite comme hors projet et ne lui applique aucun quota.
+- Connectée par Rancher, la console lit les projets avec votre jeton : leurs
+  noms, leurs quotas et leur usage, le défaut des namespaces, la limite par
+  défaut des VMs. **Nouveau projet** et **modifier** : nom, description,
+  quotas de ressources (chaque ligne une limite de projet et la part de
+  chaque namespace ; CPU en cœurs ou millicœurs, mémoire et stockage en Gi
+  ou Mi), et la limite donnée par défaut aux VMs qui n'en fixent pas. Les
+  règles de Rancher sont vérifiées avant d'écrire (limite du projet et
+  défaut des namespaces ensemble, sur les mêmes ressources, le défaut sous
+  la limite ; requests sous les limits). Les projets Default et System de
+  Rancher, et un projet qui contient encore des namespaces, ne se
+  suppriment pas.
+- **Déplacer** met un namespace dans un projet, ou le sort de tout projet
+  (Rancher retire alors son quota). Un nouveau namespace peut être créé
+  directement dans un projet. Dans un projet à quotas, **modifier** un
+  namespace montre son propre quota, seulement pour les ressources que le
+  projet limite et sous sa limite : au-delà, Rancher mettrait le quota à
+  zéro et aucune VM ne pourrait démarrer. La console attend que Rancher
+  l'applique.
+- Tout passe par Rancher avec votre jeton, qui y applique donc vos droits.
+  Connectée avec un compte de la console, la fenêtre montre le rangement
+  tiré des annotations sans pouvoir le changer.
+
+En ligne de commande, avec le kubeconfig d'une session Rancher :
+`harvester-resources project create|update|delete|move|ns-quota`.
+
 ### Événements et utilisation du tableau de bord (1.62.0)
 
 L'aperçu a un onglet **Événements** : les événements du cluster, rangés comme

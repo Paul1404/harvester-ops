@@ -4,6 +4,60 @@ All notable changes to this project will be documented here.
 Format inspired by [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 This file summarises each minor release; per-patch detail lives in `git log`.
 
+## [1.72.0] - 2026-09-27 - Rancher projects and quotas
+
+### Added
+- The **Namespaces** window gets a **Project** column and a **Projects**
+  tab, as Harvester's Projects/Namespaces page under Rancher:
+  - signed in through Rancher, the projects of the cluster with their names,
+    quotas and usage, the namespace default and the VM default limit;
+    create, edit and delete a project (Rancher's Default and System
+    projects, and a project still holding namespaces, are kept);
+  - **Move** a namespace into a project or out of any, create a namespace
+    directly in a project, and set a namespace's own quota within its
+    project, waited for until Rancher applies it;
+  - everything goes through Rancher's API with the person's token, so
+    Rancher applies their rights; a console account sees the grouping from
+    the annotations without changing it.
+- A namespace whose project annotation names another cluster (an earlier
+  import into Rancher) is flagged: Rancher treats it as not in a project and
+  applies no quota to it. On harv1, 17 system namespaces are in that case.
+- Rancher's rules checked before writing: the project limit and the
+  namespace default together, on the same resources, the default within the
+  limit, requests within limits; a namespace quota only on what the project
+  limits and within it (above, Rancher sets it to zero and no VM can start).
+- `harvester-resources project create|update|delete|move|ns-quota`, with the
+  kubeconfig of a Rancher session.
+
+### Fixed
+- A namespace's project was read in the `field.cattle.io/projectId` label,
+  which Rancher does not always set (absent everywhere on harv1): it is now
+  read in the annotation, as Rancher does.
+- Found by the real test: Rancher's API adds `type: /v3/schemas/...` to
+  quota objects; it was shown as a resource of the quota.
+
+### Tests
+- Library: quantities as Rancher's form writes them, the webhook's rules,
+  projects read from Rancher, a namespace's project and quota, Rancher found
+  in the session kubeconfig only.
+- Command line and routes: writes through Rancher with the session token,
+  Default, System and populated projects kept, moves by annotation and
+  label, a namespace quota checked then waited for, 409 for a console
+  account.
+- In Chromium: the Project column and a stale annotation, moving, the
+  namespace quota, the Projects tab and its form, the console account's
+  read-only view.
+- Real, on harv1 signed in through Rancher (Rancher 2.14.1): projects read
+  by name, the stale annotations flagged; a test project created with CPU
+  and memory quotas; a namespace created in it, its default quota applied by
+  Rancher (annotation and ResourceQuota `limits.cpu: 2`,
+  `limits.memory: 4Gi`); its quota raised to 3 CPU and applied, 8 refused;
+  deleting the project refused while populated; the namespace moved out
+  (Rancher removed its quota); namespace and project deleted. During the
+  first run Rancher itself moved two fleet namespaces of harv1 from the
+  stale project into this cluster's System project (its own system namespace
+  sync); the console does not write to namespaces it is not asked to.
+
 ## [1.71.0] - 2026-09-27 - Importing VMs from VMware, OpenStack or an OVA archive
 
 ### Added

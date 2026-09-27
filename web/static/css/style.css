@@ -5102,3 +5102,7 @@ td.tpl-acts .btn + .btn { margin-left: 4px; }
 .vi-adv summary { cursor: pointer; margin: 8px 0; }
 .vi-log { max-height: 280px; overflow: auto; font-size: 12px; white-space: pre-wrap; }
 @media (max-width: 700px) { .vi-net { grid-template-columns: 1fr; } }
+/* v1.72.0 : projets Rancher dans la fenêtre Namespaces */
+.nsw-tabs { margin-bottom: 8px; }
+.pj-qrow { display: grid; grid-template-columns: 1.2fr 1fr 1fr auto; gap: 6px; margin-bottom: 6px; align-items: center; }
+@media (max-width: 700px) { .pj-qrow { grid-template-columns: 1fr; } }

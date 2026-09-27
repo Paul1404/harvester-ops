@@ -99,13 +99,13 @@ const ResourceViews = (() => {
     restore: () => tr('bk.act.restore'), delete: () => tr('bk.act.delete'),
     suspend: () => tr('bk.act.suspend'), resume: () => tr('bk.act.resume'),
     default: () => tr('of.act.default'), configure: () => tr('of.act.configure'),
-    yaml: () => tr('yw.act.yaml'),
+    yaml: () => tr('yw.act.yaml'), more: () => tr('sta.act.more'),
   };
   const ACT_TIP = {
     restore: () => tr('bk.act.restoreTip'), delete: () => tr('bk.act.deleteTip'),
     suspend: () => tr('bk.act.suspendTip'), resume: () => tr('bk.act.resumeTip'),
     default: () => tr('of.act.defaultTip'), configure: () => tr('of.act.configureTip'),
-    yaml: () => tr('yw.act.yamlTip'),
+    yaml: () => tr('yw.act.yamlTip'), more: () => tr('sta.act.moreTip'),
   };
   const act = (a, disabled, why, admin) => `<button type="button" class="btn btn-sm ${a === 'delete' ? 'btn-danger' : 'btn-secondary'} res-act tip${admin ? ' needs-admin' : ''}"
       data-act="${a}" data-tip="${esc(disabled && why ? why : ACT_TIP[a]())}" ${disabled ? 'disabled' : ''}>${esc(ACT_LABEL[a]())}</button>`;
@@ -139,7 +139,7 @@ const ResourceViews = (() => {
         `${bytes(r.virtual_size)}<div class="res-dim">${esc(tr('res.img.file', { size: bytes(r.size) }))}</div>`,
         (IMG_STATE[r.state] || IMG_STATE.importing)(r),
         `<code>${esc(r.storage_class || '–')}</code>`, vms(r.used_by), age(r.created),
-        act('delete', r.volumes > 0, tr('of.t.inUse')) + yamlAct('images')],
+        act('more') + act('delete', r.volumes > 0, tr('of.t.inUse')) + yamlAct('images')],
       details: (r) => [[tr('res.d.url'), r.url ? `<code>${esc(r.url)}</code>` : '–'],
                        [tr('res.d.backend'), esc(r.backend || '–')],
                        [tr('res.d.volumes'), esc(r.volumes)],
@@ -280,6 +280,8 @@ const ResourceViews = (() => {
           <button type="button" class="btn btn-sm btn-secondary res-refresh tip" data-tip="${esc(tr('res.refreshTip'))}">${icon('refresh')} ${esc(tr('overview.refresh'))}</button>
           ${VIEWS[k].create && !(cur.opts && cur.opts.onAction) ? `<button type="button" class="btn btn-sm btn-primary res-new tip${k === 'storageclasses' ? ' needs-admin' : ''}"
               data-tip="${esc(tr('of.t.new'))}">${icon('add')} ${esc(tr('of.new'))}</button>` : ''}
+          ${k === 'images' && !(cur.opts && cur.opts.onAction) ? `<button type="button" class="btn btn-sm btn-secondary res-upload tip"
+              data-tip="${esc(tr('sta.up.tip'))}">${icon('upload')} ${esc(tr('sta.up.button'))}</button>` : ''}
         </div>
         <div class="res-feedback"></div>
         <div class="res-body"><p class="form-hint">${esc(tr('common.loading'))}</p></div>
@@ -377,8 +379,17 @@ const ResourceViews = (() => {
         YamlWindow.open(cur.cluster, YAML_KIND[cur.kind], row.namespace || '', row.name, { onDone: () => load(cur) });
         return;
       }
+      // v1.63.0 : le menu d'une image (modifier, cloner, chiffrer, télécharger, créer une VM)
+      if (row && actBtn.dataset.act === 'more' && cur.kind === 'images' && window.StorageActions) {
+        StorageActions.imageMenu(actBtn, cur.cluster, row, () => setTimeout(() => load(cur), 1500));
+        return;
+      }
       if (row && cur.opts && cur.opts.onAction) cur.opts.onAction(actBtn.dataset.act, row);
       else if (row) sectionAction(cur, actBtn.dataset.act, row);
+      return;
+    }
+    if (e.target.closest('.res-upload') && window.StorageActions) {
+      StorageActions.uploadDialog(cur.cluster, () => setTimeout(() => load(cur), 1500));
       return;
     }
     if (e.target.closest('.res-new') && window.ObjectForms) {

@@ -149,7 +149,22 @@ menu (top right) ends it. Scripts and API clients keep using HTTP Basic.
   service log gives the path): only who administers the server can read it,
   so nobody reaching the port first can take the console.
 
-### 9. Sign in through Rancher (optional, 1.50.0)
+### 9. Uploading images from a browser (optional, 1.63.0)
+
+An image file sent from a browser is kept by the console, then offered once
+to the cluster, whose nodes download it over HTTP from this host on port
+**8092** by default. Open it for them, or choose another port in
+`/etc/harvester-ops/env`:
+
+```bash
+sudo firewall-cmd --permanent --add-port=8092/tcp && sudo firewall-cmd --reload
+echo HARVESTER_OPS_IMAGE_UPLOAD_PORT=8192 | sudo tee -a /etc/harvester-ops/env   # another port
+```
+
+The file waits in `/var/lib/harvester-ops/image-uploads` and is deleted once
+the image is imported (or the action cancelled).
+
+### 10. Sign in through Rancher (optional, 1.50.0)
 
 People already signed in to Rancher Manager (2.12 or later) can enter the
 console without typing anything, with the rights Rancher gives them on each

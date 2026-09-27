@@ -746,6 +746,39 @@ The Metrics tab shows **usage** gauges: CPU and memory measured now
 reserved; the Longhorn storage written, and what is promised to volumes
 against what may be promised (over-provisioning included).
 
+### Volume and image actions (1.63.0)
+
+In the Storage section, a volume's panel has **Actions**, and each image row
+has its own **Actions** button, with Harvester's menus. An action that does
+not apply is greyed out and says why (a volume a VM uses, a cluster without
+CDI, an image not ready or not on Longhorn v1). Each one is a tracked action
+run by `harvester-resources volume|image <action>`.
+
+- **Volume**: **clone** (with its data, Longhorn copies it; or an empty
+  volume with the same size and class); **export to an image** (the volume
+  of a running VM on Longhorn v1, otherwise stop it first); **take a
+  snapshot** (with the class Harvester's `csi-driver-config` setting names,
+  owned by the volume); **copy to another class** (Harvester's data
+  migration: a CDI DataVolume, the original stays); **cancel an expansion**
+  that cannot finish (the claim is recreated at its real size on the same
+  volume, data kept); **description**; **delete** when no VM uses it.
+- **Image**: **edit** its description and labels (Harvester fixes the rest);
+  **clone** an image downloaded from a URL; **encrypt** into an encrypted
+  storage class, or **decrypt**; **download** the file (gzip, as Harvester
+  serves it; Longhorn v1 images); **create a VM** from it (the creation
+  window opens with a disk made of the image, at the image's class and
+  size).
+- **Upload** an image file from the browser: the console keeps it, then
+  offers it once to the cluster over HTTP (port 8092 by default, see the
+  installation guide), whose nodes download it; the file is deleted
+  afterwards. A **SHA512 checksum** can be given, here and when creating an
+  image from a URL: Longhorn checks the file against it.
+
+Verified on harv1: each volume action, an image edited, downloaded, cloned,
+encrypted then decrypted with a throwaway encrypted class, a CirrOS image
+uploaded from the browser (22 s), a VM creation opened from an image; the
+cancel of a frozen expansion on the three-node bench.
+
 ## 4. Cluster API: downstream RKE2 clusters (console + CLI)
 
 Create and operate Kubernetes clusters whose nodes are Harvester VMs,

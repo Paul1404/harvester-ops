@@ -72,6 +72,7 @@ const ObjectForms = (() => {
       return ns + field('url', tr('of.f.url'), `<input name="url" type="url" required placeholder="https://…/image.qcow2">`, tr('of.t.url'))
         + field('display_name', tr('of.f.displayName'), `<input name="display_name" placeholder="${esc(tr('of.f.displayNamePh'))}">`, tr('of.t.displayName'))
         + field('storage_class', tr('res.col.class'), `<select name="storage_class">${opts(classes.map(c => [c.name, c.is_default ? `${c.name} (${tr('res.sc.default')})` : c.name]), def)}</select>`, tr('of.t.imageClass'))
+        + field('checksum', tr('sta.f.checksum'), `<input name="checksum" maxlength="128" pattern="[0-9a-fA-F]{128}">`, tr('sta.tip.checksum'))
         + field('description', tr('of.f.description'), `<input name="description">`, tr('of.t.description'));
     }
     if (kind === 'storageclass') {

@@ -11832,6 +11832,255 @@ def api_cluster_usage(cluster):
                                                      (got["lh"] or {}).get("items") or [], op)})
 
 
+# ---------------------------------------------------------------------------
+# v1.63.0 : les actions de Harvester sur un volume et sur une image, par
+# bin/harvester-resources.py volume|image, en actions suivies ; le
+# téléchargement d'une image ; l'envoi d'un fichier depuis le navigateur.
+# ---------------------------------------------------------------------------
+import hv_storage as _hs  # noqa: E402
+
+_VOLUME_DO = ("clone", "export", "snapshot", "copy", "cancel-expand", "describe")
+_IMAGE_DO = ("edit", "clone", "encrypt", "decrypt")
+# à côté du magasin des archives (même disque persistant dans le service packagé)
+IMAGE_UPLOAD_DIR = Path(os.environ.get(
+    "HARVESTER_OPS_IMAGE_UPLOAD_DIR",
+    str(Path(os.environ.get("HARVESTER_OPS_EXPORT_DIR", str(Path.home() / ".local/share/harvester-ops/exports"))).parent
+        / "image-uploads")))
+
+
+@app.route("/api/volume/<cluster>/<namespace>/<name>/info")
+@requires_auth
+def api_volume_info(cluster, namespace, name):
+    """Ce que les gestes d'un volume ont besoin de savoir : VMs qui s'en
+    servent, agrandissement en cours, classes proposées, CDI présent."""
+    kc = _kubectl_for_cluster(cluster)
+    if not kc:
+        return jsonify({"error": f"unknown cluster: {cluster}"}), 404
+    from concurrent.futures import ThreadPoolExecutor
+    reads = {"pvc": (_hs.K_PVC, name, "-n", namespace), "vms": ("virtualmachines.kubevirt.io", "-n", namespace),
+             "scs": (_hs.K_SC,), "cdi": ("crd", "datavolumes.cdi.kubevirt.io"),
+             "csi": ("settings.harvesterhci.io", "csi-driver-config")}
+    with ThreadPoolExecutor(max_workers=len(reads)) as pool:
+        futs = {k: pool.submit(_kubectl_json, kc, "get", *a, cluster=cluster) for k, a in reads.items()}
+        got = {k: f.result() for k, f in futs.items()}
+    pvc = got["pvc"]
+    if pvc is None:
+        return jsonify({"error": f"no volume {namespace}/{name}"}), 404
+    scs = (got["scs"] or {}).get("items") or []
+    by_name = {(c.get("metadata") or {}).get("name"): c for c in scs}
+    mine = by_name.get((pvc.get("spec") or {}).get("storageClassName"))
+    csi = got["csi"] or {}
+    return jsonify({
+        "name": name, "namespace": namespace,
+        "size": ((pvc.get("spec") or {}).get("resources") or {}).get("requests", {}).get("storage"),
+        "capacity": ((pvc.get("status") or {}).get("capacity") or {}).get("storage"),
+        "phase": (pvc.get("status") or {}).get("phase"),
+        "storage_class": (pvc.get("spec") or {}).get("storageClassName"),
+        "description": ((pvc.get("metadata") or {}).get("annotations") or {}).get(_hs.DESC) or "",
+        "image": ((pvc.get("metadata") or {}).get("annotations") or {}).get(_hs.IMAGE_ID),
+        "used_by": _hs.used_by_vms(name, namespace, (got["vms"] or {}).get("items") or []),
+        "resizing": _hs.resizing(pvc),
+        "longhorn_v1": _hs.is_longhorn_v1(mine),
+        "snapshot_class": _hs.csi_snapshot_class(csi.get("value") or csi.get("default"), (mine or {}).get("provisioner")),
+        "cdi": got["cdi"] is not None,
+        "storage_classes": [{"name": n, "longhorn_v1": _hs.is_longhorn_v1(c),
+                             "encrypted": str(((c.get("parameters") or {}).get("encrypted"))) == "true",
+                             "image": bool((c.get("parameters") or {}).get("backingImage")),
+                             "internal": n in _hs.INTERNAL_SC}
+                            for n, c in sorted(by_name.items())],
+    })
+
+
+def _res_cli(cluster, kc, label, args, files=()):
+    def after():
+        for f in files:
+            Path(f).unlink(missing_ok=True)
+        _invalidate_cluster_caches(cluster)
+    cmd = [sys.executable, str(BIN_DIR / RESOURCES_SCRIPT)] + args[:2] + ["--kubeconfig", kc] + args[2:]
+    run, err = _cli_action(cluster, label, cmd, "harvester-resources", after=after)
+    if err:
+        after()
+    return run, err
+
+
+@app.route("/api/volume/<cluster>/<namespace>/<name>/do/<action>", methods=["POST"])
+@requires_auth
+@_rate_limit("30/minute")
+def api_volume_do(cluster, namespace, name, action):
+    if action not in _VOLUME_DO:
+        return jsonify({"error": f"action must be one of {', '.join(_VOLUME_DO)}"}), 400
+    kc = _kubectl_for_cluster(cluster)
+    if not kc:
+        return jsonify({"error": f"unknown cluster: {cluster}"}), 404
+    b = request.get_json(silent=True) or {}
+    try:
+        extra = []
+        if action in ("clone", "copy"):
+            extra += ["--new-name", _hs.check_name(str(b.get("new_name") or ""), "new volume name")]
+            if action == "clone" and b.get("with_data") is False:
+                extra.append("--no-data")
+            if action == "copy":
+                extra += ["--storage-class", _hs.check_name(str(b.get("storage_class") or ""), "storage class")]
+        elif action == "export":
+            dn = str(b.get("display_name") or "").strip()
+            if not dn or len(dn) > 63:
+                raise ValueError("image name: 63 characters at most")
+            extra += ["--display-name", dn]
+            if b.get("target_namespace"):
+                extra += ["--target-namespace", _hs.check_name(str(b["target_namespace"]), "namespace")]
+            if b.get("storage_class"):
+                extra += ["--storage-class", _hs.check_name(str(b["storage_class"]), "storage class")]
+        elif action == "snapshot":
+            extra += ["--snapshot-name", _hs.check_name(str(b.get("snapshot_name") or ""), "snapshot name")]
+        elif action == "describe":
+            extra += ["--description", str(b.get("description") or "")[:1000]]
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
+    run, err = _res_cli(cluster, kc, f"volume:{action}:{namespace}/{name}",
+                        ["volume", action, "--namespace", namespace, "--name", name] + extra)
+    return _res_reply(run, err, volume=f"{namespace}/{name}", action=action)
+
+
+@app.route("/api/image/<cluster>/<namespace>/<name>/do/<action>", methods=["POST"])
+@requires_auth
+@_rate_limit("30/minute")
+def api_image_do(cluster, namespace, name, action):
+    if action not in _IMAGE_DO:
+        return jsonify({"error": f"action must be one of {', '.join(_IMAGE_DO)}"}), 400
+    kc = _kubectl_for_cluster(cluster)
+    if not kc:
+        return jsonify({"error": f"unknown cluster: {cluster}"}), 404
+    b = request.get_json(silent=True) or {}
+    files = []
+    try:
+        extra = []
+        if action == "edit":
+            if "description" in b:
+                extra += ["--description", str(b.get("description") or "")[:1000]]
+            if "labels" in b:
+                if not isinstance(b["labels"], dict):
+                    raise ValueError("labels: an object")
+                _hs.image_edit_patch({}, None, {str(k): str(v) for k, v in b["labels"].items()})   # contrôle d'avance
+                wd = _capi_work_dir()
+                fd, path = tempfile.mkstemp(prefix="img-", dir=str(wd) if wd else None)
+                with os.fdopen(fd, "w") as f:
+                    json.dump(b["labels"], f)
+                files.append(path)
+                extra += ["--labels-file", path]
+            if not extra:
+                raise ValueError("nothing to change")
+        else:
+            dn = str(b.get("display_name") or "").strip()
+            if not dn or len(dn) > 63:
+                raise ValueError("image name: 63 characters at most")
+            extra += ["--display-name", dn]
+            if action in ("encrypt", "decrypt"):
+                extra += ["--storage-class", _hs.check_name(str(b.get("storage_class") or ""), "storage class")]
+    except ValueError as e:
+        for f in files:
+            Path(f).unlink(missing_ok=True)
+        return jsonify({"error": str(e)}), 400
+    run, err = _res_cli(cluster, kc, f"image:{action}:{namespace}/{name}",
+                        ["image", action, "--namespace", namespace, "--name", name] + extra, files)
+    return _res_reply(run, err, image=f"{namespace}/{name}", action=action)
+
+
+@app.route("/api/image/<cluster>/<namespace>/<name>/download")
+@requires_auth
+def api_image_download(cluster, namespace, name):
+    """« Télécharger » une image Longhorn v1 : le fichier compressé du
+    BackingImage, par le proxy de service de l'apiserver (le relais de
+    Harvester lui-même). Réservé aux opérateurs : c'est tout le disque."""
+    if ROLE_RANK.get(current_role(), 0) < ROLE_RANK["operator"]:
+        return jsonify({"error": "forbidden", "required": "operator"}), 403
+    kc = _kubectl_for_cluster(cluster)
+    if not kc:
+        return jsonify({"error": f"unknown cluster: {cluster}"}), 404
+    img = _kubectl_json(kc, "get", _hs.K_IMAGE, name, "-n", namespace, cluster=cluster)
+    if img is None:
+        return jsonify({"error": f"no image {namespace}/{name}"}), 404
+    sc = _kubectl_json(kc, "get", _hs.K_SC, ((img.get("status") or {}).get("storageClassName")) or "x", cluster=cluster)
+    try:
+        path = _hs.download_path(_hs.backing_image_of(img, sc))
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 409
+    from kube import Kube as _Kube
+    stream = _Kube(kc).raw_stream(path)
+    display = re.sub(r"[^A-Za-z0-9._-]+", "_", ((img.get("spec") or {}).get("displayName") or name))[:120]
+    return Response(stream_with_context(stream), mimetype="application/gzip",
+                    headers={"Content-Disposition": f'attachment; filename="{display}.gz"'})
+
+
+@app.route("/api/image-upload/<cluster>/<namespace>", methods=["PUT"])
+@requires_auth
+@_rate_limit("6 per minute")
+def api_image_upload(cluster, namespace):
+    """Un fichier d'image envoyé par le navigateur : écrit sur disque (0600),
+    puis `harvester-resources image upload` le sert une fois au cluster, qui
+    le télécharge comme une image « download ». Le fichier est effacé après."""
+    kc = _kubectl_for_cluster(cluster)
+    if not kc:
+        return jsonify({"error": f"unknown cluster: {cluster}"}), 404
+    length = request.content_length
+    if not length:
+        return jsonify({"error": "Content-Length required"}), 411
+    q = request.args
+    display = (q.get("display_name") or "").strip()
+    file_name = os.path.basename(q.get("file_name") or "image")[:200]
+    try:
+        if not display or len(display) > 63:
+            raise ValueError("image name: 63 characters at most")
+        checksum = (q.get("checksum") or "").strip()
+        if checksum and not _hs.SHA512_RE.match(checksum):
+            raise ValueError("checksum: a SHA512 (128 hexadecimal characters)")
+        sc = (q.get("storage_class") or "").strip()
+        if sc:
+            _hs.check_name(sc, "storage class")
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
+    IMAGE_UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
+    try:
+        IMAGE_UPLOAD_DIR.chmod(0o700)
+        st = os.statvfs(IMAGE_UPLOAD_DIR)
+        free = st.f_bavail * st.f_frsize
+    except OSError:
+        free = None
+    if free is not None and free < length + _UPLOAD_SPARE:
+        return jsonify({"error": "not enough room to receive the file", "need": length, "free": free}), 507
+    part = IMAGE_UPLOAD_DIR / f"{uuid.uuid4().hex}.img"
+    run = ActionRun(uuid.uuid4().hex[:12], f"image:upload-receive:{namespace}/{display}", cluster, ["upload", file_name])
+    run.cluster_user = (current_cluster_identity() or {}).get("user")
+    with ACTIONS_LOCK:
+        ACTIONS[run.id] = run
+    run.status = "running"
+    run.emit({"type": "status", "status": "running", "ts": time.time()})
+    run.emit({"type": "step", "step_id": "upload", "status": "running",
+              "message": f"receiving {file_name} ({_vp.fmt_bytes(length)})", "ts": time.time()})
+    try:
+        res = _receive_archive(run, request.stream, length, part)
+    except (_UploadCancelled, ValueError, OSError) as e:
+        part.unlink(missing_ok=True)
+        run.status, run.exit_code = "error", 1
+        run.error_summary = "cancelled" if isinstance(e, _UploadCancelled) else _error_text(e)
+        run.emit({"type": "step", "step_id": "upload", "status": "error", "message": run.error_summary, "ts": time.time()})
+        run.close()
+        return jsonify({"error": run.error_summary, "action_id": run.id}), 409
+    run.emit({"type": "step", "step_id": "upload", "status": "done", "message": _vp.summary("upload", res), "ts": time.time()})
+    run.status, run.exit_code = "done", 0
+    run.close()
+    extra = ["--file", str(part), "--file-name", file_name, "--display-name", display,
+             "--port", str(os.environ.get("HARVESTER_OPS_IMAGE_UPLOAD_PORT", 8092))]
+    if checksum:
+        extra += ["--checksum", checksum]
+    if sc:
+        extra += ["--storage-class", sc]
+    if q.get("advertise"):
+        extra += ["--advertise", q["advertise"]]
+    run2, err = _res_cli(cluster, kc, f"image:upload:{namespace}/{display}",
+                         ["image", "upload", "--namespace", namespace] + extra, [str(part)])
+    return _res_reply(run2, err, received=run.id, image=display)
+
+
 @app.route("/api/vm/<cluster>/<namespace>/<name>/logs")
 @requires_auth
 def api_vm_logs(cluster, namespace, name):

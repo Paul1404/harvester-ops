@@ -1,8 +1,8 @@
 # Parity with the Harvester UI
 
-Status on 2026-09-27, console **v1.62.0**, compared with the **Harvester v1.9** UI (menus taken from the harvester-ui-extension v1.9.0 source and the v1.9 documentation).
+Status on 2026-09-27, console **v1.63.0**, compared with the **Harvester v1.9** UI (menus taken from the harvester-ui-extension v1.9.0 source and the v1.9 documentation).
 
-Of 135 functions of the Harvester UI: **85 done**, **14 partial**, **36 missing**; 2 out of scope. A missing function shows the version it is planned for.
+Of 135 functions of the Harvester UI: **96 done**, **14 partial**, **25 missing**; 2 out of scope. A missing function shows the version it is planned for.
 
 Statuses: Done, Partial (what is missing is said), Missing (planned version), Console only (what Harvester does not have), Out of scope.
 
@@ -15,8 +15,8 @@ Harvester menu: *Dashboard*
 | Host, VM and volume counts | Done | 1.2 | Overview tiles |
 | CPU, memory and storage capacity | Done | 1.62 | live usage (metrics.k8s.io), reserved, storage written and promised |
 | Cluster events (hosts, VMs, volumes, images) | Done | 1.62 | Overview Events tab, warnings filter |
-| Cluster and VM metrics (rancher-monitoring) | Missing | planned 1.66 |  |
-| Upgrade Harvester button | Missing | planned 1.66 |  |
+| Cluster and VM metrics (rancher-monitoring) | Missing | planned 1.67 |  |
+| Upgrade Harvester button | Missing | planned 1.67 |  |
 
 ## Hosts
 
@@ -89,7 +89,7 @@ Harvester menu: *Create / Edit VM*
 | Node scheduling (selector, rules) | Done | 1.13 |  |
 | VM affinity / anti-affinity | Done | 1.13 |  |
 | PCI devices | Done | 1.15 |  |
-| USB devices | Missing | planned 1.65 |  |
+| USB devices | Missing | planned 1.66 |  |
 | Access credentials (password, keys through the agent) | Done | 1.61 | applied at the next restart |
 | Filesystem volume (virtiofs, v1.9) | Done | 1.62 | at creation; the guest kernel needs virtiofs |
 | Labels, instance labels, annotations | Done | 1.62 |  |
@@ -111,12 +111,12 @@ Harvester menu: *Volumes*
 | List: replicas, health, VM, written size | Done | 1.40 |  |
 | Create (blank or from an image) | Done | 1.59 |  |
 | Expand | Done | 1.59 |  |
-| Delete | Partial | 1.16 | orphan volumes only |
-| Clone (with or without data) | Missing | planned 1.63 |  |
-| Export image | Missing | planned 1.63 |  |
-| Take snapshot | Missing | planned 1.2 |  |
-| Cancel expand | Missing | planned 1.63 |  |
-| Data migration (to another class) | Missing | planned 1.63 |  |
+| Delete | Done | 1.63 | any volume no VM uses |
+| Clone (with or without data) | Done | 1.63 |  |
+| Export image | Done | 1.63 |  |
+| Take snapshot | Done | 1.63 |  |
+| Cancel expand | Done | 1.63 | verified on a frozen expansion (bench) |
+| Data migration (to another class) | Done | 1.63 | a copy through CDI, the original stays, as in Harvester |
 | Edit / download YAML | Done | 1.60 |  |
 | Degraded volume diagnosis and fixes | Console only | 1.42 | console only |
 
@@ -128,12 +128,12 @@ Harvester menu: *Images*
 |---|---|---|---|
 | List: state, size, class, used by | Done | 1.57 |  |
 | Create from a URL | Done | 1.59 |  |
-| Upload a file from the browser | Missing | planned 1.63 |  |
-| SHA512 checksum | Missing | planned 1.63 |  |
-| Encrypt / decrypt | Missing | planned 1.63 |  |
-| Download the image | Missing | planned 1.63 |  |
-| Clone, edit (name, description, labels) | Missing | planned 1.63 |  |
-| Create a VM from the image | Missing | planned 1.63 |  |
+| Upload a file from the browser | Done | 1.63 | the console serves it to the cluster (port 8092) |
+| SHA512 checksum | Done | 1.63 |  |
+| Encrypt / decrypt | Done | 1.63 |  |
+| Download the image | Partial | 1.63 | Longhorn v1 images; CDI images in 1.64 |
+| Clone, edit (description, labels) | Done | 1.63 | the name is fixed by Harvester |
+| Create a VM from the image | Done | 1.63 |  |
 | Delete (when unused) | Done | 1.59 |  |
 | Edit / download YAML | Done | 1.60 |  |
 
@@ -153,15 +153,15 @@ Harvester menu: *Networks*
 
 | Function | Status | Version | Note |
 |---|---|---|---|
-| Cluster networks and configs (uplinks, bond, MTU) | Partial | 1.39 | read-only Fabric view; creation in 1.64 |
-| Migrate a network config to another cluster network | Missing | planned 1.64 |  |
+| Cluster networks and configs (uplinks, bond, MTU) | Partial | 1.39 | read-only Fabric view; creation in 1.65 |
+| Migrate a network config to another cluster network | Missing | planned 1.65 |  |
 | VM networks (VLAN, untagged) | Partial | 1.59 | create, delete; no edit or trunk mode yet |
 | Overlay network (kube-ovn) | Done | 1.49 |  |
-| Trunk mode (VLAN ranges), DHCP server | Missing | planned 1.64 |  |
-| Load balancers | Missing | planned 1.64 |  |
-| IP pools | Missing | planned 1.64 |  |
-| Host networks (HostNetworkConfig) | Missing | planned 1.64 |  |
-| Storage, migration and RWX networks | Missing | planned 1.64 |  |
+| Trunk mode (VLAN ranges), DHCP server | Missing | planned 1.65 |  |
+| Load balancers | Missing | planned 1.65 |  |
+| IP pools | Missing | planned 1.65 |  |
+| Host networks (HostNetworkConfig) | Missing | planned 1.65 |  |
+| Storage, migration and RWX networks | Missing | planned 1.65 |  |
 | VM network path to the switch (LLDP) | Console only | 1.36 | console only |
 
 ## Overlay and underlay networks (kube-ovn)
@@ -172,9 +172,9 @@ Harvester menu: *Overlay / Underlay Networks*
 |---|---|---|---|
 | VPC: create, static routes, peerings | Done | 1.49 |  |
 | Subnets (CIDR, gateway, NAT outgoing, DHCP, ACL) | Done | 1.49 |  |
-| Network policies (VM isolation) | Missing | planned 1.64 |  |
-| NAT gateways, external IPs, SNAT / DNAT rules | Missing | planned 1.64 |  |
-| Underlay: provider networks, VLANs | Missing | planned 1.64 |  |
+| Network policies (VM isolation) | Missing | planned 1.65 |  |
+| NAT gateways, external IPs, SNAT / DNAT rules | Missing | planned 1.65 |  |
+| Underlay: provider networks, VLANs | Missing | planned 1.65 |  |
 
 ## Backup and snapshots
 
@@ -184,10 +184,10 @@ Harvester menu: *Backup & Snapshots*
 |---|---|---|---|
 | Schedules (create, suspend, resume, delete) | Partial | 1.58 | no edit yet |
 | Backups: restore new or replace existing | Done | 1.58 |  |
-| Replace deleting previous volumes; file system freeze deadline | Missing | planned 1.65 |  |
+| Replace deleting previous volumes; file system freeze deadline | Missing | planned 1.66 |  |
 | VM snapshots: restore, delete | Done | 1.58 |  |
 | Volume snapshots: restore, delete | Done | 1.58 |  |
-| Backup target (NFS, S3) | Partial | 1.58 | shown; editable in 1.65 |
+| Backup target (NFS, S3) | Partial | 1.58 | shown; editable in 1.66 |
 | Backup and schedule YAML | Done | 1.60 |  |
 
 ## Monitoring and logging
@@ -197,8 +197,8 @@ Harvester menu: *Monitoring & Logging*
 | Function | Status | Version | Note |
 |---|---|---|---|
 | Enable rancher-monitoring / rancher-logging and their configuration | Done | 1.57 | through add-ons |
-| Alertmanager configurations (receivers) | Missing | planned 1.66 |  |
-| Flows, cluster flows, outputs, cluster outputs | Missing | planned 1.66 |  |
+| Alertmanager configurations (receivers) | Missing | planned 1.67 |  |
+| Flows, cluster flows, outputs, cluster outputs | Missing | planned 1.67 |  |
 
 ## Advanced
 
@@ -206,17 +206,17 @@ Harvester menu: *Advanced*
 
 | Function | Status | Version | Note |
 |---|---|---|---|
-| Templates: create, launch a VM | Partial | 1.28 | versions, default version, delete in 1.63 |
-| SSH keys (create, read from file, delete) | Partial | 1.59 | no edit yet |
-| Cloud configuration templates (user / network data) | Missing | planned 1.63 |  |
-| Storage classes (Longhorn v1, default, delete) | Partial | 1.59 | encryption, LVM, v2 and topologies in 1.63 |
-| PCI devices | Partial | 1.15 | list and attach to VMs; enable passthrough in 1.65 |
-| SR-IOV network devices (VF count) | Missing | planned 1.65 |  |
-| SR-IOV GPU, vGPU, MIG configurations | Missing | planned 1.65 | to be documented as unverified: no compatible GPU under Harvester |
-| USB devices (passthrough) | Missing | planned 1.65 |  |
+| Templates: create, launch a VM | Partial | 1.28 | versions, default version, delete in 1.64 |
+| SSH keys (create, read from file, delete) | Partial | 1.59 | edit in 1.64 |
+| Cloud configuration templates (user / network data) | Missing | planned 1.64 |  |
+| Storage classes (Longhorn v1, default, delete) | Partial | 1.59 | encryption, LVM, v2 and topologies in 1.64 |
+| PCI devices | Partial | 1.15 | list and attach to VMs; enable passthrough in 1.66 |
+| SR-IOV network devices (VF count) | Missing | planned 1.66 |  |
+| SR-IOV GPU, vGPU, MIG configurations | Missing | planned 1.66 | to be documented as unverified: no compatible GPU under Harvester |
+| USB devices (passthrough) | Missing | planned 1.66 |  |
 | Add-ons: enable, disable, configure | Done | 1.57 |  |
-| Secrets (Opaque: create, delete) | Partial | 1.59 | TLS, Basic, Registry, SSH types and edit in 1.63 |
-| Harvester settings (all 40: NTP, proxy, CA, TLS, overcommit…) | Missing | planned 1.65 |  |
+| Secrets (Opaque: create, delete) | Partial | 1.59 | TLS, Basic, Registry, SSH types and edit in 1.64 |
+| Harvester settings (all 40: NTP, proxy, CA, TLS, overcommit…) | Missing | planned 1.66 |  |
 
 ## Harvester upgrade
 
@@ -224,8 +224,8 @@ Harvester menu: *Upgrade*
 
 | Function | Status | Version | Note |
 |---|---|---|---|
-| Upgrade (version, notes, per-node progress, logs) | Missing | planned 1.66 |  |
-| Air-gapped upgrade (uploaded image) | Missing | planned 1.66 |  |
+| Upgrade (version, notes, per-node progress, logs) | Missing | planned 1.67 |  |
+| Air-gapped upgrade (uploaded image) | Missing | planned 1.67 |  |
 
 ## Support
 
@@ -233,8 +233,8 @@ Harvester menu: *Support*
 
 | Function | Status | Version | Note |
 |---|---|---|---|
-| Support bundle | Partial | 1.1 | the console's own (anonymised); Harvester's in 1.65 |
-| Download the cluster kubeconfig | Missing | planned 1.65 |  |
+| Support bundle | Partial | 1.1 | the console's own (anonymised); Harvester's in 1.66 |
+| Download the cluster kubeconfig | Missing | planned 1.66 |  |
 | Access embedded Rancher and Longhorn UIs | Out of scope |  | out of scope: the console covers these views |
 
 ## Users and access
@@ -245,7 +245,7 @@ Harvester menu: *Authentication / Rancher*
 |---|---|---|---|
 | Sign-in through Rancher (its identity providers), the person's own rights | Done | 1.50 | as Harvester imported into Rancher (Virtualization Management): calls carry the person's token, Rancher's cluster and project rights apply |
 | Virtualization roles (Harvester RBAC chart, Rancher 2.14.1, experimental) | Partial | 1.50 | applied by the Rancher token; checked with a cluster member, not yet with this chart's roles |
-| Rancher projects: namespaces grouped by project, resource quotas | Missing | planned 1.66 |  |
+| Rancher projects: namespaces grouped by project, resource quotas | Missing | planned 1.67 |  |
 | Cluster members | Partial | 1.31 | cluster accounts: enable, disable, admin; Rancher roles not yet |
 | Mandatory sign-in, the console's own accounts and roles | Console only | 1.57 | without Rancher; standalone Harvester has a single admin |
 
@@ -255,7 +255,7 @@ Harvester menu: *VM Imports / VM Migration*
 
 | Function | Status | Version | Note |
 |---|---|---|---|
-| VM imports (VMware, OpenStack, OVA) | Missing | planned 1.66 |  |
+| VM imports (VMware, OpenStack, OVA) | Missing | planned 1.67 |  |
 | Migration through forklift-operator | Out of scope |  | add-on missing from the 1.9 docs |
 
 ## What the console adds

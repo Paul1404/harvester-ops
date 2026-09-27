@@ -66,6 +66,12 @@ def image_manifest(spec, default_class=None):
         body["targetStorageClassName"] = sc
     if spec.get("description"):
         meta.setdefault("annotations", {})["field.cattle.io/description"] = str(spec["description"])[:500]
+    # v1.63.0 : la somme SHA512 de Harvester (vérifiée par Longhorn)
+    checksum = str(spec.get("checksum") or "").strip()
+    if checksum:
+        if not re.match(r"^[0-9a-fA-F]{128}$", checksum):
+            raise ValueError("checksum: a SHA512 (128 hexadecimal characters)")
+        body["checksum"] = checksum.lower()
     return {"apiVersion": "harvesterhci.io/v1beta1", "kind": "VirtualMachineImage",
             "metadata": meta, "spec": body}
 

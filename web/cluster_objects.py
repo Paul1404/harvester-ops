@@ -10,6 +10,7 @@ type et qui l'utilise sortent d'ici.
 """
 
 import json
+import re
 
 KINDS = ("images", "storageclasses", "sshkeys", "secrets", "addons")
 
@@ -103,6 +104,12 @@ def images(items, vms=(), pvcs=()):
             "virtual_size": status.get("virtualSize"), "progress": status.get("progress"),
             "storage_class": status.get("storageClassName"), "state": state, "message": message,
             "volumes": len(by_image.get(ref, [])), "used_by": used, "created": _created(it),
+            # v1.63.0 : ce que modifient les gestes de l'image
+            "description": (_meta(it).get("annotations") or {}).get("field.cattle.io/description") or "",
+            "labels": {k: v for k, v in (_meta(it).get("labels") or {}).items()
+                       if not re.match(r"^([a-z0-9.-]*\.)?(harvesterhci\.io|kubernetes\.io|cattle\.io|longhorn\.io)/", k)},
+            "encrypted": str((spec.get("storageClassParameters") or {}).get("encrypted")) == "true",
+            "checksum": spec.get("checksum") or None,
         })
     return out
 

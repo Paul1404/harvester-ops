@@ -4,6 +4,46 @@ All notable changes to this project will be documented here.
 Format inspired by [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 This file summarises each minor release; per-patch detail lives in `git log`.
 
+## [1.63.0] - 2026-09-27 - Volumes and images, as in Harvester
+
+### Added
+- **Volume actions** (Storage section, a volume's **Actions**): clone with
+  or without the data, export to an image, take a snapshot, copy to another
+  storage class (Harvester's data migration, through CDI), cancel an
+  expansion that cannot finish, description, delete when no VM uses it.
+- **Image actions** (each image row's **Actions**): edit the description
+  and labels, clone an image downloaded from a URL, encrypt or decrypt,
+  download the file, create a VM from the image.
+- **Upload an image from the browser**: the console keeps the file and
+  offers it once to the cluster (port 8092 by default,
+  `HARVESTER_OPS_IMAGE_UPLOAD_PORT`), the file is deleted afterwards.
+- A **SHA512 checksum** when creating an image from a URL or a file.
+- `harvester-resources volume clone|export|snapshot|copy|cancel-expand|describe`
+  and `harvester-resources image edit|clone|encrypt|decrypt|download|upload`.
+
+### Fixed (found by the real tests)
+- Longhorn's downloader asks for the file's size with a HEAD request first;
+  the upload server now answers it (it failed with 501).
+- A first failed download of an image is not the end: Harvester retries
+  (three times by default); the console now waits for its retries instead
+  of reporting the failure at once.
+- A busy upload port is said plainly instead of a traceback.
+
+### Tests
+- Library, command line and routes: each volume and image format of
+  Harvester 1.9, the cancel-expand sequence, the refusals said before
+  acting, the received file that never outlives its action.
+- In Chromium: the volume menu following the state, each window and what it
+  sends, the image menu and its windows, the upload window, a VM creation
+  opened on an image.
+- Real, on harv1: description, clone (8 s), snapshot (8 s), export to an
+  image (38 s), copy to another class (28 s); an image edited, downloaded
+  (gzip), cloned (44 s), encrypted (34 s) and decrypted (28 s) through a
+  throwaway encrypted class, a CirrOS image uploaded from the browser (22 s),
+  an upload cancelled from the dock (file deleted), a VM creation opened on
+  an image. On the three-node bench: the cancel of an expansion frozen by
+  stopping Longhorn's CSI resizer (4 s, same volume kept).
+
 ## [1.62.0] - 2026-09-27 - Hosts, namespaces and the dashboard, as in Harvester
 
 ### Added

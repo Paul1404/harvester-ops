@@ -459,8 +459,12 @@ const StorageMap = (() => {
     const yaml = v.pvc_name && window.YamlWindow
       ? `<button type="button" class="btn btn-sm btn-secondary tip" data-sto-yaml="${esc(`${v.pvc_namespace}/${v.pvc_name}`)}"
                  data-tip-i18n="yw.act.yamlTip">${window.Icons ? Icons.svg('code') : ''} ${esc(tr('yw.act.yaml', 'YAML'))}</button>` : '';
+    // v1.63.0 : les gestes de Harvester sur un volume (cloner, exporter, instantané...)
+    const more = v.pvc_name && window.StorageActions
+      ? `<button type="button" class="btn btn-sm btn-primary tip" data-sto-more="${esc(k)}" aria-haspopup="menu"
+                 data-tip-i18n="sta.act.moreVolTip">${window.Icons ? Icons.svg('more') : ''} ${esc(tr('sta.act.more', 'Actions'))}</button>` : '';
     side.innerHTML = `<h3>${esc(v.pvc_name || v.longhorn)}</h3>`
-      + (grow || yaml ? `<div class="sto-actions">${grow}${yaml}</div>` : '')
+      + (more || grow || yaml ? `<div class="sto-actions">${more}${grow}${yaml}</div>` : '')
       + healthBoxHtml(v)
       + (last ? `<p class="hint warn">${esc(tr('storage.lastUsed', 'Last used by'))} ${esc(last)}. ${esc(tr('storage.lastUsedNote', 'That workload may come back and expect its data.'))}</p>` : '')
       + `<dl class="kv">`
@@ -587,6 +591,12 @@ const StorageMap = (() => {
       if (yml && window.YamlWindow) {
         const [ns, name] = yml.dataset.stoYaml.split('/');
         YamlWindow.open(cluster, 'volume', ns, name, { onDone: () => refresh(true) });
+        return;
+      }
+      const moreBtn = e.target.closest('[data-sto-more]');
+      if (moreBtn && window.StorageActions) {
+        const mv = (lastData.volumes || []).find(x => volKey(x) === moreBtn.dataset.stoMore);
+        if (mv) StorageActions.volumeMenu(moreBtn, cluster, mv.pvc_namespace, mv.pvc_name, () => setTimeout(() => refresh(true), 1500));
         return;
       }
       const grow = e.target.closest('[data-sto-expand]');

@@ -131,6 +131,7 @@ Les archives exportées sont gardées dans `/var/lib/harvester-ops/exports`
 navigateur (1.47.0) : dimensionner ce volume pour la plus grosse VM qu'on
 pense déplacer par fichier.
 
+
 ### 8b. Se connecter (1.57.0)
 
 La console demande toujours qui vous êtes : il n'y a plus de mode ouvert
@@ -154,7 +155,21 @@ scripts et clients d'API gardent HTTP Basic.
   peut le lire, si bien que personne ne prend la console en atteignant son
   port le premier.
 
-### 9. Connexion par Rancher (facultatif, 1.50.0)
+### 9. Envoyer des images depuis le navigateur (facultatif, 1.63.0)
+
+Un fichier d'image envoyé par le navigateur est gardé par la console, puis
+offert une fois au cluster, dont les nœuds le téléchargent en HTTP depuis
+cet hôte, sur le port **8092** par défaut. L'ouvrir pour eux, ou choisir un
+autre port dans `/etc/harvester-ops/env` :
+
+```bash
+sudo firewall-cmd --permanent --add-port=8092/tcp && sudo firewall-cmd --reload
+echo HARVESTER_OPS_IMAGE_UPLOAD_PORT=8192 | sudo tee -a /etc/harvester-ops/env   # un autre port
+```
+
+Le fichier attend dans `/var/lib/harvester-ops/image-uploads` et il est
+effacé dès que l'image est importée (ou l'action annulée).
+### 10. Connexion par Rancher (facultatif, 1.50.0)
 
 Les personnes déjà connectées à Rancher Manager (2.12 et suivants) entrent
 dans la console sans rien saisir, avec les droits que Rancher leur donne sur

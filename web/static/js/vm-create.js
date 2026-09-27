@@ -102,7 +102,26 @@ const VMCreate = (() => {
     return o;
   }
 
-  function open(cluster, namespace) {
+  /** v1.63.0 : « Créer une VM » depuis une image (menu de l'image, comme
+   *  Harvester) : un disque racine fait de cette image, à la classe de
+   *  l'image (lue sur elle, jamais devinée) et à sa taille virtuelle. */
+  function withImageDisk(vm, image) {
+    if (!image || !image.ref) return vm;
+    const gi = Math.max(10, Math.ceil((Number(image.virtual_size) || 0) / 2 ** 30));
+    const claim = `${vm.metadata.name}-disk-0`;
+    const ts = vm.spec.template.spec;
+    ts.domain.devices.disks = [{ name: 'disk-0', bootOrder: 1,
+      ...(image.iso ? { cdrom: { bus: 'sata' } } : { disk: { bus: 'virtio' } }) }];
+    ts.volumes = [{ name: 'disk-0', persistentVolumeClaim: { claimName: claim } }];
+    vm.metadata.annotations['harvesterhci.io/volumeClaimTemplates'] = JSON.stringify([{
+      metadata: { name: claim, annotations: { 'harvesterhci.io/imageId': image.ref } },
+      spec: { accessModes: ['ReadWriteMany'], volumeMode: 'Block',
+              resources: { requests: { storage: `${gi}Gi` } },
+              ...(image.storage_class ? { storageClassName: image.storage_class } : {}) } }]);
+    return vm;
+  }
+
+  function open(cluster, namespace, opts = {}) {
     if (!window.VMEdit || !VMEdit.renderSectionHtml) {
       alert('VMEdit indisponible');
       return;
@@ -199,7 +218,7 @@ const VMCreate = (() => {
 
     // Une seule instance de squelette pour toute la vie du panneau : les
     // sections déjà visitées y ont écrit, on ne doit pas la recréer.
-    let vm = skeleton('vm-01', namespace);
+    let vm = withImageDisk(skeleton('vm-01', namespace), opts.image);
     const rendered = new Map();          // id -> élément de section
 
     head.querySelector('[name="namespace"]').addEventListener('change', (e) => {
@@ -419,7 +438,7 @@ const VMCreate = (() => {
     return panel;
   }
 
-  return { open, _internals: { skeleton, merge, stripNulls } };
+  return { open, _internals: { skeleton, merge, stripNulls, withImageDisk } };
 })();
 
 if (typeof window !== 'undefined') window.VMCreate = VMCreate;

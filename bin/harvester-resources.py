@@ -63,6 +63,18 @@ il s'utilise aussi seul.
   harvester-resources namespace quota  --cluster harv1 --name team-a --size 100Gi   (0 removes it)
   harvester-resources namespace delete --cluster harv1 --name team-a
 
+  harvester-resources volume clone --cluster harv1 --namespace default --name data --new-name data2 [--no-data]
+  harvester-resources volume export --cluster harv1 --namespace default --name data --display-name data-img [--target-namespace ns] [--storage-class sc]
+  harvester-resources volume snapshot --cluster harv1 --namespace default --name data --snapshot-name data-s1
+  harvester-resources volume copy --cluster harv1 --namespace default --name data --new-name data-fast --storage-class fast
+  harvester-resources volume cancel-expand --cluster harv1 --namespace default --name data
+  harvester-resources volume describe --cluster harv1 --namespace default --name data --description "..."
+  harvester-resources image edit --cluster harv1 --namespace default --name image-x [--description ..] [--labels-file l.json]
+  harvester-resources image clone --cluster harv1 --namespace default --name image-x --display-name copy
+  harvester-resources image encrypt|decrypt --cluster harv1 --namespace default --name image-x --display-name enc --storage-class enc-sc
+  harvester-resources image download --cluster harv1 --namespace default --name image-x --out image.gz
+  harvester-resources image upload --cluster harv1 --namespace default --file disk.qcow2 --display-name disk [--storage-class sc] [--checksum SHA512] [--port 8092]
+
 Sorties : 0 fait, 1 échec, 2 refusé par le contrôle, 3 annulé. Les étapes
 s'écrivent sur stderr en `STEP_EVENT|étape|statut|message`, que la console
 relaie au dock.
@@ -84,6 +96,7 @@ import hv_yaml as hy  # noqa: E402
 import hv_vm as hv  # noqa: E402
 import hv_host as hh  # noqa: E402
 import hv_ns as hn  # noqa: E402
+import hv_storage as hs  # noqa: E402
 
 EXIT_OK, EXIT_FAIL, EXIT_BLOCKED, EXIT_CANCELLED = 0, 1, 2, 3
 K_ADDON = "addons.harvesterhci.io"
@@ -1612,6 +1625,330 @@ def cmd_namespace(args):
     return NS_ACTIONS[args.action](kube, args)
 
 
+# ---------------------------------------------------------------------------
+# Volumes et images (v1.63.0) : les actions de Harvester, refaites au kubectl
+# (pkg/api/volume et pkg/api/image de Harvester 1.9).
+# ---------------------------------------------------------------------------
+
+def _pvc(kube, ns, name):
+    pvc = kube.get(hs.K_PVC, ns, name)
+    if pvc is None:
+        raise ValueError(f"no volume {ns}/{name}")
+    return pvc
+
+
+def _sc(kube, name):
+    return kube.get(hs.K_SC, None, name or "") if name else None
+
+
+def _mounted_by_pod(kube, ns, name):
+    for pod in kube.list("pods", ns):
+        if (pod.get("status") or {}).get("phase") in ("Succeeded", "Failed"):
+            continue
+        for v in ((pod.get("spec") or {}).get("volumes") or []):
+            if ((v.get("persistentVolumeClaim") or {}).get("claimName")) == name:
+                return (pod.get("metadata") or {}).get("name")
+    return None
+
+
+def vol_clone(kube, args):
+    src = _pvc(kube, args.namespace, args.name)
+    if kube.get(hs.K_PVC, args.namespace, args.new_name or "") is not None:
+        raise ValueError(f"a volume {args.namespace}/{args.new_name} already exists")
+    obj = hs.clone_pvc(src, args.new_name, with_data=not args.no_data)
+    step("clone", "running", f"{args.namespace}/{args.name} cloned to {args.new_name}"
+         + ("" if args.no_data else " with its data"))
+    kube.create(obj)
+
+    def done(o):
+        phase = ((o or {}).get("status") or {}).get("phase")
+        return (True, f"{args.new_name} is ready") if phase == "Bound" else (None, f"volume {phase or 'pending'}")
+    return _wait(kube, hs.K_PVC, args.namespace, args.new_name, done, args.timeout, label="clone")
+
+
+def vol_export(kube, args):
+    src = _pvc(kube, args.namespace, args.name)
+    pv = kube.get(hs.K_PV, None, (src.get("spec") or {}).get("volumeName") or "")
+    sc_name = args.storage_class or (src.get("spec") or {}).get("storageClassName")
+    sc_obj, src_sc = _sc(kube, sc_name), _sc(kube, (src.get("spec") or {}).get("storageClassName"))
+    if sc_obj is None:
+        raise ValueError(f"no storage class {sc_name}")
+    target_ns = args.target_namespace or args.namespace
+    if not (hs.is_longhorn_v1(src_sc) and hs.is_longhorn_v1(sc_obj)):
+        # vu dans le serveur de Harvester : hors Longhorn v1, un volume monté ne s'exporte pas
+        pod = _mounted_by_pod(kube, args.namespace, args.name)
+        if pod:
+            raise ValueError(f"the volume is used by the pod {pod}: stop its VM first")
+    obj = hs.export_image(src, args.display_name, target_ns, sc_name, sc_obj, src_sc, encrypted=hs.pv_encrypted(pv))
+    step("export", "running", f"{args.namespace}/{args.name} exported to the image {args.display_name}")
+    made = kube.create(obj)
+    name = (made.get("metadata") or {}).get("name")
+
+    def done(o):
+        state, msg = hs.image_state(o)
+        if state == "ready":
+            return True, f"image {args.display_name} ({target_ns}/{name}) is ready"
+        if state == "failed":
+            return False, msg
+        return None, f"exporting {((o or {}).get('status') or {}).get('progress') or 0} %"
+    return _wait(kube, hs.K_IMAGE, target_ns, name, done, args.timeout, label="export")
+
+
+def vol_snapshot(kube, args):
+    src = _pvc(kube, args.namespace, args.name)
+    sc = _sc(kube, (src.get("spec") or {}).get("storageClassName"))
+    prov = (sc or {}).get("provisioner")
+    setting = kube.get("settings.harvesterhci.io", None, "csi-driver-config")
+    snap_class = hs.csi_snapshot_class((setting or {}).get("value") or (setting or {}).get("default"), prov)
+    if kube.get(hs.K_SNAP, args.namespace, args.snapshot_name or "") is not None:
+        raise ValueError(f"a snapshot {args.snapshot_name} already exists")
+    obj = hs.volume_snapshot(src, args.snapshot_name, snap_class, prov)
+    step("snapshot", "running", f"snapshot {args.snapshot_name} of {args.namespace}/{args.name}")
+    kube.create(obj)
+
+    def done(o):
+        st = (o or {}).get("status") or {}
+        if st.get("error"):
+            return False, (st["error"].get("message") or "failed")[:200]
+        return (True, f"snapshot {args.snapshot_name} ready") if st.get("readyToUse") else (None, "taking the snapshot")
+    return _wait(kube, hs.K_SNAP, args.namespace, args.snapshot_name, done, args.timeout, label="snapshot")
+
+
+def vol_copy(kube, args):
+    src = _pvc(kube, args.namespace, args.name)
+    if _sc(kube, args.storage_class) is None:
+        raise ValueError(f"no storage class {args.storage_class}")
+    for kind in (hs.K_PVC, hs.K_DV):
+        if kube.get(kind, args.namespace, args.new_name or "") is not None:
+            raise ValueError(f"{args.namespace}/{args.new_name} already exists")
+    pod = _mounted_by_pod(kube, args.namespace, args.name)
+    if pod:
+        raise ValueError(f"the volume is used by the pod {pod}: stop its VM first")
+    obj = hs.data_volume(src, args.new_name, args.storage_class)
+    step("copy", "running", f"{args.namespace}/{args.name} copied to {args.new_name} ({args.storage_class}); the original stays")
+    kube.create(obj)
+
+    def done(o):
+        st = (o or {}).get("status") or {}
+        phase = st.get("phase")
+        if phase == "Succeeded":
+            return True, f"{args.new_name} is a copy of {args.name}"
+        if phase in ("Failed",):
+            return False, "the copy failed"
+        return None, f"{phase or 'pending'} {st.get('progress') or ''}".strip()
+    return _wait(kube, hs.K_DV, args.namespace, args.new_name, done, args.timeout, label="copy")
+
+
+def vol_cancel_expand(kube, args):
+    """Comme l'action cancelExpand de Harvester : PV gardé (Retain), PVC
+    supprimé puis recréé à sa capacité réelle sur le même PV, politique
+    d'origine rétablie."""
+    pvc = _pvc(kube, args.namespace, args.name)
+    if not hs.resizing(pvc):
+        raise ValueError("the volume is not being expanded")
+    vms = hs.used_by_vms(args.name, args.namespace, kube.list(K_VM, args.namespace))
+    if vms:
+        raise ValueError(f"the volume is used by the VM {', '.join(vms)}")
+    pv_name = (pvc.get("spec") or {}).get("volumeName")
+    pv = kube.get(hs.K_PV, None, pv_name or "")
+    if pv is None:
+        raise ValueError("the volume has no persistent volume")
+    new = hs.recreated_pvc(pvc)
+    policy = (pv.get("spec") or {}).get("persistentVolumeReclaimPolicy") or "Delete"
+    step("cancel", "running", f"expansion of {args.namespace}/{args.name} cancelled: the claim is recreated "
+         f"at {new['spec']['resources']['requests']['storage']} on the same volume")
+    kube.patch(hs.K_PV, None, pv_name, {"spec": {"persistentVolumeReclaimPolicy": "Retain"}})
+    try:
+        kube.delete(hs.K_PVC, args.namespace, args.name)
+        for _ in range(60):
+            if kube.get(hs.K_PVC, args.namespace, args.name) is None:
+                break
+            time.sleep(1)
+        else:
+            raise RuntimeError("the claim was not deleted")
+        kube.run("patch", hs.K_PV, pv_name, "--type", "json", "-p",
+                 json.dumps([{"op": "remove", "path": "/spec/claimRef"}]))
+        kube.create(new)
+    finally:
+        kube.patch(hs.K_PV, None, pv_name, {"spec": {"persistentVolumeReclaimPolicy": policy}})
+
+    def done(o):
+        phase = ((o or {}).get("status") or {}).get("phase")
+        return (True, f"{args.name} is back at its size") if phase == "Bound" else (None, f"volume {phase or 'pending'}")
+    return _wait(kube, hs.K_PVC, args.namespace, args.name, done, args.timeout, label="cancel")
+
+
+def vol_describe(kube, args):
+    _pvc(kube, args.namespace, args.name)
+    kube.patch(hs.K_PVC, args.namespace, args.name, hs.description_patch(None, args.description))
+    step("describe", "done", f"description of {args.namespace}/{args.name} saved")
+    return EXIT_OK
+
+
+VOLUME_ACTIONS = {"clone": vol_clone, "export": vol_export, "snapshot": vol_snapshot, "copy": vol_copy,
+                  "cancel-expand": vol_cancel_expand, "describe": vol_describe}
+
+
+def cmd_volume(args):
+    kube = kube_from(args)
+    hs.check_name(args.name, "volume name")
+    return VOLUME_ACTIONS[args.action](kube, args)
+
+
+def _image(kube, ns, name):
+    img = kube.get(hs.K_IMAGE, ns, name)
+    if img is None:
+        raise ValueError(f"no image {ns}/{name}")
+    return img
+
+
+def _wait_image(kube, ns, name, display, timeout, label):
+    def done(o):
+        state, msg = hs.image_state(o)
+        if state == "ready":
+            return True, f"image {display} ({ns}/{name}) is ready"
+        if state == "failed":
+            return False, msg
+        return None, msg or f"importing {((o or {}).get('status') or {}).get('progress') or 0} %"
+    return _wait(kube, hs.K_IMAGE, ns, name, done, timeout, label=label)
+
+
+def img_edit(kube, args):
+    img = _image(kube, args.namespace, args.name)
+    labels = _read_json(args.labels_file) if args.labels_file else None
+    patch = hs.image_edit_patch(img, args.description, labels)
+    step("image", "running", f"image {args.namespace}/{args.name} changed")
+    kube.run("patch", hs.K_IMAGE, args.name, "-n", args.namespace, "--type", "json", "-p", json.dumps(patch))
+    step("image", "done", "saved")
+    return EXIT_OK
+
+
+def img_clone(kube, args):
+    img = _image(kube, args.namespace, args.name)
+    obj = hs.clone_image(img, args.display_name)
+    step("image", "running", f"image {args.display_name} downloaded again from {obj['spec'].get('url')}")
+    made = kube.create(obj)
+    return _wait_image(kube, args.namespace, made["metadata"]["name"], args.display_name, args.timeout, "image")
+
+
+def img_crypto(kube, args, operation):
+    img = _image(kube, args.namespace, args.name)
+    sc = _sc(kube, args.storage_class)
+    if sc is None:
+        raise ValueError(f"no storage class {args.storage_class}")
+    obj = hs.crypto_image(img, operation, args.display_name, args.storage_class, sc)
+    step("image", "running", f"image {args.display_name}: {operation}ed copy of {args.name}")
+    made = kube.create(obj)
+    return _wait_image(kube, args.namespace, made["metadata"]["name"], args.display_name, args.timeout, "image")
+
+
+def img_download(kube, args):
+    img = _image(kube, args.namespace, args.name)
+    sc = _sc(kube, ((img.get("status") or {}).get("storageClassName")))
+    path = hs.download_path(hs.backing_image_of(img, sc))
+    out = Path(args.out)
+    step("download", "running", f"image {args.name} to {out.name} (gzip)")
+    n = 0
+    with open(out, "wb") as f:
+        for chunk in kube.raw_stream(path):
+            f.write(chunk)
+            n += len(chunk)
+    step("download", "done", f"{n} bytes written")
+    return EXIT_OK
+
+
+def _local_ip_for(host):
+    import socket
+    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    try:
+        s.connect((host, 443))
+        return s.getsockname()[0]
+    finally:
+        s.close()
+
+
+def img_upload(kube, args):
+    """L'envoi d'un fichier : servi une seule fois par un petit serveur HTTP à
+    jeton, que le cluster télécharge (source « download ») ; le serveur
+    s'arrête quand l'image est prête. Le port doit être joignable depuis
+    les nœuds du cluster."""
+    import secrets
+    import threading
+    from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+    src = Path(args.file)
+    if not src.is_file():
+        raise ValueError(f"no file {args.file}")
+    token = secrets.token_urlsafe(24)
+    size = src.stat().st_size
+    sent = {"n": 0}
+
+    class H(BaseHTTPRequestHandler):
+        def log_message(self, *a):
+            pass
+
+        def _head(self):
+            if self.path.split("?", 1)[0] != f"/image/{token}":
+                self.send_response(404)
+                self.end_headers()
+                return False
+            self.send_response(200)
+            self.send_header("Content-Type", "application/octet-stream")
+            self.send_header("Content-Length", str(size))
+            self.end_headers()
+            return True
+
+        # vu sur harv1 : le téléchargeur de Longhorn demande d'abord un HEAD
+        # (taille du fichier) ; sans réponse, « got 501 status code »
+        def do_HEAD(self):   # noqa: N802
+            self._head()
+
+        def do_GET(self):   # noqa: N802
+            if not self._head():
+                return
+            with open(src, "rb") as f:
+                while True:
+                    chunk = f.read(1 << 20)
+                    if not chunk:
+                        break
+                    try:
+                        self.wfile.write(chunk)
+                    except (BrokenPipeError, ConnectionResetError):
+                        return
+                    sent["n"] += len(chunk)
+
+    try:
+        srv = ThreadingHTTPServer(("0.0.0.0", int(args.port)), H)
+    except OSError as e:
+        # vu sur node1 : un autre service tenait le port ; le dire, pas une trace
+        raise ValueError(f"port {args.port} cannot be used on this machine ({e.strerror}): "
+                         "choose another one (--port, HARVESTER_OPS_IMAGE_UPLOAD_PORT)") from None
+    srv.daemon_threads = True
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    try:
+        host = args.advertise or _local_ip_for(kube.server_host() or "127.0.0.1")
+        url = f"http://{host}:{srv.server_address[1]}/image/{token}"
+        obj = hs.upload_image(args.namespace, args.display_name, url, args.storage_class,
+                              checksum=args.checksum, file_name=args.file_name or src.name,
+                              description=args.description or "")
+        step("upload", "running", f"{src.name} ({size} bytes) offered to the cluster from {host}")
+        made = kube.create(obj)
+        return _wait_image(kube, args.namespace, made["metadata"]["name"], args.display_name, args.timeout, "upload")
+    finally:
+        srv.shutdown()
+        srv.server_close()
+
+
+IMAGE_ACTIONS = {"edit": img_edit, "clone": img_clone, "encrypt": lambda k, a: img_crypto(k, a, "encrypt"),
+                 "decrypt": lambda k, a: img_crypto(k, a, "decrypt"), "download": img_download, "upload": img_upload}
+
+
+def cmd_image(args):
+    kube = kube_from(args)
+    if args.action != "upload":
+        hs.check_name(args.name or "", "image name")
+    return IMAGE_ACTIONS[args.action](kube, args)
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(prog="harvester-resources", description=__doc__.split("\n\n")[0])
     sub = ap.add_subparsers(dest="cmd", required=True)
@@ -1804,6 +2141,40 @@ def main(argv=None):
     sp.add_argument("--annotations-file", help="update: JSON object of its annotations")
     sp.add_argument("--size", help="quota: total size of the snapshots, e.g. 100Gi (0 removes it)")
     sp.add_argument("--timeout", type=int, default=900)
+    sp = sub.add_parser("volume", help="a volume's actions, as in Harvester")
+    sp.set_defaults(fn=cmd_volume)
+    sp.add_argument("action", choices=sorted(VOLUME_ACTIONS))
+    sp.add_argument("--cluster")
+    sp.add_argument("--kubeconfig")
+    sp.add_argument("--namespace", required=True)
+    sp.add_argument("--name", required=True, help="the volume (PVC)")
+    sp.add_argument("--new-name", help="clone/copy: the new volume")
+    sp.add_argument("--no-data", action="store_true", help="clone: a new empty volume with the same settings")
+    sp.add_argument("--display-name", help="export: the image name")
+    sp.add_argument("--target-namespace", help="export: namespace of the image (the volume's by default)")
+    sp.add_argument("--storage-class", help="export/copy: the target storage class")
+    sp.add_argument("--snapshot-name", help="snapshot: its name")
+    sp.add_argument("--description", help="describe: the text ('' removes it)")
+    sp.add_argument("--timeout", type=int, default=3600)
+
+    sp = sub.add_parser("image", help="an image's actions, as in Harvester")
+    sp.set_defaults(fn=cmd_image)
+    sp.add_argument("action", choices=sorted(IMAGE_ACTIONS))
+    sp.add_argument("--cluster")
+    sp.add_argument("--kubeconfig")
+    sp.add_argument("--namespace", required=True)
+    sp.add_argument("--name", help="the image (object name)")
+    sp.add_argument("--display-name", help="clone/encrypt/decrypt/upload: the new image's name")
+    sp.add_argument("--description")
+    sp.add_argument("--labels-file", help="edit: JSON object of the image's labels")
+    sp.add_argument("--storage-class", help="encrypt/decrypt/upload: the target storage class")
+    sp.add_argument("--out", help="download: file written (gzip)")
+    sp.add_argument("--file", help="upload: the image file")
+    sp.add_argument("--file-name", help="upload: the original file name (label iso or raw_qcow2)")
+    sp.add_argument("--checksum", help="upload: SHA512 of the file")
+    sp.add_argument("--port", default=8092, help="upload: port the cluster downloads from (8092)")
+    sp.add_argument("--advertise", help="upload: address the cluster reaches this machine at")
+    sp.add_argument("--timeout", type=int, default=7200)
     args = ap.parse_args(argv)
     signal.signal(signal.SIGTERM, _on_signal)
     try:

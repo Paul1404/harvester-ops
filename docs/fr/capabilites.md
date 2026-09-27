@@ -843,6 +843,43 @@ des jauges d'**utilisation** : CPU et mémoire mesurés maintenant
 réservé ; le stockage Longhorn écrit, et ce qui est promis aux volumes face à
 ce qui peut l'être (sur-provisionnement compris).
 
+### Les gestes sur les volumes et les images (1.63.0)
+
+Dans la section Stockage, le panneau d'un volume a **Actions**, et chaque
+ligne d'image a son bouton **Actions**, avec les menus de Harvester. Un geste
+qui ne s'applique pas est grisé et dit pourquoi (volume utilisé par une VM,
+cluster sans CDI, image pas prête ou hors Longhorn v1). Chacun est une action
+suivie, par `harvester-resources volume|image <geste>`.
+
+- **Volume** : **cloner** (avec ses données, Longhorn les copie ; ou un
+  volume vide de même taille et même classe) ; **exporter en image** (le
+  volume d'une VM en marche sur Longhorn v1, sinon arrêter la VM
+  d'abord) ; **prendre un instantané** (avec la classe que nomme le réglage
+  `csi-driver-config` de Harvester, possédé par le volume) ; **copier vers
+  une autre classe** (la migration de données de Harvester : un DataVolume
+  CDI, l'original reste) ; **annuler un agrandissement** qui ne peut pas
+  aboutir (la demande est recréée à sa taille réelle sur le même volume,
+  données gardées) ; **description** ; **supprimer** si aucune VM ne s'en
+  sert.
+- **Image** : **modifier** sa description et ses labels (Harvester fige le
+  reste) ; **cloner** une image téléchargée depuis une adresse ;
+  **chiffrer** vers une classe de stockage chiffrée, ou **déchiffrer** ;
+  **télécharger** le fichier (gzip, comme le sert Harvester ; images
+  Longhorn v1) ; **créer une VM** depuis elle (la fenêtre de création
+  s'ouvre avec un disque fait de l'image, à sa classe et à sa taille).
+- **Envoyer** un fichier d'image depuis le navigateur : la console le
+  garde, puis l'offre une fois au cluster en HTTP (port 8092 par défaut,
+  voir le guide d'installation), dont les nœuds le téléchargent ; le
+  fichier est effacé ensuite. Une **somme SHA512** peut être donnée, ici et
+  à la création d'une image depuis une adresse : Longhorn vérifie le
+  fichier avec elle.
+
+Vérifié sur harv1 : chaque geste de volume, une image modifiée,
+téléchargée, clonée, chiffrée puis déchiffrée avec une classe chiffrée
+jetable, une image CirrOS envoyée depuis le navigateur (22 s), une création
+de VM ouverte depuis une image ; l'annulation d'un agrandissement figé sur le
+banc à trois nœuds.
+
 ## 4. Cluster API : clusters RKE2 en aval (console + CLI)
 
 Créer et exploiter des clusters Kubernetes dont les nœuds sont des VMs

@@ -63,7 +63,8 @@ def test_the_menu_follows_the_vm_state(ui):
     menu = page.locator(".vma-menu")
     expect(menu.locator(".vma-item").first).to_be_visible(timeout=5000)
     groups = menu.locator(".vma-title").all_inner_texts()
-    assert [g.lower() for g in groups] == ["alimentation", "protection", "disques", "migration", "copie", "yaml"]
+    assert [g.lower() for g in groups] == ["alimentation", "protection", "disques", "réseau", "migration", "copie",
+                                          "observer", "yaml"]
     # pas d'agent : redémarrage doux grisé, avec la raison ; pas d'autre nœud : migration grisée
     soft = menu.locator('[data-vma="softreboot"]')
     assert soft.get_attribute("aria-disabled") == "true" and "agent" in soft.get_attribute("data-tip")

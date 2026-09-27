@@ -369,3 +369,37 @@ def test_without_visiting_cloud_init_nothing_is_invented(context, flask_server):
     page.click('#fp-vm-create [data-action="create"]')
     page.wait_for_timeout(900)
     assert sent["cloudinit"] is None and sent["ssh_keys"] == [] and sent["guest_agent"] is False
+
+
+def test_cpu_and_memory_hotplug_as_harvester_sets_it(context, flask_server):
+    """v1.61.0 : la case de Harvester : un cœur par socket, maximums x4 si
+    vides, limites = maximums, annotation enableCPUAndMemoryHotplug. Sous
+    1 Gio, KubeVirt refuse (vu sur harvlab) : dit avant l'envoi."""
+    page = context.new_page()
+    sent = {}
+
+    def handle(route, request):
+        sent.update(json.loads(request.post_data or "{}"))
+        route.fulfill(status=202, content_type="application/json",
+                      body=json.dumps({"action_id": "act-hp", "names": ["web"]}))
+    page.route("**/api/vms/*/create", handle)
+    open_panel(page, flask_server["base_url"])
+    page.fill('#fp-vm-create [name="name"]', 'web')
+    page.click('#fp-vm-create [data-section="compute"]')
+    page.wait_for_timeout(300)
+    page.fill('#fp-vm-create [data-field="cpu.sockets"]', '2')
+    page.fill('#fp-vm-create [data-field="memory.guest"]', '512Mi')
+    page.check('#fp-vm-create [data-field="cpu.hotplugOn"]')
+    page.click('#fp-vm-create [data-action="create"]')
+    page.wait_for_timeout(600)
+    assert not sent
+    assert "1Gi" in page.locator('#fp-vm-create [data-result]').inner_text()
+    page.fill('#fp-vm-create [data-field="memory.guest"]', '2Gi')
+    page.click('#fp-vm-create [data-action="create"]')
+    page.wait_for_timeout(900)
+    m = sent["manifest"]
+    dom = m["spec"]["template"]["spec"]["domain"]
+    assert m["metadata"]["annotations"]["harvesterhci.io/enableCPUAndMemoryHotplug"] == "true"
+    assert dom["cpu"]["cores"] == 1 and dom["cpu"]["threads"] == 1 and dom["cpu"]["maxSockets"] == 8
+    assert dom["memory"] == {"guest": "2Gi", "maxGuest": "8Gi"}
+    assert dom["resources"]["limits"] == {"cpu": "8", "memory": "8Gi"}

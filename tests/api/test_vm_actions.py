@@ -377,3 +377,86 @@ def test_the_state_offers_no_target_without_a_known_node(world):
     with wapp.app.test_client() as c:
         d = c.get("/api/vm/harv1/default/web/state", headers=auth("eye")).get_json()
     assert d["running"] and d["node"] is None and d["targets"] == []
+
+
+# -- v1.61.0 ---------------------------------------------------------------------------
+
+def test_the_state_says_what_the_hot_actions_need(world):
+    vm = a_vm()
+    vm["metadata"]["annotations"]["harvesterhci.io/enableCPUAndMemoryHotplug"] = "true"
+    vm["spec"]["template"]["spec"]["domain"].update({"cpu": {"sockets": 2, "cores": 1, "threads": 1, "maxSockets": 8},
+                                                     "memory": {"guest": "4Gi", "maxGuest": "16Gi"}})
+    vm["spec"]["template"]["spec"]["domain"]["devices"]["disks"].append({"name": "cd1", "cdrom": {"bus": "sata"}})
+    world["objs"]["virtualmachines.kubevirt.io"] = vm
+    world["objs"]["resourcequotas.harvesterhci.io"] = {"spec": {"snapshotLimit": {"vmTotalSnapshotSizeQuota": {"web": 5}}}}
+    with wapp.app.test_client() as c:
+        d = c.get("/api/vm/harv1/default/web/state", headers=auth("eye")).get_json()
+    assert d["cpumem"] == {"enabled": True, "sockets": 2, "max_sockets": 8, "memory": "4Gi", "max_memory": "16Gi"}
+    assert d["sata_cdroms"] == [{"name": "cd1", "empty": True}]
+    assert d["quota"] == 5 and d["storage_migration"] is None and d["restart_required"] is False
+
+
+def test_hot_actions_are_checked_before_the_tool(world):
+    with wapp.app.test_client() as c:
+        for action, body in (("insert-cdrom", {"volume": "cd1", "image": "no-namespace"}),
+                             ("add-nic", {"iface": "nic2", "network": "../x"}),
+                             ("cpumem", {"memory": "lots"}),
+                             ("storage-migrate", {"volume": "web-root", "target": "Bad"}),
+                             ("quota", {"size": "much"})):
+            r = c.post(f"/api/vm/harv1/default/web/do/{action}", json=body, headers=auth("ops"))
+            assert r.status_code == 400, (action, r.get_json())
+        assert c.post("/api/vm/harv1/default/web/do/cpumem", json={"cpu": 4, "memory": "8Gi"},
+                      headers=auth("ops")).status_code == 202
+    assert world["actions"][-1][1][-4:] == ["--cpu", "4", "--memory", "8Gi"]
+
+
+def test_an_access_password_never_reaches_the_command_line(world, monkeypatch):
+    seen = {}
+
+    def fake_action(cluster_, label, cmd, tool, spec=None, dry_run=False, after=None):
+        path = cmd[cmd.index("--password-file") + 1]
+        seen["file"] = Path(path).read_text()
+        seen["mode"] = oct(Path(path).stat().st_mode & 0o777)
+        seen["cmd"] = cmd
+        after()
+        seen["gone"] = not Path(path).exists()
+
+        class Run:
+            id = "acc000000001"
+        return Run(), None
+    monkeypatch.setattr(wapp, "_cli_action", fake_action)
+    with wapp.app.test_client() as c:
+        r = c.post("/api/vm/harv1/default/web/do/access", headers=auth("ops"),
+                   json={"kind": "basic", "users": ["root"], "password": "a-secret-pw"})
+        assert r.status_code == 202 and "a-secret-pw" not in r.get_data(as_text=True)
+        assert c.post("/api/vm/harv1/default/web/do/access", headers=auth("ops"),
+                      json={"kind": "basic", "users": ["root"], "password": "short"}).status_code == 400
+    assert seen["file"] == "a-secret-pw" and seen["mode"] == "0o600" and seen["gone"]
+    assert "a-secret-pw" not in " ".join(seen["cmd"])
+
+
+def test_logs_are_for_operators(world, monkeypatch):
+    world["objs"]["pods"] = {"items": [{"metadata": {"name": "virt-launcher-web-abc", "creationTimestamp": "2026-09-27T00:00:00Z",
+                                                     "annotations": {"kubectl.kubernetes.io/default-container": "compute"}},
+                                        "spec": {"nodeName": "n1", "containers": [{"name": "compute"}, {"name": "guest-console-log"}]},
+                                        "status": {"phase": "Running"}}]}
+
+    class R:
+        returncode, stdout, stderr = 0, "line 1\nline 2\n", ""
+    monkeypatch.setattr(wapp, "_kubectl_run", lambda argv, **k: R())
+    with wapp.app.test_client() as c:
+        assert c.get("/api/vm/harv1/default/web/logs", headers=auth("eye")).status_code == 403
+        d = c.get("/api/vm/harv1/default/web/logs?container=guest-console-log", headers=auth("ops")).get_json()
+        assert d["container"] == "guest-console-log" and d["logs"].startswith("line 1")
+        assert d["containers"] == ["compute", "guest-console-log"]
+        assert c.get("/api/vm/harv1/default/web/logs?container=evil", headers=auth("ops")).status_code == 400
+
+
+def test_a_console_ticket_opens_only_its_own_console():
+    t = wapp._vnc_issue_ticket("harv1", "default", "web", kind="vnc")
+    assert wapp._vnc_take_ticket(t, "harv1", "default", "web", kind="serial") is None   # et il est consommé
+    assert wapp._vnc_take_ticket(t, "harv1", "default", "web", kind="vnc") is None
+    s = wapp._vnc_issue_ticket("harv1", "default", "web", kind="serial")
+    assert wapp._vnc_take_ticket(s, "harv1", "default", "web", kind="serial")["kind"] == "serial"
+    v = wapp._vnc_issue_ticket("harv1", "default", "web")
+    assert wapp._vnc_take_ticket(v, "harv1", "default", "web")["kind"] == "vnc"             # la VNC d'avant

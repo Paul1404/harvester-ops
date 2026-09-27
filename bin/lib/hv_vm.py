@@ -437,3 +437,334 @@ def with_ssh_keys(user_data, keys):
         raise ValueError("ssh_authorized_keys: a list is expected in the user-data")
     data["ssh_authorized_keys"] = have + [k for k in keys if k not in have]
     return _dump_cloud_config(data)
+
+
+# ---------------------------------------------------------------------------
+# v1.61.0 : CD-ROM à chaud, carte réseau à chaud, CPU et mémoire à chaud.
+# Même logique que les actions du serveur de Harvester v1.9.0
+# (pkg/api/vm/handler.go : insertCdRomVolume, ejectCdRomVolume, addNic,
+# removeNic, cpuAndMemoryHotplug), refaite en objets Kubernetes.
+# ---------------------------------------------------------------------------
+GUEST_CLUSTER_CREATOR = ("harvesterhci.io/creator", "docker-machine-driver-harvester")
+
+
+def _disks(vm):
+    return ((_tspec(vm).get("domain") or {}).get("devices") or {}).get("disks") or []
+
+
+def sata_cdroms(vm):
+    """[(nom, vide)] : les lecteurs CD-ROM SATA de la VM ; un lecteur sans
+    volume est un plateau vide où insérer une image."""
+    vols = {v.get("name") for v in _tspec(vm).get("volumes") or []}
+    return [(d["name"], d["name"] not in vols) for d in _disks(vm)
+            if (d.get("cdrom") or {}).get("bus") == "sata"]
+
+
+def _gib_up(n):
+    return -(-int(n) // 2**30)
+
+
+def insert_cdrom(vm, device, image, rnd=random):
+    """Insérer une image dans un lecteur vide : un volume tiré de l'image
+    (taille arrondie au Gio, classe de l'image) branché à chaud. Rend (VM,
+    nom du PVC)."""
+    drives = dict(sata_cdroms(vm))
+    if device not in drives:
+        raise ValueError(f"no SATA CD-ROM drive named {device} on this VM")
+    if not drives[device]:
+        raise ValueError(f"the drive {device} already holds an image: eject it first")
+    st = (image or {}).get("status") or {}
+    sc = st.get("storageClassName")
+    if not sc:
+        raise ValueError("this image has no storage class yet (still importing?)")
+    size = max(int(st.get("virtualSize") or 0), int(st.get("size") or 0))
+    if size <= 0:
+        raise ValueError("the image's size is not known yet")
+    im = image.get("metadata") or {}
+    meta = vm.get("metadata") or {}
+    claim = f"{meta.get('name')}-{device}-{suffix(rnd=rnd)}"[:63].rstrip("-")
+    tmpl = {"metadata": {"name": claim, "annotations": {"harvesterhci.io/imageId": f"{im.get('namespace')}/{im.get('name')}"}},
+            "spec": {"accessModes": ["ReadWriteMany"], "volumeMode": "Block", "storageClassName": sc,
+                     "resources": {"requests": {"storage": f"{_gib_up(size)}Gi"}}}}
+    out = copy.deepcopy(vm)
+    ann = out.setdefault("metadata", {}).setdefault("annotations", {})
+    ann[VCT] = json.dumps(claim_templates(vm) + [tmpl], separators=(",", ":"))
+    _tspec(out).setdefault("volumes", []).append(
+        {"name": device, "persistentVolumeClaim": {"claimName": claim, "hotpluggable": True}})
+    return out, claim
+
+
+def eject_image(vm, device):
+    """Retirer l'image d'un lecteur en gardant le lecteur (plateau vide) ;
+    rend (VM, PVC à supprimer)."""
+    if device not in dict(sata_cdroms(vm)):
+        raise ValueError(f"no SATA CD-ROM drive named {device} on this VM")
+    out = copy.deepcopy(vm)
+    ts = _tspec(out)
+    claims = [(v.get("persistentVolumeClaim") or {}).get("claimName") for v in ts.get("volumes") or []
+              if v.get("name") == device]
+    claims = [c for c in claims if c]
+    if not any(v.get("name") == device for v in ts.get("volumes") or []):
+        raise ValueError(f"the drive {device} is already empty")
+    ts["volumes"] = [v for v in ts.get("volumes") or [] if v.get("name") != device]
+    rest = [t for t in claim_templates(out) if (t.get("metadata") or {}).get("name") not in claims]
+    ann = out.setdefault("metadata", {}).setdefault("annotations", {})
+    if rest:
+        ann[VCT] = json.dumps(rest, separators=(",", ":"))
+    else:
+        ann.pop(VCT, None)
+    return out, claims
+
+
+def _nic_common(vm):
+    labels = (vm.get("metadata") or {}).get("labels") or {}
+    if labels.get(GUEST_CLUSTER_CREATOR[0]) == GUEST_CLUSTER_CREATOR[1]:
+        raise ValueError("this VM is a node of a guest cluster: its network interfaces are managed by Rancher")
+    missing = [i.get("name") for i in ((_tspec(vm).get("domain") or {}).get("devices") or {}).get("interfaces") or []
+               if not i.get("macAddress")]
+    if missing:
+        raise ValueError(f"interfaces without a MAC address in the VM spec ({', '.join(missing)}): "
+                         "Harvester writes them when the VM is stopped once")
+
+
+def nad_hotpluggable(nad):
+    """Un réseau de VMs se branche à chaud s'il est un pont (bridge), hors du
+    namespace système (réseaux de stockage ou de migration)."""
+    meta = (nad or {}).get("metadata") or {}
+    if meta.get("deletionTimestamp") or meta.get("namespace") == "harvester-system":
+        return False
+    try:
+        conf = json.loads(((nad or {}).get("spec") or {}).get("config") or "{}")
+    except ValueError:
+        return False
+    return conf.get("type") == "bridge"
+
+
+def add_nic(vm, iface, network, mac=None):
+    """Une carte virtio en pont, branchée sur un réseau de VMs ; KubeVirt
+    l'ajoute à la VM en marche par une migration."""
+    check_name(iface, "interface name")
+    _nic_common(vm)
+    devs = (_tspec(vm).get("domain") or {}).get("devices") or {}
+    if any(i.get("name") == iface for i in devs.get("interfaces") or []):
+        raise ValueError(f"this VM already has an interface named {iface}")
+    if mac and not re.match(r"^([0-9a-f]{2}:){5}[0-9a-f]{2}$", mac.lower()):
+        raise ValueError("MAC address: six hexadecimal pairs separated by colons")
+    out = copy.deepcopy(vm)
+    ts = _tspec(out)
+    new = {"name": iface, "model": "virtio", "bridge": {}}
+    if mac:
+        new["macAddress"] = mac.lower()
+    ts["domain"]["devices"].setdefault("interfaces", []).append(new)
+    ts.setdefault("networks", []).append({"name": iface, "multus": {"networkName": network}})
+    return out
+
+
+def remove_nic(vm, iface):
+    """Débrancher une carte (état « absent ») ; seulement une carte virtio
+    en pont, et pas la dernière."""
+    _nic_common(vm)
+    out = copy.deepcopy(vm)
+    ifaces = _tspec(out)["domain"]["devices"].get("interfaces") or []
+    if len(ifaces) <= 1:
+        raise ValueError("the VM has a single network interface: it cannot be unplugged")
+    for i in ifaces:
+        if i.get("name") != iface:
+            continue
+        if i.get("state") == "absent":
+            raise ValueError(f"{iface} is already being unplugged")
+        if "bridge" not in i:
+            raise ValueError(f"{iface} is not in bridge mode: only a bridge interface is unplugged while running")
+        if i.get("model") not in (None, "", "virtio"):
+            raise ValueError(f"{iface} does not use the virtio model")
+        i["state"] = "absent"
+        return out
+    raise ValueError(f"no interface named {iface}")
+
+
+# ---------------------------------------------------------------------------
+# v1.61.0 : CPU et mémoire à chaud, migration du stockage, quota
+# d'instantanés, access credentials (formats de Harvester 1.9, relevés dans
+# harvester-ui-extension et pkg/api/vm/handler.go v1.9.0).
+# ---------------------------------------------------------------------------
+HOTPLUG_ANN = "harvesterhci.io/enableCPUAndMemoryHotplug"
+QUOTA_NAME = "default-resource-quota"
+UNITS = {"": 1, "k": 10**3, "M": 10**6, "G": 10**9, "T": 10**12,
+         "Ki": 2**10, "Mi": 2**20, "Gi": 2**30, "Ti": 2**40}
+
+
+def quantity(v):
+    """« 4Gi », « 512Mi », « 1.5G » en octets ; None si illisible."""
+    m = re.match(r"^\s*([0-9]+(?:\.[0-9]+)?)\s*(k|M|G|T|Ki|Mi|Gi|Ti)?\s*$", str(v or ""))
+    if not m:
+        return None
+    return int(float(m.group(1)) * UNITS[m.group(2) or ""])
+
+
+def cpumem_info(vm):
+    dom = _tspec(vm).get("domain") or {}
+    cpu, mem = dom.get("cpu") or {}, dom.get("memory") or {}
+    ann = ((vm or {}).get("metadata") or {}).get("annotations") or {}
+    enabled = ann.get(HOTPLUG_ANN) == "true" and (cpu.get("cores") or 1) == 1 and (cpu.get("threads") or 1) == 1
+    return {"enabled": enabled, "sockets": cpu.get("sockets") or 1, "max_sockets": cpu.get("maxSockets"),
+            "memory": mem.get("guest"), "max_memory": mem.get("maxGuest")}
+
+
+def cpumem_patch(vm, sockets=None, memory=None):
+    """Les deux remplacements JSON de l'action cpuAndMemoryHotplug, contrôlés
+    contre les maximums posés à la création (maxSockets, maxGuest)."""
+    info = cpumem_info(vm)
+    if not info["enabled"]:
+        raise ValueError("CPU and memory hotplug is not enabled on this VM (it is chosen when the VM is created)")
+    ops = []
+    if sockets is not None:
+        s = int(sockets)
+        if s < 1 or (info["max_sockets"] and s > int(info["max_sockets"])):
+            raise ValueError(f"CPU: from 1 to {info['max_sockets']}")
+        if s != int(info["sockets"]):
+            ops.append({"op": "replace", "path": "/spec/template/spec/domain/cpu/sockets", "value": s})
+    if memory:
+        b = quantity(memory)
+        mx = quantity(info["max_memory"]) if info["max_memory"] else None
+        if not b:
+            raise ValueError("memory: a size such as 4Gi")
+        if b < 2**30:     # règle de KubeVirt, vue sur harvlab
+            raise ValueError("memory: at least 1Gi (KubeVirt's minimum for memory hotplug)")
+        if mx and b > mx:
+            raise ValueError(f"memory: at most {info['max_memory']}")
+        if memory != info["memory"]:
+            ops.append({"op": "replace", "path": "/spec/template/spec/domain/memory/guest", "value": memory})
+    if not ops:
+        raise ValueError("nothing to change")
+    return ops
+
+
+def storage_migration(vm, source, target_pvc, vms=()):
+    """Poser `targetVolume` sur l'entrée du volume source (le contrôleur de
+    Harvester fait le reste) ; mêmes contrôles que son webhook."""
+    entries = claim_templates(vm)
+    if any(e.get("targetVolume") for e in entries):
+        raise ValueError("a storage migration is already in progress on this VM")
+    claims = {x["claim"] for x in vm_volumes(vm) if x["claim"]}
+    if source not in claims:
+        raise ValueError(f"{source} is not a volume of this VM")
+    if not any((e.get("metadata") or {}).get("name") == source for e in entries):
+        raise ValueError(f"{source} has no claim template: Harvester can only migrate the VM's own volumes")
+    tmeta = (target_pvc or {}).get("metadata") or {}
+    tname = tmeta.get("name")
+    if not tname:
+        raise ValueError("the target volume does not exist")
+    for other in vms:
+        used = {x["claim"] for x in vm_volumes(other) if x["claim"]} | \
+               {(e.get("metadata") or {}).get("name") for e in claim_templates(other)}
+        if tname in used:
+            raise ValueError(f"{tname} is already used by the VM {(other.get('metadata') or {}).get('name')}")
+    out = copy.deepcopy(vm)
+    new = []
+    for e in entries:
+        e = dict(e)
+        if (e.get("metadata") or {}).get("name") == source:
+            e["targetVolume"] = tname
+        new.append(e)
+    out["metadata"]["annotations"][VCT] = json.dumps(new, separators=(",", ":"))
+    return out
+
+
+def cancel_storage_migration(vm):
+    entries = claim_templates(vm)
+    back = {}
+    for e in entries:
+        if e.get("targetVolume"):
+            back[e["targetVolume"]] = (e.get("metadata") or {}).get("name")
+            e.pop("targetVolume")
+    if not back:
+        raise ValueError("no storage migration in progress on this VM")
+    out = copy.deepcopy(vm)
+    ann = out["metadata"]["annotations"]
+    ann[VCT] = json.dumps(entries, separators=(",", ":"))
+    ann.pop("harvesterhci.io/waitingStorageMigration", None)
+    for v in _tspec(out).get("volumes") or []:
+        pvc = v.get("persistentVolumeClaim")
+        if pvc and pvc.get("claimName") in back:
+            pvc["claimName"] = back[pvc["claimName"]]
+    out["spec"].pop("updateVolumesStrategy", None)
+    return out
+
+
+def quota_object(existing, ns, vm_name, size):
+    """La ResourceQuota de Harvester avec le quota d'instantanés de la VM
+    (0 ou vide : le quota est retiré). Rend l'objet complet, ou None s'il n'y
+    a rien à créer."""
+    b = quantity(size) if size else 0
+    if size and b is None:
+        raise ValueError("quota: a size such as 10Gi, or 0 to remove it")
+    obj = copy.deepcopy(existing) if existing else {
+        "apiVersion": "harvesterhci.io/v1beta1", "kind": "ResourceQuota",
+        "metadata": {"name": QUOTA_NAME, "namespace": ns}, "spec": {}}
+    lim = obj.setdefault("spec", {}).setdefault("snapshotLimit", {})
+    per_vm = lim.setdefault("vmTotalSnapshotSizeQuota", {}) or {}
+    if b:
+        per_vm[vm_name] = b
+    else:
+        if not existing:
+            return None
+        per_vm.pop(vm_name, None)
+    lim["vmTotalSnapshotSizeQuota"] = per_vm
+    return obj
+
+
+USER_RE = re.compile(r"^[-._0-9a-zA-Z]+$")
+
+
+def access_credential(vm, kind, users, password=None, keys=None, rnd=random):
+    """Un accès « Basic Auth » (mot de passe d'un compte) ou « SSH Key » (clés
+    ajoutées aux comptes), propagé par l'agent invité, comme dans Harvester.
+    Rend (Secret, VM modifiée)."""
+    meta = vm.get("metadata") or {}
+    users = [u.strip() for u in users or [] if u and u.strip()]
+    if not users:
+        raise ValueError("at least one user name")
+    bad = [u for u in users if not USER_RE.match(u)]
+    if bad:
+        raise ValueError(f"user names: letters, digits, dot, dash, underscore ({', '.join(bad)})")
+    name = f"{meta.get('name')}-{suffix(rnd=rnd)}"[:63]
+    secret = {"apiVersion": "v1", "kind": "Secret", "type": "Opaque",
+              "metadata": {"name": name, "namespace": meta.get("namespace"),
+                           "labels": {"harvesterhci.io/cloud-init-template": "harvester"},
+                           "ownerReferences": [{"apiVersion": "kubevirt.io/v1", "kind": "VirtualMachine",
+                                                "name": meta.get("name"), "uid": meta.get("uid")}]}}
+    out = copy.deepcopy(vm)
+    ts = _tspec(out)
+    tmeta = out["spec"]["template"].setdefault("metadata", {})
+    tann = tmeta.setdefault("annotations", {})
+    try:
+        known_users = json.loads(tann.get("harvesterhci.io/dynamic-ssh-key-users") or "[]")
+    except ValueError:
+        known_users = []
+    if kind == "basic":
+        if len(users) != 1:
+            raise ValueError("one user name for a password")
+        if not password or len(password) < 6:
+            raise ValueError("password: 6 characters at least")
+        secret["stringData"] = {users[0]: password}
+        ts.setdefault("accessCredentials", []).append(
+            {"userPassword": {"source": {"secret": {"secretName": name}}, "propagationMethod": {"qemuGuestAgent": {}}}})
+    elif kind == "ssh":
+        keys = [k for k in keys or [] if k.get("public_key")]
+        if not keys:
+            raise ValueError("at least one SSH key")
+        secret["stringData"] = {f"{k['namespace']}-{k['name']}": k["public_key"] for k in keys}
+        ts.setdefault("accessCredentials", []).append(
+            {"sshPublicKey": {"source": {"secret": {"secretName": name}},
+                              "propagationMethod": {"qemuGuestAgent": {"users": users}}}})
+        try:
+            names = json.loads(tann.get("harvesterhci.io/dynamic-ssh-key-names") or "{}")
+        except ValueError:
+            names = {}
+        names[name] = [f"{k['namespace']}/{k['name']}" for k in keys]
+        tann["harvesterhci.io/dynamic-ssh-key-names"] = json.dumps(names, separators=(",", ":"))
+    else:
+        raise ValueError("kind: basic or ssh")
+    tann["harvesterhci.io/dynamic-ssh-key-users"] = json.dumps(
+        known_users + [u for u in users if u not in known_users], separators=(",", ":"))
+    return secret, out

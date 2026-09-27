@@ -146,7 +146,7 @@ const Backups = (() => {
     });
   }
 
-  async function newSchedule(w) {
+  async function newSchedule(w, pick) {
     const vms = await vmOptions(w, w.namespace);
     const opts = vms.map(v => `<option value="${esc(v.ns)}/${esc(v.name)}">${esc(v.ns)}/${esc(v.name)}</option>`).join('');
     const days = [0, 1, 2, 3, 4, 5, 6].map(d => `<option value="${d}">${esc(new Date(2026, 8, 27 + d).toLocaleDateString(undefined, { weekday: 'long' }))}</option>`).join('');
@@ -195,6 +195,8 @@ const Backups = (() => {
       if (!n.dataset.touched) n.value = `${e.target.value.split('/')[1]}-${form.querySelector('[name="type"]').value}`.slice(0, 63);
     });
     form.querySelector('[name="name"]').addEventListener('input', (e) => { e.target.dataset.touched = '1'; });
+    // v1.61.0 : « Create Schedule » depuis le menu d'une VM
+    if (pick && [...form.querySelector('[name="vm"]').options].some(o => o.value === pick)) form.querySelector('[name="vm"]').value = pick;
     form.querySelector('[name="vm"]').dispatchEvent(new Event('change'));
     sync();
   }
@@ -364,6 +366,15 @@ const Backups = (() => {
   if (window.FloatingPanels && FloatingPanels.registerType) {
     FloatingPanels.registerType('backups', (a) => open(a.cluster, a.namespace, a.tab));
   }
-  return { open };
+  /** v1.61.0 : la fenêtre, onglet des planifications, formulaire ouvert sur une VM. */
+  async function scheduleFor(cluster, namespace, vm) {
+    open(cluster, namespace, 'schedules');
+    const w = WINS.get(`backups-${cluster}`);
+    if (!w) return;
+    if (w.tab !== 'schedules') showTab(w, 'schedules');
+    await newSchedule(w, `${namespace}/${vm}`);
+  }
+
+  return { open, scheduleFor };
 })();
 window.Backups = Backups;

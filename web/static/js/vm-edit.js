@@ -1096,7 +1096,7 @@ const VMEdit = (() => {
 
     switch (id) {
       case 'general': return renderGeneral(vm, spec, annot, cluster);
-      case 'compute': return renderCompute(domain);
+      case 'compute': return renderCompute(domain, vm);
       case 'firmware': return renderFirmware(domain, cluster);
       case 'placement': return renderPlacement(vm, template, cluster);
       case 'lifecycle': return renderLifecycle(template);
@@ -1467,8 +1467,18 @@ const VMEdit = (() => {
       .map(k => ({ key: k.slice(TAG_PREFIX.length), value: labels[k] }));
   }
 
+  // v1.61.0 : les champs du formulaire de Harvester 1.9 (clés relevées dans
+  // harvester-ui-extension v1.9.0)
+  const OS_TYPES = ['windows', 'linux', 'SLEs', 'debian', 'fedora', 'gentoo', 'oracle', 'redhat', 'openSUSE', 'ubuntu', 'otherLinux'];
+  const MAINTAIN = ['Migrate', 'ShutdownAndRestartAfterEnable', 'ShutdownAndRestartAfterDisable', 'Shutdown'];
+
   function renderGeneral(vm, spec, annot, cluster) {
-    const description = annot['harvesterhci.io/description'] || annot['description'] || '';
+    // Harvester lit la description dans field.cattle.io/description ; la
+    // console l'écrivait dans harvesterhci.io/description (relu encore)
+    const description = annot['field.cattle.io/description'] || annot['harvesterhci.io/description'] || annot['description'] || '';
+    const vlabels = vm.metadata.labels || {};
+    const os = vlabels['harvesterhci.io/os'] || '';
+    const maintain = vlabels['harvesterhci.io/maintain-mode-strategy'] || 'Migrate';
     const hostname = ((spec.template || {}).spec || {}).hostname || '';
     const tagItems = vmTagsToForm(vm);
     return `
@@ -1482,8 +1492,28 @@ const VMEdit = (() => {
         <input type="text" value="${esc(vm.metadata.namespace)}" readonly>
       </div>
       <div class="form-row">
+        <label>${esc(tr('vm.edit.fDisplayName', 'Display name'))}</label>
+        <input type="text" data-field="annot.displayName" value="${esc(annot['harvesterhci.io/vmDisplayName'] || '')}"
+               placeholder="${esc(vm.metadata.name)}" class="tip" data-tip="${esc(tr('vm.edit.tDisplayName', 'The name Harvester shows in its lists instead of the VM name'))}">
+      </div>
+      <div class="form-row">
         <label>${esc(tr('vm.edit.fDescription', 'Description'))}</label>
         <textarea data-field="annot.description" rows="2">${esc(description)}</textarea>
+      </div>
+      <div class="grid-2">
+        <div class="form-row">
+          <label>${esc(tr('vm.edit.fOsType', 'Operating system'))}</label>
+          <select data-field="label.os" class="tip" data-tip="${esc(tr('vm.edit.tOsType', 'The guest OS, as in Harvester (label harvesterhci.io/os)'))}">
+            <option value="">${esc(tr('vm.edit.osUnset', '(not set)'))}</option>
+            ${OS_TYPES.map(v => `<option value="${v}" ${os === v ? 'selected' : ''}>${v}</option>`).join('')}
+          </select>
+        </div>
+        <div class="form-row">
+          <label>${esc(tr('vm.edit.fMaintain', 'Maintenance strategy'))}</label>
+          <select data-field="label.maintain" class="tip" data-tip="${esc(tr('vm.edit.tMaintain', 'What happens to the VM when its node enters maintenance: migrate it, or shut it down (and restart it after)'))}">
+            ${MAINTAIN.map(v => `<option value="${v}" ${maintain === v ? 'selected' : ''}>${v}</option>`).join('')}
+          </select>
+        </div>
       </div>
       <div class="form-row">
         <label>${esc(tr('vm.edit.fRunStrategy', 'Run strategy'))}</label>
@@ -1506,7 +1536,7 @@ const VMEdit = (() => {
       ${applyBar('general')}`;
   }
 
-  function renderCompute(domain) {
+  function renderCompute(domain, vmRef = {}) {
     const cpu = domain.cpu || {};
     const mem = domain.memory || {};
     const res = (domain.resources || {}).requests || {};
@@ -1531,6 +1561,14 @@ const VMEdit = (() => {
           <input type="text" data-field="memory.guest" value="${esc(mem.guest || '')}" placeholder="4Gi">
         </div>
       </div>
+      <div class="form-row">
+        <label>${esc(tr('vm.edit.fReserved', 'Reserved memory'))}</label>
+        <input type="text" data-field="annot.reservedMemory" value="${esc(((vmRef.metadata || {}).annotations || {})['harvesterhci.io/reservedMemory'] || '')}"
+               placeholder="100Mi" class="tip" data-tip="${esc(tr('vm.edit.tReserved', 'Memory kept for KubeVirt out of the VM\'s limit (harvesterhci.io/reservedMemory); empty: Harvester keeps 100Mi'))}">
+      </div>
+      <label class="bk-check tip" data-tip="${esc(tr('vm.edit.tHotplugOn', 'As in Harvester: one core per socket, the maximums below become the limits, and \'Edit CPU and memory\' changes the VM while it runs'))}">
+        <input type="checkbox" data-field="cpu.hotplugOn" ${(((vmRef.metadata || {}).annotations || {})['harvesterhci.io/enableCPUAndMemoryHotplug'] === 'true') ? 'checked' : ''}>
+        <span>${esc(tr('vm.edit.fHotplugOn', 'Enable CPU and memory hotplug'))}</span></label>
       <h3>${esc(tr('vm.edit.hotplug', 'Hot-plug ceilings'))}</h3>
       <p class="form-hint">${esc(tr('vm.edit.hotplugHint', 'Set these ABOVE the current values to allow adding CPU or memory without a reboot later. They cannot be lowered while the VM runs.'))}</p>
       <div class="grid-2">
@@ -2150,9 +2188,19 @@ const VMEdit = (() => {
             if (!kept.has(prev.key)) labels[TAG_PREFIX + prev.key] = null;
           });
         }
+        const vmLabels = {
+          'harvesterhci.io/os': val('label.os') || null,
+          // comme Harvester : écrit seulement quand ce n'est pas Migrate
+          'harvesterhci.io/maintain-mode-strategy': (val('label.maintain') || 'Migrate') === 'Migrate' ? null : val('label.maintain'),
+        };
         return {
           metadata: {
-            annotations: { 'harvesterhci.io/description': val('annot.description') || '' },
+            annotations: {
+              'field.cattle.io/description': val('annot.description') || null,
+              'harvesterhci.io/description': null,
+              'harvesterhci.io/vmDisplayName': (val('annot.displayName') || '').trim() || null,
+            },
+            labels: vmLabels,
           },
           spec: {
             runStrategy: val('spec.runStrategy'),
@@ -2188,9 +2236,32 @@ const VMEdit = (() => {
         const requests = { cpu: pick('res.requests.cpu'), memory: pick('res.requests.memory') };
         if (limits.cpu || limits.memory) resources.limits = limits;
         if (requests.cpu || requests.memory) resources.requests = requests;
+        // v1.61.0 : « Enable CPU and memory hotplug » de Harvester : un cœur
+        // et un thread par socket, maximums = sockets et mémoire x4 (réglage
+        // max-hotplug-ratio par défaut) s'ils sont vides, limites = maximums
+        const hot = !!get('[data-field="cpu.hotplugOn"]')?.checked;
+        const annotations = {
+          'harvesterhci.io/enableCPUAndMemoryHotplug': hot ? 'true' : null,
+          'harvesterhci.io/reservedMemory': (val('annot.reservedMemory') || '').trim() || null,
+        };
+        if (hot) {
+          // vu sur harvlab : KubeVirt refuse le branchement à chaud de la
+          // mémoire sous 1 Gio (« Memory hotplug is only available for VMs
+          // with at least 1Gi of guest memory »)
+          const g = /^([0-9]+)(Mi|Gi)$/.exec(String(memory.guest || ''));
+          if (g && (g[2] === 'Mi' ? Number(g[1]) < 1024 : Number(g[1]) < 1)) {
+            throw new Error(tr('vm.edit.errHotplugMem', 'memory hotplug needs at least 1Gi of guest memory'));
+          }
+          cpu.cores = 1;
+          cpu.threads = 1;
+          if (!cpu.maxSockets) cpu.maxSockets = (cpu.sockets || 1) * 4;
+          const m = /^([0-9]+)(Mi|Gi)$/.exec(String(memory.guest || ''));
+          if (!memory.maxGuest && m) memory.maxGuest = `${Number(m[1]) * 4}${m[2]}`;
+          resources.limits = { ...(resources.limits || {}), cpu: String(cpu.maxSockets), memory: memory.maxGuest || (resources.limits || {}).memory };
+        }
         const domain = { cpu, memory };
         if (Object.keys(resources).length) domain.resources = resources;
-        return { spec: { template: { spec: { domain } } } };
+        return { metadata: { annotations }, spec: { template: { spec: { domain } } } };
       }
       case 'firmware': {
         const mode = val('fw.mode') || 'bios';

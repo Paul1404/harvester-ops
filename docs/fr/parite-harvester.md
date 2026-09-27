@@ -1,8 +1,8 @@
 # Parité avec l'interface de Harvester
 
-État au 2026-09-27, console **v1.60.0**, comparée à l'interface de **Harvester v1.9** (menus relevés dans le code de harvester-ui-extension v1.9.0 et la documentation v1.9).
+État au 2026-09-27, console **v1.61.0**, comparée à l'interface de **Harvester v1.9** (menus relevés dans le code de harvester-ui-extension v1.9.0 et la documentation v1.9).
 
-Sur 135 fonctions de l'interface de Harvester : **56 faites**, **18 partielles**, **61 manquantes** ; 2 hors périmètre. Une fonction manquante porte la version où elle est prévue.
+Sur 135 fonctions de l'interface de Harvester : **68 faites**, **18 partielles**, **49 manquantes** ; 2 hors périmètre. Une fonction manquante porte la version où elle est prévue.
 
 Statuts : Fait, Partiel (ce qui manque est dit), Manquant (version prévue), Console seulement (ce que Harvester n'a pas), Hors périmètre.
 
@@ -44,7 +44,7 @@ Menu Harvester : *Virtual Machines*
 | Fonction | Statut | Version | Précision |
 |---|---|---|---|
 | Liste par namespace, état, stratégie | Fait | 1.2 |  |
-| Colonnes CPU, mémoire, IP, nœud ; filtre par labels | Manquant | prévue 1.61 |  |
+| Colonnes CPU, mémoire, IP, nœud ; filtre par labels | Fait | 1.61 |  |
 | Démarrer / arrêter | Fait | 1.2 |  |
 | Redémarrer | Fait | 1.60 | dans le délai de grâce (menu) ou brutal (console) |
 | Redémarrage doux (agent invité) | Fait | 1.60 |  |
@@ -52,25 +52,25 @@ Menu Harvester : *Virtual Machines*
 | Arrêt forcé | Fait | 1.60 |  |
 | Migrer | Fait | 1.60 | vers un nœud choisi ou n'importe lequel |
 | Abandonner une migration | Fait | 1.60 |  |
-| Migration du stockage (volume vers un autre) | Manquant | prévue 1.61 |  |
+| Migration du stockage (volume vers un autre) | Fait | 1.61 | refusée après la bascule de KubeVirt (reviendrait à l'ancienne copie) |
 | Prendre une sauvegarde | Fait | 1.58 |  |
 | Prendre un instantané | Fait | 1.2 |  |
 | Restaurer (nouvelle VM ou remplacement, MAC gardée) | Fait | 1.11 |  |
-| Créer une planification depuis la VM | Manquant | prévue 1.61 |  |
-| Quota d'instantanés de la VM | Manquant | prévue 1.61 |  |
-| Modifier CPU et mémoire à chaud | Manquant | prévue 1.61 |  |
+| Créer une planification depuis la VM | Fait | 1.61 |  |
+| Quota d'instantanés de la VM | Fait | 1.61 |  |
+| Modifier CPU et mémoire à chaud | Fait | 1.61 | la mémoire exige virtio-mem dans l'invité, et 1 Gio au moins |
 | Ajouter un volume à chaud / le détacher | Fait | 1.60 |  |
-| Brancher / débrancher une carte réseau à chaud | Manquant | prévue 1.61 |  |
+| Brancher / débrancher une carte réseau à chaud | Fait | 1.61 |  |
 | Éjecter un CD-ROM | Fait | 1.60 | à froid, avec la suppression de son volume, comme l'action historique de Harvester |
-| Insérer une image dans un CD-ROM | Manquant | prévue 1.61 |  |
+| Insérer une image dans un CD-ROM | Fait | 1.61 | lecteur SATA vide ; éjection à chaud aussi |
 | Générer un template | Fait | 1.60 | depuis une VM, avec ou sans les données |
 | Cloner (avec ou sans les données) | Fait | 1.60 |  |
 | Supprimer, en choisissant les volumes | Fait | 1.60 | le bouton de la vue Cluster échouait jusqu'à 1.59 (route absente) |
 | Modifier / télécharger le YAML | Fait | 1.60 |  |
 | Modifier la configuration | Fait | 1.8 | essai à blanc côté serveur avant d'appliquer |
 | Console VNC | Fait | 1.7 | partagée entre plusieurs personnes |
-| Console série | Manquant | prévue 1.61 |  |
-| Journaux de la VM | Manquant | prévue 1.61 |  |
+| Console série | Fait | 1.61 |  |
+| Journaux de la VM | Fait | 1.61 | pod virt-launcher, opérateurs |
 | Actions groupées | Fait | 1.60 | démarrer, arrêter, redémarrer, arrêt forcé, migrer |
 
 ## Machines virtuelles : création et réglages
@@ -82,24 +82,24 @@ Menu Harvester : *Create / Edit VM*
 | Création, une ou plusieurs instances | Fait | 1.28 | jusqu'à 50, essai à blanc |
 | Depuis un template et sa version | Fait | 1.29 |  |
 | CPU, mémoire, modèle de CPU, épinglage, NUMA | Fait | 1.12 |  |
-| Plafonds du branchement à chaud CPU / mémoire | Manquant | prévue 1.61 |  |
+| Plafonds du branchement à chaud CPU / mémoire | Fait | 1.61 | case de Harvester : un cœur par socket, limites = maximums |
 | Volumes : image, vide, existant, conteneur ; ordre de boot | Fait | 1.8 |  |
 | Cartes réseau (modèle, type, MAC) | Fait | 1.8 |  |
-| IP statique d'une carte (v1.9) | Manquant | prévue 1.61 |  |
+| IP statique d'une carte (v1.9) | Manquant | prévue 1.62 | Harvester l'écrit en annotation et la montre ; rien ne l'applique côté serveur : à vérifier |
 | Placement sur les nœuds (sélecteur, règles) | Fait | 1.13 |  |
 | Affinité / anti-affinité entre VMs | Fait | 1.13 |  |
 | Périphériques PCI | Fait | 1.15 |  |
 | Périphériques USB | Manquant | prévue 1.65 |  |
-| Access credentials (mot de passe, clés par l'agent) | Manquant | prévue 1.61 |  |
-| Volume de système de fichiers (virtiofs, v1.9) | Manquant | prévue 1.61 |  |
-| Labels, labels d'instance, annotations | Partiel | 1.12 | étiquettes seulement |
+| Access credentials (mot de passe, clés par l'agent) | Fait | 1.61 | appliqués au prochain redémarrage |
+| Volume de système de fichiers (virtiofs, v1.9) | Manquant | prévue 1.62 |  |
+| Labels, labels d'instance, annotations | Partiel | 1.12 | étiquettes ; labels d'instance et annotations en 1.62 (et par le YAML dès 1.60) |
 | Stratégie d'exécution | Fait | 1.2 |  |
-| Type d'OS, mémoire réservée, stratégie de maintenance | Manquant | prévue 1.61 |  |
+| Type d'OS, mémoire réservée, stratégie de maintenance | Fait | 1.61 | et nom affiché, description à la clé de Harvester |
 | Nom d'hôte, délai d'arrêt | Fait | 1.12 |  |
 | Cloud-init (user-data, network-data) | Fait | 1.60 | perdu à la création jusqu'à 1.59 ; en Secret, créé ou converti à l'enregistrement |
 | Clés SSH à la création | Fait | 1.60 |  |
 | Installer l'agent invité | Fait | 1.60 |  |
-| Windows : unattend et sysprep | Manquant | prévue 1.61 |  |
+| Windows : unattend et sysprep | Manquant | prévue 1.62 |  |
 | TPM, EFI, Secure Boot, tablette USB | Fait | 1.12 |  |
 
 ## Volumes

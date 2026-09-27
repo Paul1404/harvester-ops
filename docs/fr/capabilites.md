@@ -232,6 +232,45 @@ La liste propose aussi **Redémarrer**, **Arrêt forcé** et **Migrer** sur les
 VMs cochées. Chaque geste est une action suivie (dock, Activité), exécutée
 par `harvester-resources vm <action>`, utilisable seul.
 
+### Modifier une VM en marche, comme dans Harvester (1.61.0)
+
+Le menu d'une VM porte aussi les gestes à chaud de Harvester. Chacun lit
+d'abord l'état de la VM et se grise, avec la raison, quand il ne s'applique
+pas.
+
+- **Modifier CPU et mémoire** pendant que la VM tourne, jusqu'aux maximums
+  posés à la création (« Activer le branchement à chaud CPU et mémoire »
+  dans les réglages de calcul : un cœur par socket, maximums quatre fois les
+  valeurs de départ s'ils ne sont pas donnés, limites égales aux maximums,
+  1 Gio de mémoire au moins). KubeVirt applique le changement en déplaçant
+  la VM à chaud ; la console attend que l'invité ait ses nouveaux CPU et ait
+  pris la mémoire (son noyau doit connaître virtio-mem, comme les
+  distributions récentes).
+- **Insérer une image** dans un lecteur CD-ROM SATA vide, et l'**éjecter**,
+  pendant que la VM tourne ; le lecteur reste, le volume de l'image est
+  supprimé.
+- **Ajouter une carte réseau** sur un réseau de VMs en pont, et la
+  **débrancher** ; le changement est appliqué par une migration à chaud, ou
+  au prochain redémarrage quand il n'y a pas d'autre nœud.
+- **Migrer un volume** de la VM en marche vers un volume existant et inutilisé
+  du namespace (autre classe, plus grand) ; **annuler** pendant la copie. Une
+  fois la bascule de KubeVirt faite, l'annulation est refusée : revenir en
+  arrière redémarrerait la VM sur l'ancienne copie.
+- **Créer une planification** pour cette VM (la fenêtre Backups s'ouvre
+  dessus) et poser son **quota d'instantanés**.
+- **Ajouter un accès** : un mot de passe pour un compte, ou des clés SSH pour
+  des comptes, posés dans l'invité par son agent au prochain redémarrage. Le
+  mot de passe passe par un fichier privé, jamais sur une ligne de commande
+  ni dans un journal.
+- **Console série** dans un terminal, et **journaux** du pod virt-launcher de
+  la VM (opérateurs).
+
+La liste des VMs montre les CPU, la mémoire, les adresses IP et le nœud, se
+trie sur chacun, et un filtre garde les VMs qui correspondent à un nom, une
+IP, un nœud ou un label (`clé=valeur`). La fenêtre de réglages écrit les
+champs de Harvester : nom affiché, description (la clé que lit Harvester),
+système d'exploitation, stratégie de maintenance, mémoire réservée.
+
 ### Modifier et télécharger le YAML (1.60.0)
 
 Tout objet que Harvester permet de modifier en YAML le peut, depuis sa

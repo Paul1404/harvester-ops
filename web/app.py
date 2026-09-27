@@ -5685,7 +5685,15 @@ def api_vms_list(cluster):
             # If the VMI is Running but paused, surface a "Paused" state
             if phase == "Running" and paused:
                 phase = "Paused"
-            vmi_state[(ns, name)] = {"phase": phase, "agent_connected": agent}
+            st = v.get("status", {}) or {}
+            # v1.61.0 : colonnes nœud et IP, comme la liste de Harvester
+            ips = []
+            for itf in st.get("interfaces") or []:
+                for ip in [itf.get("ipAddress")] + list(itf.get("ipAddresses") or []):
+                    if ip and ip not in ips and ":" not in ip:
+                        ips.append(ip)
+            vmi_state[(ns, name)] = {"phase": phase, "agent_connected": agent,
+                                     "node": st.get("nodeName"), "ips": ips}
     except Exception:
         pass
 
@@ -5718,6 +5726,10 @@ def api_vms_list(cluster):
         ns = item["metadata"]["namespace"]
         name = item["metadata"]["name"]
         state = vmi_state.get((ns, name), {"phase": "Stopped", "agent_connected": "False"})
+        dom = ((item["spec"].get("template") or {}).get("spec") or {}).get("domain") or {}
+        cpu = dom.get("cpu") or {}
+        vcpu = (cpu.get("cores") or 1) * (cpu.get("sockets") or 1) * (cpu.get("threads") or 1)
+        mem = (dom.get("memory") or {}).get("guest") or ((dom.get("resources") or {}).get("limits") or {}).get("memory")
         vms.append({
             "namespace": ns,
             "name": name,
@@ -5729,6 +5741,11 @@ def api_vms_list(cluster):
             "runStrategy": rs,
             "phase": state["phase"],
             "agent_connected": state["agent_connected"],
+            "cpu": vcpu,
+            "memory": mem,
+            "node": state.get("node"),
+            "ips": state.get("ips") or [],
+            "labels": item["metadata"].get("labels") or {},
         })
 
     # Sort: (group_priority, group, priority, name) so the UI sees the
@@ -11184,7 +11201,10 @@ def _yaml_write(cluster, kind, ns, name, creating):
 import hv_vm as _hv  # noqa: E402
 
 _VM_DO = ("pause", "unpause", "softreboot", "restart", "force-stop", "clone", "eject",
-          "add-volume", "remove-volume", "migrate", "abort-migration", "template", "cloudinit")
+          "add-volume", "remove-volume", "migrate", "abort-migration", "template", "cloudinit",
+          # v1.61.0
+          "insert-cdrom", "eject-image", "add-nic", "remove-nic", "cpumem", "storage-migrate",
+          "cancel-storage-migration", "quota", "access")
 
 
 @app.route("/api/vm/<cluster>/<namespace>/<name>/state")
@@ -11223,7 +11243,30 @@ def api_vm_menu_state(cluster, namespace, name):
         "volumes": [{k: x[k] for k in ("volume", "claim", "kind", "source", "hotpluggable")}
                     for x in _hv.vm_volumes(vm)],
         "cloudinit_secrets": _hv.cloudinit_secrets(vm),
+        # v1.61.0 : ce que proposent les gestes à chaud
+        "cpumem": _hv.cpumem_info(vm),
+        "sata_cdroms": [{"name": n, "empty": e} for n, e in _hv.sata_cdroms(vm)],
+        "interfaces": _vm_menu_interfaces(vm),
+        "storage_migration": next((e.get("targetVolume") for e in _hv.claim_templates(vm) if e.get("targetVolume")), None),
+        "restart_required": any(c.get("type") == "RestartRequired" and str(c.get("status")) == "True"
+                                for c in (vm.get("status") or {}).get("conditions") or []),
+        "quota": ((((_kubectl_json(kc, "get", "resourcequotas.harvesterhci.io", _hv.QUOTA_NAME, "-n", namespace,
+                                   cluster=cluster) or {}).get("spec") or {}).get("snapshotLimit") or {})
+                  .get("vmTotalSnapshotSizeQuota") or {}).get(name),
     })
+
+
+def _vm_menu_interfaces(vm):
+    nets = {n.get("name"): n for n in ((vm.get("spec") or {}).get("template") or {}).get("spec", {}).get("networks") or []}
+    out = []
+    ifaces = (((vm.get("spec") or {}).get("template") or {}).get("spec", {}).get("domain") or {}).get("devices", {}).get("interfaces") or []
+    for i in ifaces:
+        n = nets.get(i.get("name")) or {}
+        out.append({"name": i.get("name"), "network": (n.get("multus") or {}).get("networkName") or ("pod" if "pod" in n else None),
+                    "bridge": "bridge" in i, "model": i.get("model"), "state": i.get("state"), "mac": i.get("macAddress"),
+                    "unpluggable": len(ifaces) > 1 and "bridge" in i and i.get("model") in (None, "", "virtio")
+                    and i.get("state") != "absent" and all(x.get("macAddress") for x in ifaces)})
+    return out
 
 
 def _vm_do_args(action, body):
@@ -11256,6 +11299,41 @@ def _vm_do_args(action, body):
             if not _K8S_NAME_RE.match(str(b["node"])):
                 raise ValueError("node: a node name")
             out += ["--node", str(b["node"])]
+    elif action in ("insert-cdrom", "eject-image"):
+        out += ["--volume", _hv.check_name(str(b.get("volume") or ""), "drive")]
+        if action == "insert-cdrom":
+            img = str(b.get("image") or "")
+            parts = img.split("/")
+            if len(parts) != 2 or not all(_K8S_NAME_RE.match(x) for x in parts):
+                raise ValueError("image: namespace/name")
+            out += ["--image", img]
+    elif action in ("add-nic", "remove-nic"):
+        out += ["--iface", _hv.check_name(str(b.get("iface") or ""), "interface name")]
+        if action == "add-nic":
+            net = str(b.get("network") or "")
+            parts = net.split("/")
+            if len(parts) != 2 or not all(_K8S_NAME_RE.match(x) for x in parts):
+                raise ValueError("network: namespace/name")
+            out += ["--network", net]
+            if b.get("mac"):
+                out += ["--mac", str(b["mac"])[:17]]
+    elif action == "cpumem":
+        if b.get("cpu") not in (None, ""):
+            out += ["--cpu", str(int(b["cpu"]))]
+        if b.get("memory"):
+            if _hv.quantity(b["memory"]) is None:
+                raise ValueError("memory: a size such as 8Gi")
+            out += ["--memory", str(b["memory"])]
+        if len(out) == 0:
+            raise ValueError("give a CPU count, a memory size, or both")
+    elif action == "storage-migrate":
+        out += ["--volume", _hv.check_name(str(b.get("volume") or ""), "source volume"),
+                "--target", _hv.check_name(str(b.get("target") or ""), "target volume")]
+    elif action == "quota":
+        size = str(b.get("size") or "0")
+        if size != "0" and _hv.quantity(size) is None:
+            raise ValueError("quota: a size such as 20Gi, or 0 to remove it")
+        out += ["--size", size]
     elif action == "template":
         out += ["--template-name", _hv.check_name(str(b.get("template_name") or ""), "template name")]
         if b.get("description"):
@@ -11279,6 +11357,8 @@ def api_vm_do(cluster, namespace, name, action):
     body = request.get_json(silent=True) or {}
     if action == "cloudinit":
         return _vm_cloudinit_action(cluster, namespace, name, body)
+    if action == "access":
+        return _vm_access_action(cluster, kc, namespace, name, body)
     try:
         extra = _vm_do_args(action, body)
     except ValueError as e:
@@ -11288,6 +11368,86 @@ def api_vm_do(cluster, namespace, name, action):
     run, err = _cli_action(cluster, f"vm:{action}:{namespace}/{name}", cmd, "harvester-resources",
                            after=lambda: _invalidate_cluster_caches(cluster))
     return _res_reply(run, err, vm=f"{namespace}/{name}", action=action)
+
+
+def _vm_access_action(cluster, kc, namespace, name, body):
+    """Un accès (mot de passe ou clés SSH) propagé par l'agent invité. Le mot
+    de passe passe par un fichier 0600 effacé après l'action : jamais sur une
+    ligne de commande, ni dans une réponse, ni dans l'étiquette de l'action."""
+    kind = body.get("kind")
+    if kind not in ("basic", "ssh"):
+        return jsonify({"error": "kind: basic or ssh"}), 400
+    users = body.get("users") or []
+    if not isinstance(users, list) or not users or not all(isinstance(u, str) and _hv.USER_RE.match(u) for u in users):
+        return jsonify({"error": "users: letters, digits, dot, dash, underscore"}), 400
+    cmd = [sys.executable, str(BIN_DIR / RESOURCES_SCRIPT), "vm", "access", "--kubeconfig", kc,
+           "--namespace", namespace, "--name", name, "--kind", kind, "--users", ",".join(users)]
+    path = None
+    if kind == "basic":
+        pw = body.get("password")
+        if not isinstance(pw, str) or len(pw) < 6 or len(users) != 1:
+            return jsonify({"error": "one user and a password of 6 characters at least"}), 400
+        wd = _capi_work_dir()
+        fd, path = tempfile.mkstemp(prefix="pw-", dir=str(wd) if wd else None)
+        os.chmod(path, 0o600)
+        with os.fdopen(fd, "w") as f:
+            f.write(pw)
+        cmd += ["--password-file", path]
+    else:
+        keys = body.get("keys") or []
+        if not isinstance(keys, list) or not keys or not all(
+                isinstance(k, str) and all(_K8S_NAME_RE.match(x) for x in k.split("/")) for k in keys):
+            return jsonify({"error": "keys: key pairs as namespace/name"}), 400
+        cmd += ["--keys", ",".join(keys)]
+
+    def after():
+        if path:
+            Path(path).unlink(missing_ok=True)
+    run, err = _cli_action(cluster, f"vm:access:{namespace}/{name}", cmd, "harvester-resources", after=after)
+    if err:
+        after()
+    return _res_reply(run, err, vm=f"{namespace}/{name}", action="access", kind=kind)
+
+
+@app.route("/api/vm/<cluster>/<namespace>/<name>/logs")
+@requires_auth
+def api_vm_logs(cluster, namespace, name):
+    """« View Logs » de Harvester : les journaux du pod virt-launcher de la
+    VM (conteneur `compute` par défaut ; `guest-console-log` porte la console
+    série quand KubeVirt l'enregistre). Réservé aux opérateurs : une console
+    peut afficher des secrets."""
+    if ROLE_RANK.get(current_role(), 0) < ROLE_RANK["operator"]:
+        return jsonify({"error": "forbidden", "required": "operator",
+                        "hint": "a VM's logs can show what its console printed"}), 403
+    kc = _kubectl_for_cluster(cluster)
+    if not kc:
+        return jsonify({"error": f"unknown cluster: {cluster}"}), 404
+    pods = (_kubectl_json(kc, "get", "pods", "-n", namespace, "-l",
+                          f"kubevirt.io=virt-launcher,vm.kubevirt.io/name={name}",
+                          cluster=cluster) or {}).get("items") or []
+    if not pods:
+        return jsonify({"error": f"{namespace}/{name} is not running: no virt-launcher pod"}), 404
+    # pendant une migration, deux pods : celui qui tourne d'abord, le plus récent ensuite
+    pods.sort(key=lambda p: (p.get("metadata") or {}).get("creationTimestamp") or "", reverse=True)
+    pods.sort(key=lambda p: (p.get("status") or {}).get("phase") != "Running")
+    pod = pods[0]
+    containers = [c.get("name") for c in (pod.get("spec") or {}).get("containers") or []]
+    default = ((pod.get("metadata") or {}).get("annotations") or {}).get(
+        "kubectl.kubernetes.io/default-container") or (containers[0] if containers else "compute")
+    container = request.args.get("container") or default
+    if container not in containers:
+        return jsonify({"error": f"no container {container} in the pod", "containers": containers}), 400
+    try:
+        tail = max(10, min(5000, int(request.args.get("tail") or 500)))
+    except ValueError:
+        tail = 500
+    r = _kubectl_run(["kubectl", "--kubeconfig", kc, "logs", "-n", namespace, pod["metadata"]["name"],
+                      "-c", container, f"--tail={tail}", "--timestamps"],
+                     capture_output=True, text=True, timeout=30)
+    if r.returncode != 0:
+        return jsonify({"error": (r.stderr or "kubectl logs failed").strip()[:500]}), 502
+    return jsonify({"pod": pod["metadata"]["name"], "node": (pod.get("spec") or {}).get("nodeName"),
+                    "containers": containers, "container": container, "tail": tail, "logs": r.stdout})
 
 
 @app.route("/api/vm/<cluster>/<namespace>/<name>", methods=["DELETE"])
@@ -13492,7 +13652,7 @@ def _vnc_upstream_headers(bearer, identity):
     return headers
 
 
-def _vnc_issue_ticket(cluster, namespace, name, user="", identity=None, uid=None):
+def _vnc_issue_ticket(cluster, namespace, name, user="", identity=None, uid=None, kind="vnc"):
     token = _secrets.token_urlsafe(24)
     now = time.time()
     with _vnc_lock:
@@ -13502,16 +13662,17 @@ def _vnc_issue_ticket(cluster, namespace, name, user="", identity=None, uid=None
         _vnc_tickets[token] = {"cluster": cluster, "namespace": namespace,
                                "name": name, "expires": now + _VNC_TICKET_TTL,
                                "user": user or "", "identity": identity,
-                               "uid": uid}
+                               "uid": uid, "kind": kind}
     return token
 
 
-def _vnc_take_ticket(token, cluster, namespace, name):
-    """Single-use pop; the ticket must match the exact VM it was issued for.
+def _vnc_take_ticket(token, cluster, namespace, name, kind="vnc"):
+    """Single-use pop; the ticket must match the exact VM it was issued for,
+    and the console it was issued for (v1.61.0 : VNC ou série).
     Rend l'entrée (qui l'a demandé, sous quelle identité), ou None."""
     with _vnc_lock:
         entry = _vnc_tickets.pop(token or "", None)
-    if not entry:
+    if not entry or entry.get("kind", "vnc") != kind:
         return None
     if entry["expires"] < time.time():
         return None
@@ -13680,6 +13841,98 @@ def ws_vnc(ws, cluster, namespace, name):
         except Exception: pass
     finally:
         metric_vnc_sessions.set(_vnc_viewers())
+
+
+# =============================================================================
+# Console série (v1.61.0) : « Open in Serial Console » de Harvester.
+# Navigateur (xterm.js) <-ws-> console <-wss-> KubeVirt, sous-ressource
+# `console` de la VMI (binaire). Même modèle que la VNC : un ticket à usage
+# unique délivré par une route authentifiée, puis un relais. KubeVirt n'y
+# accepte qu'une connexion : une nouvelle ferme la précédente (dit à l'écran).
+# =============================================================================
+@app.route("/api/vm/<cluster>/<namespace>/<name>/serial-ticket", methods=["POST"])
+@_rate_limit("30/minute")
+@requires_auth
+def api_vm_serial_ticket(cluster, namespace, name):
+    kc = _kubectl_for_cluster(cluster)
+    if not kc:
+        return jsonify({"error": f"unknown cluster: {cluster}"}), 404
+    r = _kubectl_run(["kubectl", "--kubeconfig", kc, "-n", namespace, "get", "vmi", name,
+                      "-o", "jsonpath={.status.phase} {.metadata.uid}"],
+                     capture_output=True, text=True, timeout=10)
+    parts = (r.stdout or "").split()
+    if r.returncode != 0 or not parts:
+        return jsonify({"error": "the VM has no running instance", "hint": "start the VM first"}), 409
+    if parts[0] not in ("Running", "Scheduled"):
+        return jsonify({"error": f"VMI phase is {parts[0]}, not Running"}), 409
+    identity = current_cluster_identity()
+    if identity or _sso_session() is not None:
+        can = _kubectl_run(["kubectl", "--kubeconfig", kc, "auth", "can-i", "get", "virtualmachineinstances",
+                            "--subresource=console", "-n", namespace], capture_output=True, text=True, timeout=10)
+        if (can.stdout or "").strip() != "yes":
+            return jsonify({"error": "the cluster does not allow your identity to open this console"}), 403
+    token = _vnc_issue_ticket(cluster, namespace, name, user=current_user(), identity=identity,
+                              uid=parts[1] if len(parts) > 1 else None, kind="serial")
+    return jsonify({"ticket": token, "ws_path": f"/ws/serial/{cluster}/{namespace}/{name}",
+                    "expires_in": _VNC_TICKET_TTL})
+
+
+@sock.route("/ws/serial/<cluster>/<namespace>/<name>")
+def ws_serial(ws, cluster, namespace, name):
+    if not re.match(r"^[a-zA-Z0-9][a-zA-Z0-9._-]{0,60}$", cluster):
+        ws.close(message="invalid cluster"); return
+    entry = _vnc_take_ticket(request.args.get("ticket"), cluster, namespace, name, kind="serial")
+    if not entry:
+        ws.close(message="invalid or expired ticket"); return
+    cfg = load_config()
+    kc = next((c["kubeconfig"] for c in cfg.get("clusters", []) if c["name"] == cluster), None)
+    if not kc:
+        ws.close(message="unknown cluster"); return
+    try:
+        server, sslctx, bearer = _kubeconfig_wss(kc)
+        up = _WsClient.connect(
+            _vnc_subresource_url(server, namespace, name)[:-len("/vnc")] + "/console",
+            ssl_context=sslctx, headers=_vnc_upstream_headers(bearer, entry.get("identity")) or None,
+            subprotocols=["plain.kubevirt.io"], ping_interval=20)
+    except Exception as e:              # noqa: BLE001
+        log_vnc.error("serial console %s/%s: upstream unavailable: %s", namespace, name, e)
+        try: ws.close(message="cluster serial console endpoint unreachable")
+        except Exception: pass
+        return
+    log_vnc.info("serial console %s/%s opened by %s", namespace, name, entry.get("user") or "?")
+    stop = threading.Event()
+
+    def pump_down():
+        try:
+            while not stop.is_set():
+                data = up.receive(timeout=1)
+                if data is None:
+                    if not up.connected:
+                        break
+                    continue
+                ws.send(data if isinstance(data, (bytes, bytearray)) else data.encode())
+        except Exception:               # noqa: BLE001 (fin de l'une des deux connexions)
+            pass
+        finally:
+            stop.set()
+    t = threading.Thread(target=pump_down, daemon=True, name=f"serial-{name}")
+    t.start()
+    try:
+        while not stop.is_set():
+            data = ws.receive(timeout=1)
+            if data is None:
+                if not ws.connected:
+                    break
+                continue
+            up.send(data if isinstance(data, (bytes, bytearray)) else data.encode())
+    except Exception:                   # noqa: BLE001
+        pass
+    finally:
+        stop.set()
+        for c in (up, ws):
+            try: c.close()
+            except Exception: pass
+        log_vnc.info("serial console %s/%s closed", namespace, name)
 
 
 # =============================================================================

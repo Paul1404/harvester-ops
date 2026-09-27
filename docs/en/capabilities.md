@@ -215,6 +215,41 @@ The list also offers **Restart**, **Force stop** and **Migrate** on the
 selected VMs. Every action is a tracked action (dock, Activity), run by
 `harvester-resources vm <action>`, which can be used alone.
 
+### Changing a running VM, as in Harvester (1.61.0)
+
+The VM menu also carries Harvester's live actions. Each one reads the VM's
+state first and is greyed out, with the reason, when it cannot apply.
+
+- **Edit CPU and memory** while the VM runs, up to the maximums set at
+  creation ("Enable CPU and memory hotplug" in the compute settings: one
+  core per socket, maximums four times the start values unless given,
+  limits equal to the maximums, 1 GiB of memory at least). KubeVirt applies
+  the change by moving the VM live; the console waits until the guest has
+  the new CPUs and has taken the memory in (its kernel must support
+  virtio-mem, as recent distributions do).
+- **Insert an image** into an empty SATA CD-ROM drive, and **eject** it,
+  while the VM runs; the drive stays, the image's volume is deleted.
+- **Add a network interface** on a bridge VM network, and **unplug** it; the
+  change is applied by a live migration, or at the next restart when there
+  is no other node.
+- **Migrate a volume** of the running VM to an existing, unused volume of the
+  namespace (another class, a larger size); **cancel** while the copy runs.
+  Once KubeVirt has switched to the target, the cancel is refused: going back
+  would restart the VM on the old copy.
+- **Create a schedule** for this VM (the Backups window opens on it) and set
+  its **snapshot quota**.
+- **Add an access**: a password for an account, or SSH keys for accounts,
+  set in the guest by its agent at the next restart. The password goes
+  through a private file, never on a command line or in a log.
+- **Serial console** in a terminal, and **View logs** of the VM's
+  virt-launcher pod (operators).
+
+The VM list shows the CPUs, the memory, the IP addresses and the node, can
+be sorted by each, and a filter keeps the VMs matching a name, an IP, a node
+or a label (`key=value`). The settings window writes Harvester's own fields:
+display name, description (the key Harvester reads), operating system,
+maintenance strategy, reserved memory.
+
 ### Edit YAML, Download YAML (1.60.0)
 
 Every object Harvester lets you edit as YAML can be, from its row: VMs,

@@ -81,6 +81,11 @@ const VMActions = (() => {
     'abort-migration': () => tr('vma.tip.abortMigration'), migrate: () => tr('vma.tip.migrate'),
     clone: () => tr('vma.tip.clone'), template: () => tr('vma.tip.template'), yaml: () => tr('vma.tip.yaml'),
     download: () => tr('vma.tip.download'), delete: () => tr('vma.tip.delete'),
+    logs: () => tr('vma.tip.logs'), serial: () => tr('vma.tip.serial'),
+    cpumem: () => tr('vma.tip.cpumem'), 'insert-cdrom': () => tr('vma.tip.insert'), 'eject-image': () => tr('vma.tip.ejectImage'),
+    'add-nic': () => tr('vma.tip.addNic'), 'remove-nic': () => tr('vma.tip.removeNic'),
+    'storage-migrate': () => tr('vma.tip.storageMigrate'), 'cancel-storage-migration': () => tr('vma.tip.cancelStorage'),
+    schedule: () => tr('vma.tip.schedule'), quota: () => tr('vma.tip.quota'), access: () => tr('vma.tip.access'),
   };
 
   function item(act, label, ico, why, extra = '') {
@@ -94,7 +99,9 @@ const VMActions = (() => {
   function build(st) {
     const on = st.running, paused = st.paused;
     const off = !on ? tr('vma.why.stopped') : '';
+    const cm = st.cpumem || {};
     const power = [
+      ...(cm.enabled ? [item('cpumem', tr('vma.cpumem'), 'compute', off || (st.restart_required ? tr('vma.why.restartRequired') : ''))] : []),
       item('restart', tr('vma.restart'), 'restart', off),
       item('softreboot', tr('vma.softreboot'), 'refresh', off || (!st.agent ? tr('vma.why.noAgent') : '')),
       paused ? item('unpause', tr('vma.unpause'), 'play', '') : item('pause', tr('vma.pause'), 'pause', off),
@@ -103,18 +110,34 @@ const VMActions = (() => {
     const protect = [
       item('backup', tr('vma.backup'), 'bundle', ''),
       item('snapshot', tr('vma.snapshot'), 'snapshot', ''),
+      item('schedule', tr('vma.schedule'), 'timer', ''),
+      item('quota', st.quota ? tr('vma.quotaSet', { size: `${Math.round(st.quota / 2 ** 30)} Gi` }) : tr('vma.quota'), 'storage', ''),
     ].join('');
-    const hot = (st.volumes || []).filter(v => v.hotpluggable);
-    const cds = (st.volumes || []).filter(v => v.kind === 'cdrom');
+    // v1.61.0 : un lecteur SATA se vide et se remplit à chaud (Insert / Eject
+    // Image de Harvester) ; les autres CD-ROM gardent l'éjection à froid
+    const sata = st.sata_cdroms || [];
+    const sataNames = new Set(sata.map(d => d.name));
+    const hot = (st.volumes || []).filter(v => v.hotpluggable && !sataNames.has(v.volume));
+    const cds = (st.volumes || []).filter(v => v.kind === 'cdrom' && !sataNames.has(v.volume));
     const disks = [
       item('add-volume', tr('vma.addVolume'), 'hotplug', off),
       ...hot.map(v => item('remove-volume', tr('vma.removeVolume', { name: v.volume }), 'eject', '', `data-volume="${esc(v.volume)}"`)),
+      ...sata.map(d => (d.empty
+        ? item('insert-cdrom', tr('vma.insert', { name: d.name }), 'cdrom', '', `data-volume="${esc(d.name)}"`)
+        : item('eject-image', tr('vma.ejectImage', { name: d.name }), 'eject', '', `data-volume="${esc(d.name)}"`))),
       ...cds.map(v => item('eject', tr('vma.eject', { name: v.volume }), 'eject', '', `data-volume="${esc(v.volume)}"`)),
+    ].join('');
+    const ifaces = st.interfaces || [];
+    const net = [
+      item('add-nic', tr('vma.addNic'), 'network', ''),
+      ...ifaces.filter(i => i.unpluggable).map(i => item('remove-nic', tr('vma.removeNic', { name: i.name }), 'close', '', `data-volume="${esc(i.name)}"`)),
     ].join('');
     const mig = [
       st.migrating ? item('abort-migration', tr('vma.abortMigration'), 'close', '')
         : item('migrate', tr('vma.migrate'), 'migrate', off || (!st.node ? tr('vma.why.noNode')
           : (!(st.targets || []).length ? tr('vma.why.noTarget') : ''))),
+      st.storage_migration ? item('cancel-storage-migration', tr('vma.cancelStorage', { name: st.storage_migration }), 'close', '')
+        : item('storage-migrate', tr('vma.storageMigrate'), 'volume', off || (!(st.targets || []).length ? tr('vma.why.noTarget') : '')),
     ].join('');
     const copyG = [
       item('clone', tr('vma.clone'), 'clone', ''),
@@ -124,8 +147,14 @@ const VMActions = (() => {
       item('yaml', tr('vma.yaml'), 'code', ''),
       item('download', tr('vma.download'), 'download', ''),
     ].join('');
+    const observe = [
+      item('serial', tr('vma.serial'), 'console', off),
+      item('logs', tr('vma.logs'), 'doc', off),
+      item('access', tr('vma.access'), 'key', ''),
+    ].join('');
     return group(tr('vma.g.power'), power) + group(tr('vma.g.protect'), protect) + group(tr('vma.g.disks'), disks)
-      + group(tr('vma.g.migration'), mig) + group(tr('vma.g.copy'), copyG) + group(tr('vma.g.yaml'), yaml)
+      + group(tr('vma.g.network'), net) + group(tr('vma.g.migration'), mig) + group(tr('vma.g.copy'), copyG)
+      + group(tr('vma.g.observe'), observe) + group(tr('vma.g.yaml'), yaml)
       + `<div class="vma-group">${item('delete', tr('vma.delete'), 'trash', '')}</div>`;
   }
 
@@ -201,6 +230,11 @@ const VMActions = (() => {
     pause: (p) => tr('vma.done.pause', p), unpause: (p) => tr('vma.done.unpause', p),
     'force-stop': (p) => tr('vma.done.forceStop', p), 'abort-migration': (p) => tr('vma.done.abort', p),
     'remove-volume': (p) => tr('vma.done.removeVolume', p), eject: (p) => tr('vma.done.eject', p),
+    cpumem: (p) => tr('vma.done.cpumem', p), 'insert-cdrom': (p) => tr('vma.done.insert', p),
+    'eject-image': (p) => tr('vma.done.ejectImage', p), 'add-nic': (p) => tr('vma.done.addNic', p),
+    'remove-nic': (p) => tr('vma.done.removeNic', p), 'storage-migrate': (p) => tr('vma.done.storage', p),
+    'cancel-storage-migration': (p) => tr('vma.done.cancelStorage', p), quota: (p) => tr('vma.done.quota', p),
+    access: (p) => tr('vma.done.access', p),
     clone: (p) => tr('vma.done.clone', p), template: (p) => tr('vma.done.template', p),
     'add-volume': (p) => tr('vma.done.addVolume', p), migrate: (p) => tr('vma.done.migrate', p),
   };
@@ -231,6 +265,30 @@ const VMActions = (() => {
       if (act === 'download') { if (window.YamlWindow) YamlWindow.download(ctx.cluster, 'vm', ctx.ns, ctx.name); return; }
       if (act === 'snapshot') { if (window.VMSnapshots) VMSnapshots.open(ctx.cluster, ctx.ns, ctx.name); return; }
       if (act === 'backup') { backupDialog(ctx); return; }
+      if (act === 'logs') { logsWindow(ctx); return; }
+      if (act === 'serial') { serialWindow(ctx); return; }
+      if (act === 'eject-image') {
+        if (!confirm(tr('vma.confirm.ejectImage', { name: ref, drive: vol }))) return;
+        await doIt(ctx, act, { volume: vol });
+        return;
+      }
+      if (act === 'remove-nic') {
+        if (!confirm(tr('vma.confirm.removeNic', { name: ref, iface: vol }))) return;
+        await doIt(ctx, act, { iface: vol });
+        return;
+      }
+      if (act === 'cancel-storage-migration') {
+        if (!confirm(tr('vma.confirm.cancelStorage', { name: ref }))) return;
+        await doIt(ctx, act, {});
+        return;
+      }
+      if (act === 'schedule') { if (window.Backups && Backups.scheduleFor) Backups.scheduleFor(ctx.cluster, ctx.ns, ctx.name); return; }
+      if (act === 'cpumem') { cpumemDialog(ctx); return; }
+      if (act === 'insert-cdrom') { insertDialog(ctx, vol); return; }
+      if (act === 'add-nic') { nicDialog(ctx); return; }
+      if (act === 'storage-migrate') { storageDialog(ctx); return; }
+      if (act === 'quota') { quotaDialog(ctx); return; }
+      if (act === 'access') { accessDialog(ctx); return; }
       if (act === 'clone') { cloneDialog(ctx); return; }
       if (act === 'template') { templateDialog(ctx); return; }
       if (act === 'delete') { deleteDialog(ctx); return; }
@@ -384,6 +442,250 @@ const VMActions = (() => {
         const out = await call('POST', `/api/backups/${enc(ctx.cluster)}/${enc(ctx.ns)}`, body);
         follow(out.action_id, msg, tr('vma.done.backup', { name: `${ctx.ns}/${ctx.name}` }), () => re());
       }, { submitIcon: 'bundle', height: 300 });
+  }
+
+  // -- v1.61.0 : les fenêtres des gestes à chaud ------------------------------------
+  const gi = (q) => { const m = /^([0-9.]+)\s*(Mi|Gi|Ti)?$/.exec(String(q || '')); if (!m) return 0;
+    return parseFloat(m[1]) * ({ Mi: 1 / 1024, Gi: 1, Ti: 1024 }[m[2] || 'Gi']); };
+
+  function cpumemDialog(ctx) {
+    const c = (ctx.st && ctx.st.cpumem) || {};
+    const maxMem = Math.floor(gi(c.max_memory)) || '';
+    dialog(ctx, 'cpumem', tr('vma.cpumem'), 'compute',
+      `<p class="form-hint">${esc(tr('vma.hint.cpumem', { cpu: c.max_sockets || '?', mem: c.max_memory || '?' }))}</p>`
+      + field('cpu', tr('vma.f.cpu'), `<input name="cpu" type="number" min="1" max="${esc(c.max_sockets || '')}" value="${esc(c.sockets || 1)}" required>`, tr('vma.t.cpu'))
+      + field('memory', tr('vma.f.memoryGi'), `<input name="memory" type="number" min="1" max="${esc(maxMem)}" step="1" value="${esc(Math.round(gi(c.memory)) || 1)}" required>`, tr('vma.t.memory')),
+      tr('of.save'), (form, msg, re) => followForm(ctx, 'cpumem', { cpu: Number(form.cpu.value), memory: `${form.memory.value}Gi` }, msg, re),
+      { submitIcon: 'compute', height: 320 });
+  }
+
+  async function insertDialog(ctx, drive) {
+    const root = dialog(ctx, `insert-${drive}`, tr('vma.insert', { name: drive }), 'cdrom',
+      `<p class="form-hint">${esc(tr('vma.hint.insert'))}</p>`
+      + field('image', tr('section.images'), '<select name="image" required></select>', tr('vma.t.isoImage')),
+      tr('vma.insertGo'), (form, msg, re) => followForm(ctx, 'insert-cdrom', { volume: drive, image: form.image.value }, msg, re),
+      { submitIcon: 'cdrom', height: 300 });
+    const sel = root.querySelector('[name="image"]');
+    try {
+      const d = await call('GET', `/api/cluster-objects/${enc(ctx.cluster)}/images`);
+      const ready = (d.items || []).filter(i => i.state === 'ready');
+      const iso = ready.filter(i => /\.iso$/i.test(i.display_name || ''));
+      const list = iso.length ? iso : ready;
+      sel.innerHTML = list.map(i => `<option value="${esc(`${i.namespace}/${i.name}`)}">${esc(i.display_name)}</option>`).join('')
+        || `<option value="" disabled selected>${esc(tr('vma.noImage'))}</option>`;
+    } catch (err) { sel.innerHTML = `<option value="" disabled selected>${esc(err.message)}</option>`; }
+  }
+
+  async function nicDialog(ctx) {
+    const n = ((ctx.st && ctx.st.interfaces) || []).length + 1;
+    const root = dialog(ctx, 'add-nic', tr('vma.addNic'), 'network',
+      `<p class="form-hint">${esc(tr('vma.hint.addNic'))}</p>`
+      + field('iface', tr('vma.f.iface'), `<input name="iface" required pattern="[a-z0-9]([-a-z0-9]*[a-z0-9])?" maxlength="63" value="nic-${n}">`, tr('vma.t.iface'))
+      + field('network', tr('vma.f.network'), '<select name="network" required></select>', tr('vma.t.network'))
+      + field('mac', tr('vma.f.mac'), '<input name="mac" pattern="([0-9a-fA-F]{2}:){5}[0-9a-fA-F]{2}" placeholder="52:54:00:…">', tr('vma.t.mac')),
+      tr('vma.addNicGo'), (form, msg, re) => followForm(ctx, 'add-nic', {
+        iface: form.iface.value.trim(), network: form.network.value, mac: form.mac.value.trim() || undefined }, msg, re),
+      { submitIcon: 'network', height: 380 });
+    const sel = root.querySelector('[name="network"]');
+    try {
+      const d = await call('GET', `/api/networks/${enc(ctx.cluster)}`);
+      const list = (Array.isArray(d) ? d : d.items || []).filter(x => x.namespace !== 'harvester-system'
+        && /"type"\s*:\s*"bridge"/.test(x.config || ''));
+      sel.innerHTML = list.map(x => `<option value="${esc(`${x.namespace}/${x.name}`)}">${esc(`${x.namespace}/${x.name}`)}${x.vlan ? ` · VLAN ${esc(x.vlan)}` : ''}</option>`).join('')
+        || `<option value="" disabled selected>${esc(tr('vma.noNetwork'))}</option>`;
+    } catch (err) { sel.innerHTML = `<option value="" disabled selected>${esc(err.message)}</option>`; }
+  }
+
+  async function storageDialog(ctx) {
+    const vols = ((ctx.st && ctx.st.volumes) || []).filter(v => v.claim && v.kind !== 'cdrom');
+    const root = dialog(ctx, 'storage', tr('vma.storageMigrate'), 'volume',
+      `<p class="form-hint">${esc(tr('vma.hint.storageMigrate'))}</p>`
+      + field('volume', tr('vma.f.source'), `<select name="volume" required>${vols.map(v => `<option value="${esc(v.claim)}">${esc(v.volume)} (${esc(v.claim)})</option>`).join('')}</select>`, tr('vma.t.source'))
+      + field('target', tr('vma.f.target'), '<select name="target" required></select>', tr('vma.t.target')),
+      tr('vma.storageGo'), (form, msg, re) => followForm(ctx, 'storage-migrate', { volume: form.volume.value, target: form.target.value }, msg, re),
+      { submitIcon: 'volume', height: 360 });
+    const sel = root.querySelector('[name="target"]');
+    try {
+      const d = await call('GET', `/api/pvcs/${enc(ctx.cluster)}?namespace=${enc(ctx.ns)}`);
+      const list = (Array.isArray(d) ? d : d.items || []).filter(p => p.phase === 'Bound' && !ownedBy(p.owned_by)
+        && !vols.some(v => v.claim === p.name));
+      sel.innerHTML = list.map(p => `<option value="${esc(p.name)}">${esc(p.name)} · ${esc(p.capacity || '?')} · ${esc(p.storage_class || '')}</option>`).join('')
+        || `<option value="" disabled selected>${esc(tr('vma.noFreeVolume'))}</option>`;
+    } catch (err) { sel.innerHTML = `<option value="" disabled selected>${esc(err.message)}</option>`; }
+  }
+
+  function quotaDialog(ctx) {
+    const cur = ctx.st && ctx.st.quota ? Math.round(ctx.st.quota / 2 ** 30) : 0;
+    dialog(ctx, 'quota', tr('vma.quota'), 'storage',
+      `<p class="form-hint">${esc(tr('vma.hint.quota'))}</p>`
+      + field('size', tr('vma.f.quotaGi'), `<input name="size" type="number" min="0" step="1" value="${esc(cur)}">`, tr('vma.t.quota')),
+      tr('of.save'), (form, msg, re) => followForm(ctx, 'quota', { size: Number(form.size.value) > 0 ? `${form.size.value}Gi` : '0' }, msg, re),
+      { submitIcon: 'save', height: 280 });
+  }
+
+  async function accessDialog(ctx) {
+    const root = dialog(ctx, 'access', tr('vma.access'), 'key',
+      `<p class="form-hint">${esc(tr('vma.hint.access'))}</p>`
+      + field('kind', tr('vma.f.accessKind'), `<select name="kind"><option value="basic">${esc(tr('vma.accessBasic'))}</option><option value="ssh">${esc(tr('vma.accessSsh'))}</option></select>`, tr('vma.t.accessKind'))
+      + field('users', tr('vma.f.users'), '<input name="users" required placeholder="root, ops">', tr('vma.t.users'))
+      + `<div data-when="basic">${field('password', tr('vma.f.password'), '<input name="password" type="password" minlength="6" autocomplete="new-password">', tr('vma.t.password'))}</div>`
+      + `<div data-when="ssh" hidden>${field('keys', tr('vma.f.keys'), '<select name="keys" multiple size="4"></select>', tr('vma.t.keys'))}</div>`,
+      tr('vma.accessGo'), (form, msg, re) => {
+        const kind = form.kind.value;
+        const users = form.users.value.split(/[\s,]+/).filter(Boolean);
+        const body = { kind, users };
+        if (kind === 'basic') body.password = form.password.value;
+        else body.keys = [...form.keys.selectedOptions].map(o => o.value);
+        return followForm(ctx, 'access', body, msg, re);
+      }, { submitIcon: 'key', height: 440 });
+    const form = root.querySelector('form');
+    const sync = () => form.querySelectorAll('[data-when]').forEach(el => { el.hidden = el.dataset.when !== form.kind.value; });
+    form.kind.addEventListener('change', sync);
+    sync();
+    try {
+      const d = await call('GET', `/api/sshkeys/${enc(ctx.cluster)}`);
+      const keys = (Array.isArray(d) ? d : d.items || []).filter(k => k && k.name);
+      form.keys.innerHTML = keys.map(k => `<option value="${esc(`${k.namespace}/${k.name}`)}">${esc(`${k.namespace}/${k.name}`)}</option>`).join('');
+    } catch { /* la liste reste vide */ }
+  }
+
+  // v1.61.0 : « View Logs » de Harvester, les journaux du pod virt-launcher
+  function logsWindow(ctx) {
+    const panel = FloatingPanels.open({
+      id: `vma-logs-${ctx.cluster}-${ctx.ns}-${ctx.name}`, icon: 'doc', width: 860, height: 560,
+      title: `${tr('vma.logs')} · ${ctx.ns}/${ctx.name}`,
+      bodyHtml: `<div class="vma-logs">
+        <div class="yw-tools">
+          <label class="bk-field vma-inline"><span>${esc(tr('vma.f.container'))}</span>
+            <select name="container" class="tip" data-tip="${esc(tr('vma.t.container'))}"></select></label>
+          <label class="bk-field vma-inline"><span>${esc(tr('vma.f.lines'))}</span>
+            <select name="tail" class="tip" data-tip="${esc(tr('vma.t.lines'))}"><option>200</option><option selected>500</option><option>2000</option><option>5000</option></select></label>
+          <label class="bk-check tip" data-tip="${esc(tr('vma.t.follow'))}"><input type="checkbox" name="follow" checked> <span>${esc(tr('vma.f.follow'))}</span></label>
+          <button type="button" class="btn btn-sm btn-secondary tip" data-logs="refresh" data-tip="${esc(tr('res.refreshTip'))}">${icon('refresh')} ${esc(tr('overview.refresh'))}</button>
+          <span class="res-dim vma-logs-pod"></span>
+        </div>
+        <pre class="vma-logs-text live-log" tabindex="0">${esc(tr('common.loading'))}</pre>
+      </div>`,
+    });
+    const root = panel.el;
+    if (root.dataset.vmaReady) return;
+    root.dataset.vmaReady = '1';
+    const pre = root.querySelector('.vma-logs-text');
+    const sel = root.querySelector('[name="container"]');
+    const tail = root.querySelector('[name="tail"]');
+    const follow = root.querySelector('[name="follow"]');
+    let timer = null;
+    const load = async () => {
+      if (!root.isConnected) { clearInterval(timer); return; }
+      const q = new URLSearchParams({ tail: tail.value });
+      if (sel.value) q.set('container', sel.value);
+      try {
+        const d = await call('GET', `${base(ctx.cluster, ctx.ns, ctx.name)}/logs?${q}`);
+        if (!sel.options.length) {
+          sel.innerHTML = d.containers.map(c => `<option value="${esc(c)}"${c === d.container ? ' selected' : ''}>${esc(c)}</option>`).join('');
+        }
+        root.querySelector('.vma-logs-pod').textContent = `${d.pod} · ${d.node || ''}`;
+        const atEnd = pre.scrollTop + pre.clientHeight >= pre.scrollHeight - 20;
+        pre.textContent = d.logs || tr('vma.logsEmpty');
+        if (atEnd) pre.scrollTop = pre.scrollHeight;
+      } catch (err) {
+        pre.textContent = err.message;
+      }
+    };
+    sel.addEventListener('change', load);
+    tail.addEventListener('change', load);
+    root.querySelector('[data-logs="refresh"]').addEventListener('click', load);
+    timer = setInterval(() => { if (follow.checked && !document.hidden) load(); }, 5000);
+    load();
+  }
+
+  // v1.61.0 : « Open in Serial Console » de Harvester. xterm.js (embarqué,
+  // chargé à la première ouverture) relié à la sous-ressource `console` de
+  // la VMI par un relais de la console, avec un ticket à usage unique.
+  let xtermLoading = null;
+  function loadXterm() {
+    if (window.Terminal) return Promise.resolve();
+    if (xtermLoading) return xtermLoading;
+    xtermLoading = new Promise((resolve, reject) => {
+      const css = document.createElement('link');
+      css.rel = 'stylesheet';
+      css.href = '/static/vendor/xterm/xterm.css';
+      document.head.appendChild(css);
+      const s = document.createElement('script');
+      s.src = '/static/vendor/xterm/xterm.js';
+      s.onload = () => resolve();
+      s.onerror = () => reject(new Error('xterm.js could not be loaded'));
+      document.head.appendChild(s);
+    });
+    return xtermLoading;
+  }
+
+  function serialWindow(ctx) {
+    const panel = FloatingPanels.open({
+      id: `vma-serial-${ctx.cluster}-${ctx.ns}-${ctx.name}`, icon: 'console', width: 820, height: 520,
+      title: `${tr('vma.serial')} · ${ctx.ns}/${ctx.name}`,
+      bodyHtml: `<div class="vma-serial">
+        <div class="yw-tools">
+          <span class="vma-serial-state res-dim" role="status">${esc(tr('common.loading'))}</span>
+          <button type="button" class="btn btn-sm btn-secondary tip" data-serial="reconnect" data-tip="${esc(tr('vma.t.reconnect'))}" hidden>${icon('refresh')} ${esc(tr('vma.reconnect'))}</button>
+        </div>
+        <div class="vma-serial-term" tabindex="0"></div>
+        <p class="form-hint">${esc(tr('vma.hint.serial'))}</p>
+      </div>`,
+    });
+    const root = panel.el;
+    if (root.dataset.vmaReady) return;
+    root.dataset.vmaReady = '1';
+    const host = root.querySelector('.vma-serial-term');
+    const state = root.querySelector('.vma-serial-state');
+    const again = root.querySelector('[data-serial="reconnect"]');
+    let term = null, ws = null;
+    const fit = () => {
+      if (!term || !host.clientWidth) return;
+      const cell = host.querySelector('.xterm-char-measure-element');
+      const w = (cell && cell.getBoundingClientRect().width) || 8.4, h = (cell && cell.getBoundingClientRect().height) || 17;
+      const cols = Math.max(40, Math.floor((host.clientWidth - 16) / w));
+      const rows = Math.max(10, Math.floor((host.clientHeight - 8) / h));
+      if (cols !== term.cols || rows !== term.rows) term.resize(cols, rows);
+    };
+    const connect = async () => {
+      again.hidden = true;
+      state.textContent = tr('vma.serialConnecting');
+      try {
+        await loadXterm();
+        if (!term) {
+          term = new window.Terminal({ convertEol: false, cursorBlink: true, fontSize: 13,
+            fontFamily: getComputedStyle(document.documentElement).getPropertyValue('--font-mono') || 'monospace' });
+          term.open(host);
+          term.onData((d) => { if (ws && ws.readyState === 1) ws.send(new TextEncoder().encode(d)); });
+          new ResizeObserver(fit).observe(host);
+        }
+        fit();
+        const tk = await call('POST', `${base(ctx.cluster, ctx.ns, ctx.name)}/serial-ticket`);
+        const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+        ws = new WebSocket(`${proto}//${location.host}${tk.ws_path}?ticket=${enc(tk.ticket)}`);
+        ws.binaryType = 'arraybuffer';
+        ws.onopen = () => {
+          state.textContent = tr('vma.serialOpen');
+          ws.send(new TextEncoder().encode('\n'));     // comme Harvester : réveille l'invite
+          term.focus();
+        };
+        ws.onmessage = (ev) => term.write(typeof ev.data === 'string' ? ev.data : new Uint8Array(ev.data));
+        ws.onclose = (ev) => {
+          state.textContent = ev.reason ? tr('vma.serialClosedWhy', { why: ev.reason }) : tr('vma.serialClosed');
+          again.hidden = false;
+        };
+      } catch (err) {
+        state.innerHTML = `<span class="res-error">${esc(err.message)}</span>`;
+        again.hidden = false;
+      }
+    };
+    again.addEventListener('click', connect);
+    const obs = new MutationObserver(() => {
+      if (!root.isConnected) { obs.disconnect(); if (ws) ws.close(); if (term) term.dispose(); }
+    });
+    obs.observe(document.body, { childList: true, subtree: true });
+    connect();
   }
 
   // -- actions groupées (barre de la liste) ----------------------------------------

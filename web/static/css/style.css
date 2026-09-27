@@ -4926,3 +4926,14 @@ body.login-page {
   background: var(--bg-panel); color: var(--text); border: 1px solid var(--border); border-left: 4px solid var(--accent);
   box-shadow: 0 8px 24px rgba(0,0,0,.2); }
 .vma-toast.bad { border-left-color: var(--danger, #c0392b); }
+
+/* v1.61.0 : filtre et colonnes de la liste des VMs */
+.ns-vm-filter-row { display: flex; margin: 6px 0 8px; }
+.ns-vm-filter-row input { flex: 1 1 320px; max-width: 520px; }
+.ns-vm-table td.num { font-variant-numeric: tabular-nums; }
+.vma-logs { display: flex; flex-direction: column; gap: 8px; height: 100%; min-height: 0; }
+.vma-logs .vma-inline { display: inline-flex; align-items: center; gap: 6px; margin: 0; }
+.vma-logs-text { flex: 1 1 auto; min-height: 240px; overflow: auto; margin: 0; white-space: pre-wrap;
+  font-family: var(--font-mono); font-size: 12px; }
+.vma-serial { display: flex; flex-direction: column; gap: 6px; height: 100%; min-height: 0; }
+.vma-serial-term { flex: 1 1 auto; min-height: 200px; background: #0b0f0e; border-radius: 6px; padding: 4px 6px; overflow: hidden; }

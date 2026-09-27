@@ -374,6 +374,14 @@ const App = (() => {
   let nsSortKey = 'name';
   let nsSortDir = 'asc';            // 'asc' | 'desc'
 
+  // v1.61.0 : « 4Gi » -> octets, pour trier la mémoire
+  function memBytes(m) {
+    const x = /^([0-9.]+)\s*([KMGT]i?)?$/.exec(String(m || ''));
+    if (!x) return 0;
+    const u = { K: 1e3, M: 1e6, G: 1e9, T: 1e12, Ki: 2 ** 10, Mi: 2 ** 20, Gi: 2 ** 30, Ti: 2 ** 40 }[x[2]] || 1;
+    return parseFloat(x[1]) * u;
+  }
+
   function sortVMs(vms) {
     const cmp = (a, b) => {
       let av, bv;
@@ -382,13 +390,38 @@ const App = (() => {
           av = (a.phase || ''); bv = (b.phase || ''); break;
         case 'runStrategy':
           av = (a.runStrategy || ''); bv = (b.runStrategy || ''); break;
+        case 'cpu':
+          return (nsSortDir === 'asc' ? 1 : -1) * ((a.cpu || 0) - (b.cpu || 0));
+        case 'memory':
+          return (nsSortDir === 'asc' ? 1 : -1) * (memBytes(a.memory) - memBytes(b.memory));
+        case 'ip':
+          av = (a.ips || [])[0] || ''; bv = (b.ips || [])[0] || ''; break;
+        case 'node':
+          av = a.node || ''; bv = b.node || ''; break;
         default:
           av = a.name; bv = b.name;
       }
-      const r = av.localeCompare(bv);
+      const r = av.localeCompare(bv, undefined, { numeric: true });
       return nsSortDir === 'asc' ? r : -r;
     };
     return [...vms].sort(cmp);
+  }
+
+  // v1.61.0 : filtre de la liste des VMs : chaque mot doit correspondre au
+  // nom, à une IP, au nœud, ou à un label (clé, ou clé=valeur)
+  let nsVmFilter = '';
+  let lastNsVMs = [];
+  function vmMatches(vm, words) {
+    const labels = vm.labels || {};
+    return words.every((w) => {
+      if (w.includes('=')) {
+        const [k, v] = w.split('=', 2);
+        return Object.entries(labels).some(([lk, lv]) => lk.toLowerCase() === k && String(lv).toLowerCase() === v);
+      }
+      return vm.name.toLowerCase().includes(w) || (vm.node || '').toLowerCase().includes(w)
+        || (vm.ips || []).some(ip => ip.includes(w))
+        || Object.keys(labels).some(lk => lk.toLowerCase().includes(w));
+    });
   }
 
   async function refreshNamespaces(autoSelectFirst = false) {
@@ -473,6 +506,9 @@ const App = (() => {
   function renderNamespaceDetail(vms) {
     const tbody = $('#ns-vms-table tbody');
     tbody.innerHTML = '';
+    lastNsVMs = vms;
+    const words = nsVmFilter.toLowerCase().split(/\s+/).filter(Boolean);
+    if (words.length) vms = vms.filter(vm => vmMatches(vm, words));
     // Apply current sort
     vms = sortVMs(vms);
     // Update header sort indicators
@@ -506,6 +542,10 @@ const App = (() => {
             <option value="Halted"          ${vm.runStrategy === 'Halted' ? 'selected' : ''}>Halted</option>
           </select>
         </td>
+        <td class="num">${vm.cpu ? escapeHtml(String(vm.cpu)) : '–'}</td>
+        <td class="num">${escapeHtml(vm.memory || '–')}</td>
+        <td>${(vm.ips || []).length ? `<code>${escapeHtml(vm.ips[0])}</code>${vm.ips.length > 1 ? ` <span class="res-dim tip" data-tip="${escapeHtml(vm.ips.slice(1).join(', '))}">+${vm.ips.length - 1}</span>` : ''}` : '<span class="res-dim">–</span>'}</td>
+        <td>${vm.node ? escapeHtml(vm.node) : '<span class="res-dim">–</span>'}</td>
         <td class="vm-actions-cell">
           ${vm.runStrategy === 'Halted'
             ? `<button class="btn-icon-action start tip" data-tip="${i18n.t('vm.tooltip.start')}" data-action="start" data-ns="${vm.namespace}" data-name="${vm.name}"><span class="icon-green">${Icons.svg('play')}</span></button>`
@@ -1906,6 +1946,8 @@ const App = (() => {
         updateBulkToolbar();
       });
     }
+    // v1.61.0 : filtre de la liste des VMs
+    $('#ns-vm-filter')?.addEventListener('input', (e) => { nsVmFilter = e.target.value; renderNamespaceDetail(lastNsVMs); });
     $('#btn-bulk-stop')?.addEventListener('click',  () => bulkAction('Halted'));
     // v1.60.0 : les actions groupées de Harvester (redémarrer, arrêt forcé, migrer)
     document.querySelectorAll('[data-bulk-do]').forEach(b => b.addEventListener('click', () => {

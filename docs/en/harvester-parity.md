@@ -1,8 +1,8 @@
 # Parity with the Harvester UI
 
-Status on 2026-09-27, console **v1.60.0**, compared with the **Harvester v1.9** UI (menus taken from the harvester-ui-extension v1.9.0 source and the v1.9 documentation).
+Status on 2026-09-27, console **v1.61.0**, compared with the **Harvester v1.9** UI (menus taken from the harvester-ui-extension v1.9.0 source and the v1.9 documentation).
 
-Of 135 functions of the Harvester UI: **56 done**, **18 partial**, **61 missing**; 2 out of scope. A missing function shows the version it is planned for.
+Of 135 functions of the Harvester UI: **68 done**, **18 partial**, **49 missing**; 2 out of scope. A missing function shows the version it is planned for.
 
 Statuses: Done, Partial (what is missing is said), Missing (planned version), Console only (what Harvester does not have), Out of scope.
 
@@ -44,7 +44,7 @@ Harvester menu: *Virtual Machines*
 | Function | Status | Version | Note |
 |---|---|---|---|
 | List per namespace, state, run strategy | Done | 1.2 |  |
-| CPU, memory, IP, node columns; label filter | Missing | planned 1.61 |  |
+| CPU, memory, IP, node columns; label filter | Done | 1.61 |  |
 | Start / stop | Done | 1.2 |  |
 | Restart | Done | 1.60 | within the grace period (menu) or hard (console) |
 | Soft reboot (guest agent) | Done | 1.60 |  |
@@ -52,25 +52,25 @@ Harvester menu: *Virtual Machines*
 | Force stop | Done | 1.60 |  |
 | Migrate | Done | 1.60 | to a chosen node or any |
 | Abort migration | Done | 1.60 |  |
-| Storage migration (volume to another) | Missing | planned 1.61 |  |
+| Storage migration (volume to another) | Done | 1.61 | refused after KubeVirt's switch (would go back to the old copy) |
 | Take backup | Done | 1.58 |  |
 | Take snapshot | Done | 1.2 |  |
 | Restore (new VM or replace, keep MAC) | Done | 1.11 |  |
-| Create a schedule from the VM | Missing | planned 1.61 |  |
-| VM snapshot quota | Missing | planned 1.61 |  |
-| Edit CPU and memory (hotplug) | Missing | planned 1.61 |  |
+| Create a schedule from the VM | Done | 1.61 |  |
+| VM snapshot quota | Done | 1.61 |  |
+| Edit CPU and memory (hotplug) | Done | 1.61 | memory needs virtio-mem in the guest, and 1 GiB at least |
 | Hotplug a volume / detach it | Done | 1.60 |  |
-| Hotplug / detach a network interface | Missing | planned 1.61 |  |
+| Hotplug / detach a network interface | Done | 1.61 |  |
 | Eject CD-ROM | Done | 1.60 | cold, with its volume deleted, like Harvester's legacy action |
-| Insert an image into a CD-ROM | Missing | planned 1.61 |  |
+| Insert an image into a CD-ROM | Done | 1.61 | empty SATA drive; hot eject too |
 | Generate template | Done | 1.60 | from a VM, with or without the data |
 | Clone (with or without data) | Done | 1.60 |  |
 | Delete, choosing the volumes | Done | 1.60 | the Cluster view button failed until 1.59 (missing route) |
 | Edit / download YAML | Done | 1.60 |  |
 | Edit config | Done | 1.8 | server dry-run before applying |
 | WebVNC console | Done | 1.7 | shared between several people |
-| Serial console | Missing | planned 1.61 |  |
-| View logs | Missing | planned 1.61 |  |
+| Serial console | Done | 1.61 |  |
+| View logs | Done | 1.61 | virt-launcher pod, operators |
 | Bulk actions | Done | 1.60 | start, stop, restart, force stop, migrate |
 
 ## Virtual machines: create and settings
@@ -82,24 +82,24 @@ Harvester menu: *Create / Edit VM*
 | Create, single or multiple instances | Done | 1.28 | up to 50, dry-run |
 | From a template and version | Done | 1.29 |  |
 | CPU, memory, CPU model, pinning, NUMA | Done | 1.12 |  |
-| CPU and memory hotplug ceilings | Missing | planned 1.61 |  |
+| CPU and memory hotplug ceilings | Done | 1.61 | Harvester's checkbox: one core per socket, limits = maximums |
 | Volumes: image, blank, existing, container; boot order | Done | 1.8 |  |
 | Network interfaces (model, type, MAC) | Done | 1.8 |  |
-| Static IP of an interface (v1.9) | Missing | planned 1.61 |  |
+| Static IP of an interface (v1.9) | Missing | planned 1.62 | Harvester writes it as an annotation and shows it; nothing applies it server side: to verify |
 | Node scheduling (selector, rules) | Done | 1.13 |  |
 | VM affinity / anti-affinity | Done | 1.13 |  |
 | PCI devices | Done | 1.15 |  |
 | USB devices | Missing | planned 1.65 |  |
-| Access credentials (password, keys through the agent) | Missing | planned 1.61 |  |
-| Filesystem volume (virtiofs, v1.9) | Missing | planned 1.61 |  |
-| Labels, instance labels, annotations | Partial | 1.12 | tags only |
+| Access credentials (password, keys through the agent) | Done | 1.61 | applied at the next restart |
+| Filesystem volume (virtiofs, v1.9) | Missing | planned 1.62 |  |
+| Labels, instance labels, annotations | Partial | 1.12 | tags; instance labels and annotations in 1.62 (and through YAML since 1.60) |
 | Run strategy | Done | 1.2 |  |
-| OS type, reserved memory, maintenance strategy | Missing | planned 1.61 |  |
+| OS type, reserved memory, maintenance strategy | Done | 1.61 | plus display name, description under Harvester's key |
 | Hostname, termination grace period | Done | 1.12 |  |
 | Cloud configuration (user data, network data) | Done | 1.60 | lost at creation until 1.59; in a Secret, created or converted on save |
 | SSH keys at creation | Done | 1.60 |  |
 | Install guest agent | Done | 1.60 |  |
-| Windows unattend and sysprep | Missing | planned 1.61 |  |
+| Windows unattend and sysprep | Missing | planned 1.62 |  |
 | TPM, EFI, Secure Boot, USB tablet | Done | 1.12 |  |
 
 ## Volumes

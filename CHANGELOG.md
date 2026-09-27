@@ -4,6 +4,57 @@ All notable changes to this project will be documented here.
 Format inspired by [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 This file summarises each minor release; per-patch detail lives in `git log`.
 
+## [1.61.0] - 2026-09-27 - A running VM changed as in Harvester: CPU, memory, disks, network, console
+
+### Added
+- **Live actions of the VM menu**, following Harvester 1.9's own server
+  rules: edit CPU and memory while the VM runs (up to the maximums set at
+  creation), insert an ISO image into an empty SATA drive and eject it, add
+  and unplug a network interface (applied by a live migration), migrate a
+  volume to another one and cancel while it copies, create a schedule for
+  the VM, set its snapshot quota, add an access (a password or SSH keys set
+  by the guest agent).
+- **Serial console** of a VM in a terminal (xterm.js 5.5.0, embedded), and
+  **View logs** of its virt-launcher pod (operators).
+- The VM list shows the **CPUs, memory, IP addresses and node**, sorts by
+  each, and a **filter** keeps VMs by name, IP, node or label (`key=value`).
+- The settings window writes **Harvester's fields**: display name, operating
+  system, maintenance strategy, reserved memory, and "Enable CPU and memory
+  hotplug" (one core per socket, maximums, limits).
+- `harvester-resources vm insert-cdrom|eject-image|add-nic|remove-nic|cpumem|
+  storage-migrate|cancel-storage-migration|quota|access` on the command line.
+
+### Fixed
+- The description written by the console went to a key Harvester does not
+  read (`harvesterhci.io/description`); it now goes to
+  `field.cattle.io/description`, shown by Harvester.
+
+### Tests
+- The library (drive insert and eject, interface rules, CPU and memory
+  limits, storage migration and its cancel, quota object, access
+  credentials), the routes (state, checks, a password that never reaches a
+  command line, logs for operators, console tickets bound to their console),
+  in Chromium the menu following the state, each window and what it sends,
+  the list columns and filter, the create window's hotplug option.
+- Real, on harv1: an ISO inserted into a running VM (28 s) and ejected with
+  the drive kept, a NIC added then unplugged (applied at restart, single
+  node), the overlay network refused, a snapshot quota, a root password
+  set by the guest agent after a restart (AccessCredentialsSynchronized),
+  the serial console (login prompt, keyboard), the logs, the new settings
+  fields.
+- Real, on harvlab (three nodes): CPU 1 to 3 and memory 1 to 3 GiB while
+  running (a Leap guest took the memory in; cirros cannot, it is said), a
+  NIC plugged and unplugged by live migration (12 to 22 s), a volume
+  migrated live to another class (58 s), a migration cancelled.
+- Every JavaScript file of the console is now checked by `node --check`
+  before a commit (a lost module closing had only been caught by the
+  browser tests).
+- Found on the way and handled: KubeVirt refuses memory hotplug under 1 GiB;
+  the applied state is read in the instance's status, not its spec; a cancel
+  after KubeVirt's switch would restart the VM on the old copy, so it is
+  refused; Harvester's controller rewrites the VM during a storage
+  migration, so the console re-reads and retries.
+
 ## [1.60.0] - 2026-09-27 - The actions of a VM, as in Harvester, and YAML everywhere
 
 ### Added

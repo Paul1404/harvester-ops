@@ -34,6 +34,16 @@ il s'utilise aussi seul.
   harvester-resources vm abort-migration --cluster harv1 --namespace default --name web
   harvester-resources vm template --cluster harv1 --namespace default --name web --template-name web-tpl [--with-data]
   harvester-resources vm cloudinit --cluster harv1 --namespace default --name web --user-data u.yaml [--guest-agent]
+  harvester-resources vm insert-cdrom --cluster harv1 --namespace default --name web --volume cd --image default/iso
+  harvester-resources vm eject-image --cluster harv1 --namespace default --name web --volume cd
+  harvester-resources vm add-nic --cluster harv1 --namespace default --name web --iface nic2 --network default/vlan20 [--mac ..]
+  harvester-resources vm remove-nic --cluster harv1 --namespace default --name web --iface nic2
+  harvester-resources vm cpumem --cluster harv1 --namespace default --name web --cpu 4 --memory 8Gi
+  harvester-resources vm storage-migrate --cluster harv1 --namespace default --name web --volume web-root --target web-root-fast
+  harvester-resources vm cancel-storage-migration --cluster harv1 --namespace default --name web
+  harvester-resources vm quota --cluster harv1 --namespace default --name web --size 20Gi
+  harvester-resources vm access --cluster harv1 --namespace default --name web --kind basic --users ops --password-file pw
+  harvester-resources vm access --cluster harv1 --namespace default --name web --kind ssh --users ops --keys default/k1
 
 Sorties : 0 fait, 1 échec, 2 refusé par le contrôle, 3 annulé. Les étapes
 s'écrivent sur stderr en `STEP_EVENT|étape|statut|message`, que la console
@@ -959,6 +969,290 @@ def vm_cloudinit(kube, args):
     return EXIT_OK
 
 
+def _vm_json_patch(kube, vm, out, fields):
+    """Remplace des champs de la VM par ceux de `out`, gardé par sa version
+    (un changement fait entre-temps est refusé, pas écrasé)."""
+    import json
+    ops = [{"op": "test", "path": "/metadata/resourceVersion", "value": vm["metadata"]["resourceVersion"]}]
+    paths = {"volumes": ("/spec/template/spec/volumes", lambda o: hv._tspec(o).get("volumes", [])),
+             "disks": ("/spec/template/spec/domain/devices/disks", lambda o: hv._tspec(o)["domain"]["devices"].get("disks", [])),
+             "interfaces": ("/spec/template/spec/domain/devices/interfaces",
+                            lambda o: hv._tspec(o)["domain"]["devices"].get("interfaces", [])),
+             "networks": ("/spec/template/spec/networks", lambda o: hv._tspec(o).get("networks", []))}
+    for f in fields:
+        path, get = paths[f]
+        ops.append({"op": "replace" if f in ("disks", "interfaces") or get(vm) else "add", "path": path, "value": get(out)})
+    ann_key = "/metadata/annotations/" + hv.VCT.replace("/", "~1")
+    old_ann = (vm.get("metadata") or {}).get("annotations") or {}
+    new_ann = (out.get("metadata") or {}).get("annotations") or {}
+    if new_ann.get(hv.VCT) != old_ann.get(hv.VCT):
+        if hv.VCT in new_ann:
+            ops.append({"op": "add", "path": ann_key, "value": new_ann[hv.VCT]})
+        else:
+            ops.append({"op": "remove", "path": ann_key})
+    try:
+        kube.run("patch", K_VM, vm["metadata"]["name"], "-n", vm["metadata"]["namespace"], "--type", "json",
+                 "-p", json.dumps(ops))
+    except KubeError as e:
+        if "test operation" in str(e) or "the object has been modified" in str(e):
+            raise ValueError("the VM changed meanwhile: try again") from None
+        raise
+
+
+def vm_insert_cdrom(kube, args):
+    ns, name = args.namespace, args.name
+    vm = kube.get(K_VM, ns, name)
+    if vm is None:
+        raise ValueError(f"no VM {ns}/{name}")
+    ref = str(args.image or "")
+    ins, iname = ref.split("/", 1) if "/" in ref else (ns, ref)
+    image = kube.get("virtualmachineimages.harvesterhci.io", ins, iname)
+    if image is None:
+        raise ValueError(f"no image {ins}/{iname}")
+    out, claim = hv.insert_cdrom(vm, args.volume, image)
+    step("insert", "running", f"{ins}/{iname} into the drive {args.volume} of {ns}/{name}")
+    _vm_json_patch(kube, vm, out, ["volumes"])
+
+    def ready(obj):
+        if kube.get(K_VMI, ns, name) is None:
+            return True, "inserted; the VM sees it when it starts"
+        st = {v.get("name"): v.get("phase") for v in ((obj or {}).get("status") or {}).get("volumeStatus") or []}
+        return (True, f"{claim} in the drive {args.volume}") if st.get(args.volume) == "Ready" else (None, st.get(args.volume) or "pending")
+    return _wait(kube, K_VMI, ns, name, ready, args.timeout, label="insert")
+
+
+def vm_eject_image(kube, args):
+    ns, name = args.namespace, args.name
+    vm = kube.get(K_VM, ns, name)
+    if vm is None:
+        raise ValueError(f"no VM {ns}/{name}")
+    out, claims = hv.eject_image(vm, args.volume)
+    step("eject", "running", f"image out of the drive {args.volume} of {ns}/{name} (the drive stays)")
+    _vm_json_patch(kube, vm, out, ["volumes"])
+
+    def out_of_vmi(obj):
+        if obj is None:
+            return True, "ejected"
+        st = {v.get("name") for v in ((obj or {}).get("status") or {}).get("volumeStatus") or []}
+        return (True, "ejected") if args.volume not in st else (None, "detaching")
+    code = _wait(kube, K_VMI, ns, name, out_of_vmi, 300, label="eject")
+    for c in claims:
+        try:
+            kube.delete("persistentvolumeclaims", ns, c)
+            step("volume", "done", f"volume {c} deleted")
+        except KubeError as e:
+            step("volume", "error", f"volume {c} kept: {str(e)[:160]}")
+    return code
+
+
+def _apply_by_migration(kube, args):
+    """Une carte réseau branchée ou débranchée s'applique par une migration
+    (KubeVirt, liaison en pont) ; sans autre nœud, au prochain démarrage."""
+    ns, name = args.namespace, args.name
+    vmi = kube.get(K_VMI, ns, name)
+    if vmi is None:
+        step("apply", "done", "the VM is stopped: the change applies when it starts")
+        return EXIT_OK
+    here = (vmi.get("status") or {}).get("nodeName")
+    others = [n for n in kube.list("nodes")
+              if (n.get("metadata") or {}).get("name") != here and not (n.get("spec") or {}).get("unschedulable")
+              and any(c.get("type") == "Ready" and c.get("status") == "True" for c in (n.get("status") or {}).get("conditions") or [])]
+    if not others:
+        step("apply", "done", "no other node to migrate to: the change applies at the next restart")
+        return EXIT_OK
+    step("apply", "running", "live migration to apply the change")
+    args.node = None
+    return vm_migrate(kube, args)
+
+
+def vm_add_nic(kube, args):
+    ns, name = args.namespace, args.name
+    vm = kube.get(K_VM, ns, name)
+    if vm is None:
+        raise ValueError(f"no VM {ns}/{name}")
+    ref = str(args.network or "")
+    nns, nname = ref.split("/", 1) if "/" in ref else (ns, ref)
+    nad = kube.get("network-attachment-definitions.k8s.cni.cncf.io", nns, nname)
+    if nad is None:
+        raise ValueError(f"no VM network {nns}/{nname}")
+    if not hv.nad_hotpluggable(nad):
+        raise ValueError(f"the network {nns}/{nname} is not hot-pluggable (a bridge network outside harvester-system is needed)")
+    out = hv.add_nic(vm, args.iface, f"{nns}/{nname}", args.mac)
+    step("nic", "running", f"{args.iface} on {nns}/{nname} for {ns}/{name}")
+    _vm_json_patch(kube, vm, out, ["interfaces", "networks"])
+    step("nic", "done", f"{args.iface} added to the VM")
+    return _apply_by_migration(kube, args)
+
+
+def vm_remove_nic(kube, args):
+    ns, name = args.namespace, args.name
+    vm = kube.get(K_VM, ns, name)
+    if vm is None:
+        raise ValueError(f"no VM {ns}/{name}")
+    out = hv.remove_nic(vm, args.iface)
+    step("nic", "running", f"{args.iface} unplugged from {ns}/{name}")
+    _vm_json_patch(kube, vm, out, ["interfaces"])
+    step("nic", "done", f"{args.iface} marked absent")
+    return _apply_by_migration(kube, args)
+
+
+def vm_cpumem(kube, args):
+    """CPU et mémoire à chaud : KubeVirt applique le changement par une
+    migration à chaud (stratégie LiveUpdate)."""
+    ns, name = args.namespace, args.name
+    vm = kube.get(K_VM, ns, name)
+    if vm is None:
+        raise ValueError(f"no VM {ns}/{name}")
+    if kube.get(K_VMI, ns, name) is None:
+        raise ValueError(f"{ns}/{name} is stopped: change its CPU and memory in its settings")
+    ops = hv.cpumem_patch(vm, args.cpu, args.memory)
+    import json
+    ops.insert(0, {"op": "test", "path": "/metadata/resourceVersion", "value": vm["metadata"]["resourceVersion"]})
+    info = hv.cpumem_info(vm)
+    step("hotplug", "running", f"{ns}/{name}: CPU {info['sockets']} to {args.cpu or info['sockets']}, "
+                              f"memory {info['memory']} to {args.memory or info['memory']}")
+    kube.run("patch", K_VM, name, "-n", ns, "--type", "json", "-p", json.dumps(ops))
+
+    # vu sur harvlab : la spec de la VMI change tout de suite ; ce qui est
+    # APPLIQUÉ se lit dans son état (currentCPUTopology, memory), après la
+    # migration que KubeVirt lance (LiveUpdate)
+    seen = {}
+
+    def applied(obj):
+        conds = {c.get("type"): c for c in ((obj or {}).get("status") or {}).get("conditions") or []
+                 if str(c.get("status")) == "True"}
+        if "RestartRequired" in conds:
+            return False, "the cluster asks for a restart: " + (conds["RestartRequired"].get("message") or "")[:200]
+        st = (kube.get(K_VMI, ns, name) or {}).get("status") or {}
+        cpu_now = (st.get("currentCPUTopology") or {}).get("sockets")
+        mem = st.get("memory") or {}
+        cpu_ok = not args.cpu or (cpu_now is not None and int(cpu_now) == int(args.cpu))
+        mem_ok = not args.memory or hv.quantity(mem.get("guestRequested")) == hv.quantity(args.memory)
+        if not (cpu_ok and mem_ok):
+            return None, f"live update in progress (CPU {cpu_now or '?'}, memory {mem.get('guestCurrent') or '?'})"
+        if args.memory and hv.quantity(mem.get("guestCurrent")) != hv.quantity(args.memory):
+            # l'invité branche la mémoire par blocs (virtio-mem) : lui laisser une minute
+            first = seen.setdefault("at", time.time())
+            if time.time() - first < 60:
+                return None, f"the guest takes the memory in: {mem.get('guestCurrent')} of {args.memory}"
+            return True, (f"CPU {cpu_now}; memory {args.memory} requested, the guest sees {mem.get('guestCurrent')} "
+                          "so far (its kernel must accept hot-plugged memory, virtio-mem)")
+        return True, f"{ns}/{name} now has {cpu_now} vCPU and {mem.get('guestCurrent') or args.memory}"
+    return _wait(kube, K_VM, ns, name, applied, args.timeout, label="hotplug")
+
+
+def _replace_retry(kube, ns, name, change, tries=6):
+    """Relire, modifier, remplacer ; recommencer si l'objet a changé entre-
+    temps. Vu sur harvlab : pendant une migration de stockage, le contrôleur
+    de Harvester réécrit la VM (ses annotations) et un remplacement direct
+    échouait en conflit."""
+    for i in range(tries):
+        vm = kube.get(K_VM, ns, name)
+        if vm is None:
+            raise ValueError(f"no VM {ns}/{name}")
+        out = change(vm)
+        try:
+            return kube.replace(out)
+        except KubeError as e:
+            if "the object has been modified" not in str(e) or i == tries - 1:
+                raise
+            time.sleep(1)
+
+
+def vm_storage_migrate(kube, args, cancel=False):
+    ns, name = args.namespace, args.name
+    vm = kube.get(K_VM, ns, name)
+    if vm is None:
+        raise ValueError(f"no VM {ns}/{name}")
+    if cancel:
+        hv.cancel_storage_migration(vm)          # contrôle d'avance : une migration en cours
+        # vu sur harvlab : annuler après la bascule de KubeVirt remettait la VM
+        # sur l'ancien volume au prochain redémarrage (écritures perdues)
+        targets = {e.get("targetVolume") for e in hv.claim_templates(vm) if e.get("targetVolume")}
+        vmi_claims = {(v.get("persistentVolumeClaim") or {}).get("claimName")
+                      for v in ((kube.get(K_VMI, ns, name) or {}).get("spec") or {}).get("volumes") or []}
+        if targets & vmi_claims:
+            raise ValueError("the copy is finished: the VM already runs on the target volume, "
+                             "the migration can no longer be cancelled")
+        step("storage", "running", f"storage migration of {ns}/{name} cancelled")
+        _replace_retry(kube, ns, name, hv.cancel_storage_migration)
+        step("storage", "done", "the VM keeps its volumes")
+        return EXIT_OK
+    if kube.get(K_VMI, ns, name) is None:
+        raise ValueError(f"{ns}/{name} is stopped: a storage migration moves a running VM's volume")
+    target = kube.get("persistentvolumeclaims", ns, args.target or "")
+    source = kube.get("persistentvolumeclaims", ns, args.volume or "")
+    if target is None:
+        raise ValueError(f"no volume {ns}/{args.target}: create the target volume first")
+    if source is not None:
+        s = ho.size_bytes(((source.get("spec") or {}).get("resources") or {}).get("requests", {}).get("storage"))
+        d = ho.size_bytes(((target.get("spec") or {}).get("resources") or {}).get("requests", {}).get("storage"))
+        if s and d and d < s:
+            raise ValueError("the target volume is smaller than the source")
+    others = [v for v in kube.list(K_VM, ns) if (v.get("metadata") or {}).get("name") != name]
+    hv.storage_migration(vm, args.volume, target, others)          # contrôle d'avance
+    step("storage", "running", f"{args.volume} of {ns}/{name} moves to {args.target} while the VM runs")
+    _replace_retry(kube, ns, name, lambda v: hv.storage_migration(v, args.volume, target, others))
+
+    def done(obj):
+        vcts = hv.claim_templates(obj)
+        if any(e.get("targetVolume") for e in vcts):
+            conds = {c.get("type") for c in ((obj or {}).get("status") or {}).get("conditions") or []
+                     if str(c.get("status")) == "True"}
+            return None, "copying" if "VolumesChange" in conds else "waiting for the migration"
+        claims = {x["claim"] for x in hv.vm_volumes(obj)}
+        return (True, f"{ns}/{name} now uses {args.target}") if args.target in claims else (False, "the migration was undone")
+    return _wait(kube, K_VM, ns, name, done, args.timeout, label="storage")
+
+
+def vm_quota(kube, args):
+    ns, name = args.namespace, args.name
+    if kube.get(K_VM, ns, name) is None:
+        raise ValueError(f"no VM {ns}/{name}")
+    existing = kube.get("resourcequotas.harvesterhci.io", ns, hv.QUOTA_NAME)
+    obj = hv.quota_object(existing, ns, name, args.size)
+    if obj is None:
+        step("quota", "done", f"{ns}/{name} has no snapshot quota")
+        return EXIT_OK
+    step("quota", "running", f"snapshot quota of {ns}/{name}: {args.size or 'none'}")
+    if existing is None:
+        kube.create(obj)
+    else:
+        kube.replace(obj)
+    step("quota", "done", f"{ns}/{name}: {args.size or 'no quota'}")
+    return EXIT_OK
+
+
+def vm_access(kube, args):
+    ns, name = args.namespace, args.name
+    vm = kube.get(K_VM, ns, name)
+    if vm is None:
+        raise ValueError(f"no VM {ns}/{name}")
+    password = Path(args.password_file).read_text().rstrip("\n") if args.password_file else None
+    keys = []
+    for ref in [r for r in (args.keys or "").split(",") if r.strip()]:
+        kns, kname = ref.split("/", 1) if "/" in ref else (ns, ref)
+        kp = kube.get("keypairs.harvesterhci.io", kns, kname)
+        if kp is None:
+            raise ValueError(f"no SSH key {kns}/{kname}")
+        keys.append({"namespace": kns, "name": kname, "public_key": (kp.get("spec") or {}).get("publicKey")})
+    users = [u for u in (args.users or "").split(",")]
+    secret, out = hv.access_credential(vm, args.kind, users, password=password, keys=keys)
+    step("access", "running", f"{'password' if args.kind == 'basic' else 'SSH keys'} for {', '.join(u for u in users if u)} on {ns}/{name}")
+    kube.create(secret)
+    try:
+        kube.replace(out)
+    except KubeError:
+        kube.delete("secrets", ns, secret["metadata"]["name"])
+        raise
+    running = kube.get(K_VMI, ns, name) is not None
+    # vu sur harv1 : un nouvel accès n'est pas mis à jour à chaud
+    # (RestartRequired), comme « Save and Restart » dans Harvester
+    step("access", "done", "the guest agent applies it at the VM's next restart" if running
+         else "the guest agent applies it when the VM starts")
+    return EXIT_OK
+
+
 VM_ACTIONS = {
     "pause": lambda k, a: vm_pause(k, a, True), "unpause": lambda k, a: vm_pause(k, a, False),
     "softreboot": vm_softreboot, "restart": vm_restart, "force-stop": vm_force_stop,
@@ -966,6 +1260,11 @@ VM_ACTIONS = {
     "add-volume": lambda k, a: vm_hotplug(k, a, True), "remove-volume": lambda k, a: vm_hotplug(k, a, False),
     "migrate": vm_migrate, "abort-migration": vm_abort_migration, "template": vm_template,
     "cloudinit": vm_cloudinit,
+    "insert-cdrom": vm_insert_cdrom, "eject-image": vm_eject_image,
+    "add-nic": vm_add_nic, "remove-nic": vm_remove_nic,
+    "cpumem": vm_cpumem, "storage-migrate": vm_storage_migrate,
+    "cancel-storage-migration": lambda k, a: vm_storage_migrate(k, a, cancel=True),
+    "quota": vm_quota, "access": vm_access,
 }
 
 
@@ -1105,6 +1404,18 @@ def main(argv=None):
     sp.add_argument("--network-data", help="cloudinit: file with the network-data")
     sp.add_argument("--guest-agent", action="store_true", help="cloudinit: install qemu-guest-agent")
     sp.add_argument("--ssh-names", help="cloudinit: SSH key pairs shown on the VM, comma separated")
+    sp.add_argument("--image", help="insert-cdrom: the image (namespace/name) to put in the drive")
+    sp.add_argument("--iface", help="add-nic/remove-nic: the interface name")
+    sp.add_argument("--network", help="add-nic: the VM network (namespace/name)")
+    sp.add_argument("--mac", help="add-nic: a MAC address (chosen by the cluster if absent)")
+    sp.add_argument("--cpu", help="cpumem: the new number of vCPUs (sockets)")
+    sp.add_argument("--memory", help="cpumem: the new memory, e.g. 8Gi")
+    sp.add_argument("--target", help="storage-migrate: the target volume (an existing, unused PVC)")
+    sp.add_argument("--size", help="quota: the VM's snapshot quota, e.g. 20Gi (0 removes it)")
+    sp.add_argument("--kind", choices=("basic", "ssh"), help="access: a password, or SSH keys")
+    sp.add_argument("--users", help="access: user names, comma separated")
+    sp.add_argument("--password-file", help="access: file holding the password (never on the command line)")
+    sp.add_argument("--keys", help="access: SSH key pairs (namespace/name), comma separated")
     sp.add_argument("--timeout", type=int, default=3600)
     args = ap.parse_args(argv)
     signal.signal(signal.SIGTERM, _on_signal)

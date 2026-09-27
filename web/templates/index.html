@@ -457,12 +457,21 @@
         <button class="btn btn-sm" id="btn-bulk-clear" data-i18n="namespaces.clearSelection">Clear</button>
       </div>
 
+      <div class="ns-vm-filter-row">
+        <input type="search" id="ns-vm-filter" class="tip" autocomplete="off"
+               data-i18n-placeholder="vms.filterPh" placeholder="Filter: name, IP, node, or a label key=value"
+               data-tip-i18n="vms.filterTip" data-tip="Keep the VMs matching every word: part of the name, an IP, a node, a label (key or key=value)">
+      </div>
       <table class="data-table ns-vm-table" id="ns-vms-table">
         <thead><tr>
           <th class="check-col"><input type="checkbox" id="ns-vms-check-all" data-i18n-title="vms.tip.checkAll" title="Select all visible VMs"></th>
           <th class="sortable" data-sort-by="name"          data-i18n-title="vms.tip.sortName" title="Sort by VM name"><span data-i18n="col.vm">VM</span> <span class="sort-arrow"></span></th>
           <th class="sortable" data-sort-by="phase"         data-i18n-title="vms.tip.sortPhase" title="Sort by VMI phase (Running, Stopped, Failed...)"><span data-i18n="col.phase">Phase</span> <span class="sort-arrow"></span></th>
           <th class="sortable" data-sort-by="runStrategy"   data-i18n-title="vms.tip.sortStrategy" title="Sort by run strategy (Always, Halted, RerunOnFailure, Manual)"><span data-i18n="col.runStrategy">RunStrategy</span> <span class="sort-arrow"></span></th>
+          <th class="sortable" data-sort-by="cpu"    data-i18n-title="vms.tip.sortCpu" title="Sort by vCPUs"><span data-i18n="col.cpu">CPU</span> <span class="sort-arrow"></span></th>
+          <th class="sortable" data-sort-by="memory" data-i18n-title="vms.tip.sortMemory" title="Sort by memory"><span data-i18n="col.memory">Memory</span> <span class="sort-arrow"></span></th>
+          <th class="sortable" data-sort-by="ip"     data-i18n-title="vms.tip.sortIp" title="Sort by IP address"><span data-i18n="col.ip">IP address</span> <span class="sort-arrow"></span></th>
+          <th class="sortable" data-sort-by="node"   data-i18n-title="vms.tip.sortNode" title="Sort by node"><span data-i18n="col.node">Node</span> <span class="sort-arrow"></span></th>
           <th data-i18n="col.action">Actions</th>
         </tr></thead>
         <tbody></tbody>

@@ -712,6 +712,17 @@ In the Cluster view, a host's detail panel has **Configure...**, which opens
 Harvester's host settings in a window, one tab per topic. Every change is a
 tracked action run by `harvester-resources host <action>` (administrators).
 
+Since 1.68.1 the window also has the tabs of a host's page in Harvester,
+read only: **Basics** (IP, role, state, OS, kernel, container runtime,
+kubelet, clock sync with a warning when the host is not in sync, UUID,
+manufacturer, model and serial number when known, and three gauges: CPU and
+memory in use against what VMs and pods can get, Longhorn space promised on
+the host against its disks), **Instances** (the VMs running there, opened
+from their name), **Network** (the cluster network configurations applied
+to the host with their VLANs and state, and its network cards with the bond
+or bridge they belong to) and **Events** (what Kubernetes reported about the
+host).
+
 - **General**: the name shown for the host, its console address (a link
   opens it), its labels (the system ones, including `cpumanager`, Rancher's
   and Longhorn's, are hidden and never touched) and its **host tags**, which

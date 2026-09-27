@@ -811,6 +811,18 @@ configuration d'hôte de Harvester dans une fenêtre, un onglet par sujet.
 Chaque changement est une action suivie, par `harvester-resources host
 <action>` (administrateurs).
 
+Depuis la 1.68.1, la fenêtre a aussi les onglets de la page d'un hôte dans
+Harvester, en lecture : **Essentiel** (IP, rôle, état, système, noyau,
+moteur de conteneurs, kubelet, synchronisation de l'heure avec un
+avertissement quand l'hôte n'est pas à l'heure, UUID, fabricant, modèle et
+numéro de série quand ils sont connus, et trois jauges : CPU et mémoire
+utilisés face à ce que VMs et pods peuvent obtenir, place Longhorn promise
+sur l'hôte face à ses disques), **Instances** (les VMs qui y tournent,
+ouvertes depuis leur nom), **Réseau** (les configurations de réseau de
+cluster appliquées à l'hôte avec leurs VLAN et leur état, et ses cartes
+réseau avec le bond ou le pont dont elles font partie) et **Événements** (ce
+que Kubernetes a signalé sur l'hôte).
+
 - **Général** : le nom affiché de l'hôte, l'adresse de sa console (un lien
   l'ouvre), ses labels (ceux du système, dont `cpumanager`, ceux de Rancher
   et de Longhorn, sont cachés et jamais touchés) et ses **tags d'hôte**, qui

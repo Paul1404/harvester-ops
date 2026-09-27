@@ -1,8 +1,8 @@
 # Parity with the Harvester UI
 
-Status on 2026-09-27, console **v1.68.0**, compared with the **Harvester v1.9** UI (menus taken from the harvester-ui-extension v1.9.0 source and the v1.9 documentation).
+Status on 2026-09-27, console **v1.68.1**, compared with the **Harvester v1.9** UI (menus taken from the harvester-ui-extension v1.9.0 source and the v1.9 documentation).
 
-Of 135 functions of the Harvester UI: **121 done**, **5 partial**, **9 missing**; 2 out of scope. A missing function shows the version it is planned for.
+Of 135 functions of the Harvester UI: **122 done**, **4 partial**, **9 missing**; 2 out of scope. A missing function shows the version it is planned for.
 
 Statuses: Done, Partial (what is missing is said), Missing (planned version), Console only (what Harvester does not have), Out of scope.
 
@@ -35,7 +35,7 @@ Harvester menu: *Hosts*
 | Power (shut down, power on, reboot) | Done | 1.62 | through harvester-seeder in maintenance, as Harvester; also through Redfish in Bare-metal |
 | Out-of-band access (seeder) | Done | 1.62 | verified over IPMI (virtualbmc); Redfish on 443 only |
 | Delete a host (multi-node cluster) | Done | 1.62 | typed name to confirm |
-| Detail: host network, storage, VMs | Partial | 1.39 | Fabric and Storage views |
+| Detail: host network, storage, VMs | Done | 1.68 | Basics, Instances, Network, Events tabs of the host window |
 
 ## Virtual machines: list and actions
 

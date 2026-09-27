@@ -11734,6 +11734,32 @@ def api_host_settings(cluster, node):
     })
 
 
+@app.route("/api/host/<cluster>/<node>/detail")
+@requires_auth
+def api_host_detail(cluster, node):
+    """v1.68.1 : le détail d'un hôte comme sa page dans Harvester (Basics,
+    Instances, Network, Events), en lectures parallèles."""
+    kc = _kubectl_for_cluster(cluster)
+    if not kc:
+        return jsonify({"error": f"unknown cluster: {cluster}"}), 404
+    if _cluster_reachable(kc) is False:
+        return jsonify(_unreachable_payload(cluster, kc)), 200
+    from concurrent.futures import ThreadPoolExecutor
+    reads = {"n": ("nodes", node), "metrics": ("nodes.metrics.k8s.io", node),
+             "lh": (_hh.K_LHNODE, node, "-n", "longhorn-system"),
+             "vmis": ("virtualmachineinstances.kubevirt.io", "-A"), "vls": (_hh.K_VLANSTATUS,),
+             "lms": (_hh.K_LINKMONITOR,),
+             "events": ("events", "-A", "--field-selector", f"involvedObject.kind=Node,involvedObject.name={node}")}
+    with ThreadPoolExecutor(max_workers=len(reads)) as pool:
+        futs = {k: pool.submit(_kubectl_json, kc, "get", *a, timeout=30, cluster=cluster) for k, a in reads.items()}
+        got = {k: f.result() for k, f in futs.items()}
+    if got["n"] is None:
+        return jsonify({"error": f"no host {node}"}), 404
+    items = lambda k: (got[k] or {}).get("items") or []  # noqa: E731
+    return jsonify(_hh.host_detail(got["n"], got["metrics"], got["lh"], items("vmis"), items("vls"),
+                                   items("lms"), items("events")))
+
+
 def _host_do_args(action, b, files):
     """Les options d'un geste sur un hôte, contrôlées avant de lancer l'outil.
     `files` reçoit les fichiers privés à effacer après l'action."""

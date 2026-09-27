@@ -1,8 +1,8 @@
 # Parité avec l'interface de Harvester
 
-État au 2026-09-27, console **v1.68.0**, comparée à l'interface de **Harvester v1.9** (menus relevés dans le code de harvester-ui-extension v1.9.0 et la documentation v1.9).
+État au 2026-09-27, console **v1.68.1**, comparée à l'interface de **Harvester v1.9** (menus relevés dans le code de harvester-ui-extension v1.9.0 et la documentation v1.9).
 
-Sur 135 fonctions de l'interface de Harvester : **121 faites**, **5 partielles**, **9 manquantes** ; 2 hors périmètre. Une fonction manquante porte la version où elle est prévue.
+Sur 135 fonctions de l'interface de Harvester : **122 faites**, **4 partielles**, **9 manquantes** ; 2 hors périmètre. Une fonction manquante porte la version où elle est prévue.
 
 Statuts : Fait, Partiel (ce qui manque est dit), Manquant (version prévue), Console seulement (ce que Harvester n'a pas), Hors périmètre.
 
@@ -35,7 +35,7 @@ Menu Harvester : *Hosts*
 | Alimentation (éteindre, allumer, redémarrer) | Fait | 1.62 | par harvester-seeder en maintenance, comme Harvester ; aussi par Redfish dans Bare-metal |
 | Accès hors bande (seeder) | Fait | 1.62 | vérifié par IPMI (virtualbmc) ; Redfish sur 443 seulement |
 | Supprimer un hôte (cluster à plusieurs nœuds) | Fait | 1.62 | nom tapé pour confirmer |
-| Détail : réseau, stockage, VMs de l'hôte | Partiel | 1.39 | vues Fabrique et Stockage |
+| Détail : réseau, stockage, VMs de l'hôte | Fait | 1.68 | onglets Essentiel, Instances, Réseau, Événements de la fenêtre d'hôte |
 
 ## Machines virtuelles : liste et actions
 

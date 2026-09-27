@@ -42,6 +42,20 @@ NAMESPACES = {"items": [
      "created": "2026-01-01T00:00:00Z", "vms": 0, "volumes": 0, "snapshot_quota": None}]}
 
 
+DETAIL = {"node": "n1", "basics": {
+    "custom_name": "baie 1", "console_url": "", "ip": "172.16.2.61", "role": "management", "os": "Harvester v1.9.0",
+    "kernel": "6.12", "runtime": "containerd://2", "kubelet": "v1.36", "uuid": "u-1", "created": "2026-09-01T10:00:00Z",
+    "ready": True, "unschedulable": False, "maintenance": "", "manufacturer": "HPE", "serial": "USE6236RY1", "model": "",
+    "ntp": {"status": "unsynced", "servers": "pool.lan"},
+    "cpu": {"capacity": 8, "allocatable": 8, "used": 2}, "memory": {"capacity": 16 * GI, "allocatable": 16 * GI, "used": 4 * GI},
+    "storage": {"maximum": 100 * GI, "available": 60 * GI, "scheduled": 50 * GI}},
+    "instances": [{"namespace": "default", "name": "web", "phase": "Running", "ips": ["10.52.0.9"], "cpu": 2,
+                   "memory": GI, "created": None, "migrating": False}],
+    "vlans": [{"cluster_network": "data", "vlan_config": "data-all", "vlans": [20], "ready": True, "message": ""}],
+    "nics": [{"name": "enp1s0", "type": "device", "state": "up", "mac": "52:54:00:00:00:01", "master": "mgmt-bo"}],
+    "events": [{"type": "Warning", "reason": "Rebooted", "message": "node rebooted", "count": 1, "last": "2026-09-27T08:00:00Z"}]}
+
+
 def fulfill(route, body, status=200):
     route.fulfill(status=status, content_type="application/json", body=json.dumps(body))
 
@@ -61,6 +75,7 @@ def ui(context, flask_server):
         sent.append((req.url.split("://")[1].split("/", 1)[1], req.post_data_json))
         fulfill(route, {"action_id": "host00000162"}, 202)
     page.route("**/api/host/harv-fake/n1/settings", lambda r, q: fulfill(r, state["settings"]))
+    page.route("**/api/host/harv-fake/n1/detail", lambda r, q: fulfill(r, DETAIL))
     page.route("**/api/host/harv-fake/n1/do/**", writes)
     page.route("**/api/ns-admin/harv-fake", lambda r, q: writes(r, q) if q.method == "POST" else fulfill(r, NAMESPACES))
     page.route("**/api/ns-admin/harv-fake/*/do/**", writes)
@@ -87,10 +102,12 @@ def open_host(page, tab="general"):
     return w
 
 
-def test_the_host_window_has_the_six_tabs_and_saves_only_changes(ui):
+def test_the_host_window_has_its_tabs_and_saves_only_changes(ui):
     page, sent, _, _ = ui
     w = open_host(page)
-    expect(w.locator("[data-hs-tab]")).to_have_count(6)
+    # v1.68.1 : Basics, Instances, Network et Events, comme dans Harvester
+    assert w.locator("[data-hs-tab]").evaluate_all("els => els.map(e => e.dataset.hsTab)") == [
+        "basics", "instances", "network", "general", "disks", "hugepages", "ksm", "oob", "events", "actions"]
     for b in w.locator("[data-hs-tab]").all():
         assert b.get_attribute("data-tip")
     expect(w.locator('[data-hs="name"]')).to_have_text("baie 1 (n1)")
@@ -251,3 +268,23 @@ def test_switching_tabs_rereads_the_host(ui):
     page.evaluate("document.querySelector('.hs-win [data-hs-tab=\"oob\"]').click()")
     page.wait_for_timeout(800)
     expect(w.locator('[data-hs="name"]')).to_have_text("baie 9 (n1)")
+
+
+def test_the_host_detail_shows_what_harvester_shows(ui):
+    """v1.68.1 : Basics (jauges, NTP désynchronisé dit), Instances, Network,
+    Events, lus par /detail."""
+    page, _, _, _ = ui
+    page.evaluate("HostSettings.open('harv-fake', 'n1', { tab: 'basics' })")
+    w = host_win(page)
+    body = w.locator('[data-hs="body"]')
+    expect(body.locator(".hs-gauge")).to_have_count(3, timeout=8000)
+    expect(body.locator(".sto-finding")).to_contain_text("pool.lan")               # NTP désynchronisé
+    expect(body.locator(".hs-dl")).to_contain_text("USE6236RY1")
+    expect(body.locator(".hs-gauge").nth(0)).to_contain_text("25 %")
+    w.locator('[data-hs-tab="instances"]').click()
+    expect(body.locator('[data-hs="open-vm"]')).to_have_text("web")
+    w.locator('[data-hs-tab="network"]').click()
+    expect(body).to_contain_text("data-all")
+    expect(body).to_contain_text("mgmt-bo")
+    w.locator('[data-hs-tab="events"]').click()
+    expect(body).to_contain_text("node rebooted")

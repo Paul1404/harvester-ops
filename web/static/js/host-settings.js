@@ -17,15 +17,21 @@ const HostSettings = (() => {
     .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
     .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
   const icon = (n, size = 14) => (window.Icons ? Icons.svg(n, { size }) : '');
-  const TABS = ['general', 'disks', 'hugepages', 'ksm', 'oob', 'actions'];
-  const TAB_ICON = { general: 'general', disks: 'disk', hugepages: 'compute', ksm: 'metrics', oob: 'power', actions: 'tools' };
+  // v1.68.1 : Basics, Instances, Network et Events, comme la page d'un hôte
+  // dans Harvester, avant les onglets de configuration
+  const TABS = ['basics', 'instances', 'network', 'general', 'disks', 'hugepages', 'ksm', 'oob', 'events', 'actions'];
+  const DETAIL_TABS = ['basics', 'instances', 'network', 'events'];
+  const TAB_ICON = { basics: 'info', instances: 'vm', network: 'network', general: 'general', disks: 'disk',
+                     hugepages: 'compute', ksm: 'metrics', oob: 'power', events: 'activity', actions: 'tools' };
   const TAB_LABEL = {
+    basics: () => tr('hs.tab.basics'), instances: () => tr('hs.tab.instances'), network: () => tr('hs.tab.network'),
     general: () => tr('hs.tab.general'), disks: () => tr('hs.tab.disks'), hugepages: () => tr('hs.tab.hugepages'),
-    ksm: () => tr('hs.tab.ksm'), oob: () => tr('hs.tab.oob'), actions: () => tr('hs.tab.actions'),
+    ksm: () => tr('hs.tab.ksm'), oob: () => tr('hs.tab.oob'), events: () => tr('hs.tab.events'), actions: () => tr('hs.tab.actions'),
   };
   const TAB_TIP = {
+    basics: () => tr('hs.tip.basics'), instances: () => tr('hs.tip.instances'), network: () => tr('hs.tip.network'),
     general: () => tr('hs.tip.general'), disks: () => tr('hs.tip.disks'), hugepages: () => tr('hs.tip.hugepages'),
-    ksm: () => tr('hs.tip.ksm'), oob: () => tr('hs.tip.oob'), actions: () => tr('hs.tip.actions'),
+    ksm: () => tr('hs.tip.ksm'), oob: () => tr('hs.tip.oob'), events: () => tr('hs.tip.events'), actions: () => tr('hs.tip.actions'),
   };
   const THP_ENABLED = ['always', 'madvise', 'never'];
   const THP_SHMEM = ['always', 'within_size', 'advise', 'never', 'deny', 'force'];
@@ -86,7 +92,15 @@ const HostSettings = (() => {
   async function reload(w, soft = false) {
     let fresh;
     try {
-      fresh = await call('GET', `${base(w)}/settings`);
+      // v1.68.1 : le détail (Basics, Instances, Network, Events) se lit à part
+      const [st, det] = await Promise.all([call('GET', `${base(w)}/settings`),
+        DETAIL_TABS.includes(w.tab) ? call('GET', `${base(w)}/detail`) : Promise.resolve(w.detail)]);
+      fresh = st;
+      if (DETAIL_TABS.includes(w.tab)) {
+        const sameDetail = JSON.stringify(det) === JSON.stringify(w.detail);
+        w.detail = det;
+        if (!sameDetail && soft && !w.dirty && JSON.stringify(st) === JSON.stringify(w.data)) { showTab(w, w.tab); return; }
+      }
       w.root.querySelector('[data-hs="err"]').textContent = '';
     } catch (e) {
       w.root.querySelector('[data-hs="err"]').textContent = e.message;
@@ -108,7 +122,11 @@ const HostSettings = (() => {
       b.setAttribute('aria-selected', on ? 'true' : 'false');
     });
     const host = w.root.querySelector('[data-hs="body"]');
-    if (!w.data) { host.innerHTML = `<p class="hint">${esc(tr('hs.loading'))}</p>`; return; }
+    if (!w.data || (DETAIL_TABS.includes(tab) && !w.detail)) {
+      host.innerHTML = `<p class="hint">${esc(tr('hs.loading'))}</p>`;
+      if (w.data && DETAIL_TABS.includes(tab)) reload(w);
+      return;
+    }
     host.innerHTML = RENDER[tab](w, w.data);
     w.dirty = false;
     WIRE[tab] && WIRE[tab](w, host, w.data);
@@ -148,7 +166,71 @@ const HostSettings = (() => {
       <button type="button" class="btn-icon-sm tip" data-kv-del data-tip="${esc(tr('vm.edit.tKvDel'))}">×</button></div>`;
   }
 
+  // -- v1.68.1 : le détail de l'hôte -------------------------------------------
+  const pct = (used, total) => (used != null && total ? Math.round((used / total) * 100) : null);
+  function gauge(label, used, total, fmt, tip) {
+    const p = pct(used, total);
+    return `<div class="hs-gauge tip" data-tip="${esc(tip)}"><div class="hs-gauge-head"><strong>${esc(label)}</strong>
+        <span class="res-dim">${used == null ? '–' : esc(fmt(used))} / ${total == null ? '–' : esc(fmt(total))}${p == null ? '' : ` · ${p} %`}</span></div>
+      <div class="hs-gauge-bar"><i style="width:${Math.min(100, p || 0)}%"></i></div></div>`;
+  }
+  const kv = (label, value) => (value ? `<dt>${esc(label)}</dt><dd>${esc(value)}</dd>` : '');
+  const cores = (n) => `${Math.round(n * 10) / 10}`;
+  const when = (iso) => { try { return iso ? new Date(iso).toLocaleString() : ''; } catch { return iso || ''; } };
+  const ROLE = () => ({ management: tr('hs.role.management'), compute: tr('hs.role.compute'), witness: tr('hs.role.witness') });
+
+  const DETAIL = {
+    basics: (w, d) => {
+      const b = d.basics;
+      const ntp = b.ntp.status === 'unsynced' ? `<div class="sto-finding sev-action"><div class="sto-finding-title">${icon('warn')} ${esc(tr('hs.ntp.unsynced', { servers: b.ntp.servers || '–' }))}</div></div>`
+        : b.ntp.status === 'disabled' ? `<div class="sto-finding sev-action"><div class="sto-finding-title">${icon('warn')} ${esc(tr('hs.ntp.disabled'))}</div></div>` : '';
+      return `${ntp}<div class="hs-gauges">
+          ${gauge(tr('hs.gauge.cpu'), b.cpu.used, b.cpu.allocatable, cores, tr('hs.tip.gaugeCpu'))}
+          ${gauge(tr('hs.gauge.memory'), b.memory.used, b.memory.allocatable, size, tr('hs.tip.gaugeMemory'))}
+          ${gauge(tr('hs.gauge.storage'), b.storage.scheduled, b.storage.maximum, size, tr('hs.tip.gaugeStorage'))}
+        </div>
+        <dl class="hs-dl">
+          ${kv(tr('hs.customName'), b.custom_name)}${kv(tr('hs.b.ip'), b.ip)}${kv(tr('hs.b.role'), ROLE()[b.role] || b.role)}
+          ${kv(tr('hs.b.state'), `${b.ready ? tr('hs.b.ready') : tr('hs.b.notReady')}${b.unschedulable ? ` · ${tr('hs.b.cordoned')}` : ''}${b.maintenance ? ` · ${tr('hs.b.maintenance', { state: b.maintenance })}` : ''}`)}
+          ${kv(tr('hs.b.os'), b.os)}${kv(tr('hs.b.kernel'), b.kernel)}${kv(tr('hs.b.runtime'), b.runtime)}${kv(tr('hs.b.kubelet'), b.kubelet)}
+          ${kv(tr('hs.b.ntp'), b.ntp.servers ? `${b.ntp.servers} (${b.ntp.status})` : b.ntp.status)}
+          ${kv(tr('hs.b.created'), when(b.created))}${kv(tr('hs.b.uuid'), b.uuid)}
+          ${kv(tr('hs.b.manufacturer'), b.manufacturer)}${kv(tr('hs.b.model'), b.model)}${kv(tr('hs.b.serial'), b.serial)}
+          ${kv(tr('hs.consoleUrl'), b.console_url)}
+        </dl>`;
+    },
+    instances: (w, d) => (d.instances.length ? `<table class="data-table"><thead><tr><th>${esc(tr('res.col.name'))}</th>
+        <th>${esc(tr('hs.col.phase'))}</th><th>${esc(tr('hs.col.ips'))}</th><th>CPU</th><th>${esc(tr('hs.gauge.memory'))}</th></tr></thead><tbody>
+        ${d.instances.map(v => `<tr><td><a href="#" class="tip" data-hs="open-vm" data-ns="${esc(v.namespace)}" data-vm="${esc(v.name)}" data-tip="${esc(tr('hs.tip.openVm'))}"><strong>${esc(v.name)}</strong></a>
+            <div class="res-dim">${esc(v.namespace)}</div></td>
+          <td>${esc(v.phase)}${v.migrating ? ` <span class="badge info">${esc(tr('hs.migrating'))}</span>` : ''}</td>
+          <td>${v.ips.map(ip => `<code>${esc(ip)}</code>`).join(' ') || '–'}</td><td>${esc(v.cpu)}</td>
+          <td>${v.memory ? esc(size(v.memory)) : '–'}</td></tr>`).join('')}</tbody></table>`
+      : `<p class="form-hint">${esc(tr('hs.noInstances'))}</p>`),
+    network: (w, d) => `${d.vlans.length ? `<h4 class="hs-sub">${esc(tr('hs.net.vlans'))}</h4><table class="data-table"><thead><tr>
+          <th>${esc(tr('hs.net.cn'))}</th><th>${esc(tr('hs.net.config'))}</th><th>VLAN</th><th>${esc(tr('res.col.state'))}</th></tr></thead><tbody>
+          ${d.vlans.map(v => `<tr><td><strong>${esc(v.cluster_network)}</strong></td><td>${esc(v.vlan_config)}</td>
+            <td>${v.vlans.map(x => esc(x)).join(', ') || '–'}</td>
+            <td>${v.ready ? `<span class="badge ok">${esc(tr('na.ready'))}</span>` : `<span class="badge fail tip" data-tip="${esc(v.message)}">${esc(tr('na.failed'))}</span>`}</td></tr>`).join('')}
+          </tbody></table>` : `<p class="form-hint">${esc(tr('hs.net.noVlan'))}</p>`}
+        <h4 class="hs-sub">${esc(tr('hs.net.nics'))}</h4>
+        ${d.nics.length ? `<table class="data-table"><thead><tr><th>${esc(tr('res.col.name'))}</th><th>${esc(tr('res.col.type'))}</th>
+          <th>${esc(tr('res.col.state'))}</th><th>MAC</th><th>${esc(tr('hs.net.master'))}</th></tr></thead><tbody>
+          ${d.nics.map(n => `<tr><td><code>${esc(n.name)}</code></td><td>${esc(n.type)}</td>
+            <td><span class="badge ${n.state === 'up' ? 'ok' : 'warn'}">${esc(n.state)}</span></td><td><code>${esc(n.mac)}</code></td>
+            <td>${esc(n.master || '–')}</td></tr>`).join('')}</tbody></table>` : `<p class="form-hint">${esc(tr('hs.net.noNics'))}</p>`}`,
+    events: (w, d) => (d.events.length ? `<table class="data-table"><thead><tr><th>${esc(tr('res.col.type'))}</th>
+        <th>${esc(tr('hs.ev.reason'))}</th><th>${esc(tr('hs.ev.message'))}</th><th>${esc(tr('hs.ev.count'))}</th><th>${esc(tr('hs.ev.last'))}</th></tr></thead><tbody>
+        ${d.events.map(e => `<tr><td><span class="badge ${e.type === 'Warning' ? 'warn' : 'dim'}">${esc(e.type)}</span></td>
+          <td>${esc(e.reason)}</td><td class="res-wrap">${esc(e.message)}</td><td>${esc(e.count)}</td><td>${esc(when(e.last))}</td></tr>`).join('')}
+        </tbody></table>` : `<p class="form-hint">${esc(tr('hs.ev.none'))}</p>`),
+  };
+
   const RENDER = {
+    basics: (w) => DETAIL.basics(w, w.detail),
+    instances: (w) => DETAIL.instances(w, w.detail),
+    network: (w) => DETAIL.network(w, w.detail),
+    events: (w) => DETAIL.events(w, w.detail),
     general: (w, d) => `<form class="of-form hs-form" autocomplete="off">
       <div class="hs-grid">
         ${field(tr('hs.customName'), `<input type="text" name="custom_name" maxlength="120" value="${esc(d.custom_name)}" placeholder="${esc(d.node)}">`, tr('hs.tip.customName'))}
@@ -301,6 +383,12 @@ const HostSettings = (() => {
   const sameList = (a, b) => a.length === b.length && a.every((x, i) => x === b[i]);
 
   const WIRE = {
+    instances: (w, host) => {
+      host.querySelectorAll('[data-hs="open-vm"]').forEach(a => a.addEventListener('click', (e) => {
+        e.preventDefault();
+        if (window.VMEdit && VMEdit.open) VMEdit.open(w.cluster, a.dataset.ns, a.dataset.vm);
+      }));
+    },
     general: (w, host, d) => {
       const form = host.querySelector('form');
       host.querySelector('[data-hs="kv-add"]').addEventListener('click', () => {
@@ -439,9 +527,9 @@ const HostSettings = (() => {
     const id = `host-${cluster}-${node}`;
     let first = opts.tab;
     if (!first) { try { first = localStorage.getItem('harvester_ops_host_tab'); } catch { /* stockage indisponible */ } }
-    if (!TABS.includes(first)) first = 'general';
+    if (!TABS.includes(first)) first = 'basics';
     const panel = FloatingPanels.open({
-      id, icon: 'node', width: 760, height: 620,
+      id, icon: 'node', width: 900, height: 640,
       title: tr('hs.title', { node }),
       restoreSpec: { type: 'host-settings', args: { cluster, node, tab: first } },
       entity: { key: `${cluster}|node/${node}`, label: node },

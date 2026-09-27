@@ -5062,3 +5062,12 @@ td.tpl-acts .btn + .btn { margin-left: 4px; }
 /* v1.68.0 : périphériques */
 .dev-table td { vertical-align: top; }
 .dev-card select[data-dev="node"] { max-width: 180px; }
+/* v1.68.1 : détail d'un hôte (jauges, identité) */
+.hs-gauges { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 10px; margin-bottom: 12px; }
+.hs-gauge { border: 1px solid var(--border); border-radius: 8px; padding: 8px 10px; }
+.hs-gauge-head { display: flex; justify-content: space-between; gap: 8px; flex-wrap: wrap; font-size: 12.5px; }
+.hs-gauge-bar { height: 6px; border-radius: 3px; background: var(--border); overflow: hidden; margin-top: 6px; }
+.hs-gauge-bar i { display: block; height: 100%; background: var(--accent); }
+.hs-dl { display: grid; grid-template-columns: max-content 1fr; gap: 4px 14px; margin: 0; font-size: 13px; }
+.hs-dl dt { color: var(--text-dim); }
+.hs-dl dd { margin: 0; overflow-wrap: anywhere; }

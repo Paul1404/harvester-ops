@@ -4,6 +4,21 @@ All notable changes to this project will be documented here.
 Format inspired by [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 This file summarises each minor release; per-patch detail lives in `git log`.
 
+## [1.68.1] - 2026-09-27 - A host's page, as in Harvester
+
+### Added
+- The host window gets the tabs of a host's page in Harvester, read only:
+  **Basics** (identity, OS, kernel, runtime, clock sync with a warning when
+  out of sync, hardware when known, CPU, memory and storage gauges),
+  **Instances** (the VMs running there), **Network** (cluster network
+  configurations with their VLANs and state, network cards and their bond or
+  bridge) and **Events**. One read, `/api/host/<cluster>/<node>/detail`.
+
+### Tests
+- Library: quantities, roles, the gathered detail. In Chromium: the ten tabs
+  and the four new ones. Real: harv1 and a bench host, compared with
+  kubectl (OS, kernel, NTP state, the VMs on the host, its cards).
+
 ## [1.68.0] - 2026-09-27 - PCI, USB and SR-IOV devices; backup gaps closed
 
 ### Added

@@ -403,3 +403,108 @@ def bmc_error(inv):
                 short.append(f"{name}: {why}")
             return "; ".join(short[:6]) or (c.get("message") or "unreachable")[:200]
     return None
+
+
+# ---------------------------------------------------------------------------
+# v1.68.1 : le détail d'un hôte, comme sa page dans Harvester (Basics,
+# Instances, Network, Events) ; lecture seule
+# ---------------------------------------------------------------------------
+
+K_VLANSTATUS = "vlanstatuses.network.harvesterhci.io"
+K_LINKMONITOR = "linkmonitors.network.harvesterhci.io"
+ANN_NTP = "node.harvesterhci.io/ntp-service"
+_SI = {"n": 1e-9, "u": 1e-6, "m": 1e-3, "": 1, "k": 1e3, "M": 1e6, "G": 1e9, "T": 1e12,
+       "Ki": 2 ** 10, "Mi": 2 ** 20, "Gi": 2 ** 30, "Ti": 2 ** 40}
+
+
+def qty(v):
+    """Quantité Kubernetes en nombre (cœurs pour un CPU, octets pour une
+    mémoire) : « 8 », « 250m », « 123456789n », « 65730264Ki »."""
+    m = re.match(r"^\s*([0-9]+(?:\.[0-9]+)?)\s*(n|u|m|k|M|G|T|Ki|Mi|Gi|Ti)?\s*$", str(v if v is not None else ""))
+    return float(m.group(1)) * _SI[m.group(2) or ""] if m else None
+
+
+def node_roles(node):
+    labels = ((node or {}).get("metadata") or {}).get("labels") or {}
+    if "node-role.harvesterhci.io/witness" in labels:
+        return "witness"
+    if "node-role.kubernetes.io/control-plane" in labels or "node-role.kubernetes.io/master" in labels:
+        return "management"
+    return "compute"
+
+
+def host_detail(node, metrics=None, lh_node=None, vmis=(), vlanstatuses=(), linkmonitors=(), events=(), limit=50):
+    m = (node or {}).get("metadata") or {}
+    name = m.get("name")
+    ann, labels = m.get("annotations") or {}, m.get("labels") or {}
+    st = (node or {}).get("status") or {}
+    info = st.get("nodeInfo") or {}
+    cap, alloc = st.get("capacity") or {}, st.get("allocatable") or {}
+    usage = (metrics or {}).get("usage") or {}
+    disks = (((lh_node or {}).get("status") or {}).get("diskStatus") or {}).values()
+    try:
+        ntp = json.loads(ann.get(ANN_NTP) or "{}")
+    except ValueError:
+        ntp = {}
+    ready = next((c for c in st.get("conditions") or [] if c.get("type") == "Ready"), {})
+    basics = {
+        "custom_name": ann.get(ANN_NAME) or "", "console_url": ann.get(ANN_CONSOLE) or "",
+        "ip": next((a.get("address") for a in st.get("addresses") or [] if a.get("type") == "InternalIP"), ""),
+        "role": node_roles(node), "os": info.get("osImage") or "", "kernel": info.get("kernelVersion") or "",
+        "runtime": info.get("containerRuntimeVersion") or "", "kubelet": info.get("kubeletVersion") or "",
+        "uuid": info.get("systemUUID") or "", "created": m.get("creationTimestamp"),
+        "ready": ready.get("status") == "True", "unschedulable": bool(((node or {}).get("spec") or {}).get("unschedulable")),
+        "maintenance": ann.get(ANN_MAINT) or "",
+        "manufacturer": labels.get("manufacturer") or "", "serial": labels.get("serialNumber") or "",
+        "model": labels.get("model") or "",
+        "ntp": {"status": ntp.get("ntpSyncStatus") or "", "servers": ntp.get("currentNtpServers") or ""},
+        "cpu": {"capacity": qty(cap.get("cpu")), "allocatable": qty(alloc.get("cpu")), "used": qty(usage.get("cpu"))},
+        "memory": {"capacity": qty(cap.get("memory")), "allocatable": qty(alloc.get("memory")),
+                   "used": qty(usage.get("memory"))},
+        "storage": {"maximum": sum(int(d.get("storageMaximum") or 0) for d in disks),
+                    "available": sum(int(d.get("storageAvailable") or 0) for d in disks),
+                    "scheduled": sum(int(d.get("storageScheduled") or 0) for d in disks)},
+    }
+    instances = []
+    for v in vmis or []:
+        vs = v.get("status") or {}
+        if vs.get("nodeName") != name:
+            continue
+        dom = ((v.get("spec") or {}).get("domain") or {})
+        c = dom.get("cpu") or {}
+        mem = (dom.get("memory") or {}).get("guest") or ((dom.get("resources") or {}).get("limits") or {}).get("memory")
+        vm_ = (v.get("metadata") or {})
+        instances.append({"namespace": vm_.get("namespace"), "name": vm_.get("name"), "phase": vs.get("phase") or "",
+                          "ips": [i.get("ipAddress") for i in vs.get("interfaces") or [] if i.get("ipAddress")],
+                          "cpu": (c.get("cores") or 1) * (c.get("sockets") or 1) * (c.get("threads") or 1),
+                          "memory": qty(mem), "created": vm_.get("creationTimestamp"),
+                          "migrating": bool(vs.get("migrationState") and not (vs["migrationState"].get("completed")))})
+    vlans = []
+    for s in vlanstatuses or []:
+        ss = s.get("status") or {}
+        if ss.get("node") != name:
+            continue
+        cond = next((c for c in ss.get("conditions") or [] if c.get("type") == "ready"), {})
+        vlans.append({"cluster_network": ss.get("clusterNetwork"), "vlan_config": ss.get("vlanConfig"),
+                      "vlans": sorted(a.get("vlanID") for a in ss.get("localAreas") or [] if a.get("vlanID") is not None),
+                      "ready": cond.get("status") == "True", "message": cond.get("message") or ""})
+    links = {}
+    for lm in linkmonitors or []:
+        for li in (((lm.get("status") or {}).get("linkStatus") or {}).get(name) or []):
+            links[li.get("index")] = li
+    nics = []
+    for li in sorted(links.values(), key=lambda x: (x.get("type") != "device", x.get("name") or "")):
+        master = links.get(li.get("masterIndex"), {}).get("name") if li.get("masterIndex") else ""
+        nics.append({"name": li.get("name"), "type": li.get("type") or "", "state": li.get("state") or "",
+                     "mac": li.get("mac") or "", "master": master or ""})
+    evs = []
+    for e in events or []:
+        io = e.get("involvedObject") or e.get("regarding") or {}
+        if io.get("kind") != "Node" or io.get("name") != name:
+            continue
+        evs.append({"type": e.get("type") or "", "reason": e.get("reason") or "", "message": e.get("message") or e.get("note") or "",
+                    "count": e.get("count") or 1,
+                    "last": e.get("lastTimestamp") or e.get("eventTime") or ((e.get("metadata") or {}).get("creationTimestamp"))})
+    evs.sort(key=lambda x: x["last"] or "", reverse=True)
+    return {"node": name, "basics": basics, "instances": sorted(instances, key=lambda x: (x["namespace"], x["name"])),
+            "vlans": vlans, "nics": nics, "events": evs[:limit]}

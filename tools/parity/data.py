@@ -3,7 +3,7 @@
 # Statuts : ok (fait), part (partiel), todo (manquant), plus (console seulement), na (hors périmètre).
 # v : version où c'est arrivé (ok/part) ou prévue (todo).
 
-AS_OF = "1.68.0"
+AS_OF = "1.68.1"
 DATE = "2026-09-27"
 
 S = []  # sections
@@ -36,7 +36,7 @@ r("ok", "1.62", "Activer / désactiver le CPU manager", "Enable / disable CPU ma
 r("ok", "1.62", "Alimentation (éteindre, allumer, redémarrer)", "Power (shut down, power on, reboot)", "par harvester-seeder en maintenance, comme Harvester ; aussi par Redfish dans Bare-metal", "through harvester-seeder in maintenance, as Harvester; also through Redfish in Bare-metal")
 r("ok", "1.62", "Accès hors bande (seeder)", "Out-of-band access (seeder)", "vérifié par IPMI (virtualbmc) ; Redfish sur 443 seulement", "verified over IPMI (virtualbmc); Redfish on 443 only")
 r("ok", "1.62", "Supprimer un hôte (cluster à plusieurs nœuds)", "Delete a host (multi-node cluster)", "nom tapé pour confirmer", "typed name to confirm")
-r("part", "1.39", "Détail : réseau, stockage, VMs de l'hôte", "Detail: host network, storage, VMs", "vues Fabrique et Stockage", "Fabric and Storage views")
+r("ok", "1.68", "Détail : réseau, stockage, VMs de l'hôte", "Detail: host network, storage, VMs", "onglets Essentiel, Instances, Réseau, Événements de la fenêtre d'hôte", "Basics, Instances, Network, Events tabs of the host window")
 
 sec("vms", "Machines virtuelles : liste et actions", "Virtual machines: list and actions", "Virtual Machines", "Virtual Machines")
 r("ok", "1.2", "Liste par namespace, état, stratégie", "List per namespace, state, run strategy")

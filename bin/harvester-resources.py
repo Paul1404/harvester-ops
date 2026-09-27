@@ -102,7 +102,11 @@ il s'utilise aussi seul.
   harvester-resources kubeconfig create --cluster harv1 --name ci --role view [--namespace default] --duration 24h --out ci.yaml
   harvester-resources device pci-enable|pci-disable --cluster harvlab --name harvlab-n3-000005000 [--name ...]
   harvester-resources device usb-enable|usb-disable --cluster harvlab --name harvlab-n1-0627-0001-002002
-  harvester-resources device sriov --cluster harvlab --name harvlab-n3-enp5s0 --vfs 2     (0 désactive)
+  harvester-resources device sriov --cluster harvlab --name harvlab-n3-enp6s0 --vfs 2     (0 désactive)
+  harvester-resources upgrade version-add --cluster harv1 --version-file version.yaml
+  harvester-resources upgrade start --cluster harv1 --version v1.9.0 [--version-file version.yaml] [--no-log]
+  harvester-resources upgrade start --cluster harv1 --iso harvester-v1.9.0-amd64.iso --checksum SHA512   (airgap)
+  harvester-resources upgrade follow|logs|dismiss|abort --cluster harv1 --name hvst-upgrade-xxxxx [--out logs.zip]
   harvester-resources kubeconfig revoke --cluster harv1 --name ci
 
 Sorties : 0 fait, 1 échec, 2 refusé par le contrôle, 3 annulé. Les étapes
@@ -112,7 +116,10 @@ relaie au dock.
 
 import argparse
 import json
+import os
+import re
 import signal
+import subprocess
 import sys
 import time
 from pathlib import Path
@@ -131,6 +138,7 @@ import hv_advanced as hadv  # noqa: E402
 import hv_net as hnet  # noqa: E402
 import hv_settings as hset  # noqa: E402
 import hv_devices as hdev  # noqa: E402
+import hv_upgrade as hup  # noqa: E402
 
 EXIT_OK, EXIT_FAIL, EXIT_BLOCKED, EXIT_CANCELLED = 0, 1, 2, 3
 K_ADDON = "addons.harvesterhci.io"
@@ -2556,6 +2564,298 @@ def cmd_device(args):
     return rc
 
 
+# ---------------------------------------------------------------------------
+# v1.69.0 : mise à jour de Harvester (versions, lancement en ligne ou depuis
+# un ISO de la console, suivi jusqu'au bout, journaux, Dismiss, abandon)
+# ---------------------------------------------------------------------------
+
+HARVESTER_PROXY = "/api/v1/namespaces/harvester-system/services/https:harvester:8443/proxy"
+
+
+def _server_version(kube):
+    return ((kube.get("settings.harvesterhci.io", None, "server-version") or {}).get("value")) or ""
+
+
+def _serve_iso(path, port, host_hint, advertise=None):
+    """Guichet à jeton pour un ISO : HEAD avec la taille, GET entier ou par
+    plage (le pod de Harvester lit les 128 premiers octets, puis l'importeur
+    CDI télécharge le tout ; vu dans image/cdi/common.go). Plusieurs
+    requêtes par jeton ; arrêté par l'appelant."""
+    import secrets
+    import threading
+    from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+    token = secrets.token_urlsafe(24)
+    size = Path(path).stat().st_size
+    stats = {"bytes": 0}
+
+    class H(BaseHTTPRequestHandler):
+        def log_message(self, *a):
+            pass
+
+        def _range(self):
+            m = re.match(r"^bytes=(\d+)-(\d*)$", self.headers.get("Range") or "")
+            if not m:
+                return None
+            a = int(m.group(1))
+            b = int(m.group(2)) if m.group(2) else size - 1
+            return (a, min(b, size - 1)) if a < size else None
+
+        def _head(self, body):
+            if self.path.split("?", 1)[0] != f"/iso/{token}":
+                self.send_response(404)
+                self.end_headers()
+                return None
+            rng = self._range() if body else None
+            if rng:
+                self.send_response(206)
+                self.send_header("Content-Range", f"bytes {rng[0]}-{rng[1]}/{size}")
+                self.send_header("Content-Length", str(rng[1] - rng[0] + 1))
+            else:
+                self.send_response(200)
+                self.send_header("Content-Length", str(size))
+            self.send_header("Accept-Ranges", "bytes")
+            self.send_header("Content-Type", "application/octet-stream")
+            self.end_headers()
+            return rng or (0, size - 1)
+
+        def do_HEAD(self):   # noqa: N802
+            self._head(False)
+
+        def do_GET(self):   # noqa: N802
+            rng = self._head(True)
+            if rng is None:
+                return
+            left = rng[1] - rng[0] + 1
+            with open(path, "rb") as f:
+                f.seek(rng[0])
+                while left > 0:
+                    chunk = f.read(min(1 << 20, left))
+                    if not chunk:
+                        break
+                    try:
+                        self.wfile.write(chunk)
+                    except (BrokenPipeError, ConnectionResetError):
+                        return
+                    left -= len(chunk)
+                    stats["bytes"] += len(chunk)
+
+    try:
+        srv = ThreadingHTTPServer(("0.0.0.0", int(port)), H)
+    except OSError as e:
+        raise ValueError(f"port {port} cannot be used on this machine ({e.strerror}): "
+                         "choose another one (--port, HARVESTER_OPS_IMAGE_UPLOAD_PORT)") from None
+    srv.daemon_threads = True
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    host = advertise or _local_ip_for(host_hint or "127.0.0.1")
+    return srv, f"http://{host}:{srv.server_address[1]}/iso/{token}", stats
+
+
+def _iso_release(path):
+    """Le harvester-release.yaml de l'ISO, lu par xorriso sans le monter."""
+    import tempfile
+    with tempfile.TemporaryDirectory() as d:
+        out = Path(d) / "hr.yaml"
+        r = subprocess.run(["xorriso", "-osirrox", "on", "-indev", str(path), "-extract", "/harvester-release.yaml",
+                            str(out)], capture_output=True, text=True, timeout=120)
+        if r.returncode != 0 or not out.exists():
+            raise ValueError(f"{Path(path).name} is not a Harvester ISO (no harvester-release.yaml)")
+        return hup.release_info(out.read_text())
+
+
+def _sha512(path):
+    import hashlib
+    h = hashlib.sha512()
+    with open(path, "rb") as f:
+        for chunk in iter(lambda: f.read(1 << 22), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def _follow_upgrade(kube, name, timeout, sleep=None, now=None, api_grace=2700):
+    """Suit l'Upgrade jusqu'au bout. L'API du cluster disparaît pendant la
+    mise à jour de RKE2 et le redémarrage d'un nœud (surtout en mononœud) :
+    une coupure de moins de 45 min n'est pas un échec."""
+    sleep, now = sleep or time.sleep, now or time.time      # résolus à l'appel (tests)
+    deadline = now() + timeout
+    last, down_since = None, None
+    while now() < deadline:
+        try:
+            u = kube.get(hup.K_UPGRADE, hup.NS, name)
+            img = None
+            if u and ((u.get("status") or {}).get("imageID")):
+                ins, _, iname = u["status"]["imageID"].partition("/")
+                img = kube.get(hup.K_IMAGE, ins, iname)
+        except (KubeError, subprocess.SubprocessError, OSError):
+            if down_since is None:
+                down_since = now()
+                step("upgrade", "running", "the cluster API does not answer (expected while Kubernetes and the "
+                                           "hosts restart): waiting")
+            elif now() - down_since > api_grace:
+                step("upgrade", "error", f"the cluster API has not answered for {int(api_grace / 60)} min")
+                return EXIT_FAIL
+            sleep(15)
+            continue
+        if down_since is not None:
+            step("upgrade", "running", f"the cluster API answers again after {int(now() - down_since)} s")
+            down_since = None
+        res, msg = hup.settled(u)
+        v = hup.upgrade_view(u, img) if u else None
+        if v and v["image_progress"] is not None and not any(
+                c["type"] == "ImageReady" and c["status"] == "True" for c in v["conditions"]):
+            msg = f"{msg}, ISO {v['image_progress']} %"
+        if msg != last:
+            step("upgrade", "running" if res is None else ("done" if res else "error"), msg)
+            last = msg
+        if res is True:
+            return EXIT_OK
+        if res is False:
+            return EXIT_FAIL
+        sleep(15)
+    step("upgrade", "error", f"not finished after {timeout} s; the upgrade goes on in Harvester, follow it again")
+    return EXIT_FAIL
+
+
+def cmd_upgrade(args):
+    kube = kube_from(args)
+    act = args.action
+    if act == "version-add":
+        v = hup.version_from_yaml(Path(args.version_file).read_text())
+        if kube.get(hup.K_VERSION, hup.NS, v["name"]) is not None:
+            raise ValueError(f"version {v['name']} already exists")
+        kube.create(hup.version_manifest(v["name"], v["iso_url"], v["checksum"], v["release_date"],
+                                         v["min_upgradable"], v["tags"]))
+        ok, why = hup.eligible(_server_version(kube), v["name"], v["min_upgradable"])
+        step("upgrade", "done", f"version {v['name']} added" + ("" if ok else f" (not usable from this cluster: {why})"))
+        return EXIT_OK
+    if act == "version-delete":
+        name = hup.check_name(args.name, "version")
+        kube.delete(hup.K_VERSION, hup.NS, name)
+        step("upgrade", "done", f"version {name} deleted")
+        return EXIT_OK
+    if act in ("dismiss", "abort", "resume-node", "follow", "logs"):
+        name = hup.check_name(args.name, "upgrade")
+        u = kube.get(hup.K_UPGRADE, hup.NS, name)
+        if u is None:
+            raise ValueError(f"no upgrade {name}")
+        v = hup.upgrade_view(u)
+        if act == "dismiss":
+            if v["completed"] is None:
+                raise ValueError("the upgrade is still running")
+            kube.patch(hup.K_UPGRADE, hup.NS, name, {"metadata": {"labels": {hup.L_READ: "true"}}})
+            step("upgrade", "done", f"{name} dismissed: Harvester removes its log collector and volume")
+            return EXIT_OK
+        if act == "abort":
+            if not v["can_abort"]:
+                raise ValueError("Harvester refuses to stop an upgrade once its hosts are being upgraded"
+                                 if v["completed"] is None else "the upgrade is already over")
+            kube.delete(hup.K_UPGRADE, hup.NS, name)
+            step("upgrade", "running", f"{name} deleted: Harvester cleans up (repository, ISO image, logs)")
+            return _wait(kube, hup.K_UPGRADE, hup.NS, name,
+                         lambda o: (True, f"{name} stopped and cleaned up") if o is None else (None, "cleaning up"),
+                         900, label="upgrade")
+        if act == "resume-node":
+            kube.patch(hup.K_UPGRADE, hup.NS, name, hup.pause_patch(u, args.node, "unpause"))
+            step("upgrade", "done", f"{args.node} resumed")
+            return EXIT_OK
+        if act == "follow":
+            return _follow_upgrade(kube, name, args.timeout)
+        # journaux : fabriquer une archive puis la télécharger (proxy de service)
+        log = v["log_name"]
+        if not log:
+            raise ValueError("this upgrade keeps no logs (disabled, or already dismissed)")
+        if not args.out:
+            raise ValueError("--out: where to write the archive")
+        base = f"{HARVESTER_PROXY}/v1/harvester/harvesterhci.io.upgradelogs/{hup.NS}/{log}"
+        archive = json.loads(kube.run("create", "--raw", f"{base}?action=generate", "-f", "-", input="{}") or '""')
+        step("upgrade", "running", f"packaging the logs: {archive}")
+
+        def ready(o):
+            a = (((o or {}).get("status") or {}).get("archives") or {}).get(archive) or {}
+            if a.get("reason"):
+                return False, a["reason"]
+            return (True, f"archive {archive} ready") if a.get("ready") else (None, "packaging")
+        if _wait(kube, hup.K_UPGRADELOG, hup.NS, log, ready, 900, label="upgrade") != EXIT_OK:
+            return EXIT_FAIL
+        out = Path(args.out)
+        out.touch(mode=0o600)
+        with open(out, "wb") as fh:
+            for chunk in kube.raw_stream(f"{base}/download?archiveName={archive}"):
+                fh.write(chunk)
+        step("upgrade", "done", f"logs saved ({out.stat().st_size} bytes)")
+        return EXIT_OK
+
+    # start
+    current = _server_version(kube)
+    ups = kube.list(hup.K_UPGRADE, hup.NS)
+    busy = hup.running(ups)
+    if busy:
+        raise ValueError(f"upgrade {busy} is still in progress")
+    pend = hup.cleanup_pending(ups)
+    if pend:
+        raise ValueError("Harvester is still cleaning up after " + ", ".join(pend))
+    srv = None
+    try:
+        if args.iso:
+            iso = Path(args.iso)
+            if not iso.is_file():
+                raise ValueError(f"no ISO {args.iso}")
+            rel = _iso_release(iso)
+            ok, why = hup.eligible(current, rel["harvester"], rel["min_upgradable"])
+            if ok is False:
+                raise ValueError(f"{iso.name} ({rel['harvester']}) cannot upgrade this cluster ({current}): {why}")
+            if args.checksum:
+                step("upgrade", "running", f"checking the SHA-512 of {iso.name}")
+                if _sha512(iso) != args.checksum.strip().lower():
+                    raise ValueError(f"{iso.name}: SHA-512 mismatch, the file is damaged")
+            srv, url, stats = _serve_iso(iso, args.port, kube.server_host(), args.advertise)
+            step("upgrade", "running", f"{iso.name} ({rel['harvester']}) offered to the cluster from "
+                                       f"{url.split('/iso/')[0]}")
+            img = kube.create(hup.os_image_manifest(f"harvester-{rel['harvester']}", url, args.checksum or ""))
+            iname = img["metadata"]["name"]
+
+            def imported(o):
+                st = (o or {}).get("status") or {}
+                for c in st.get("conditions") or []:
+                    if c.get("type") == "RetryLimitExceeded" and c.get("status") == "True":
+                        return False, c.get("message") or "import failed"
+                if any(c.get("type") == "Imported" and c.get("status") == "True" for c in st.get("conditions") or []):
+                    return True, f"ISO imported ({stats['bytes']} bytes sent)"
+                return None, f"importing the ISO: {st.get('progress') or 0} %"
+            if _wait(kube, hup.K_IMAGE, hup.NS, iname, imported, 7200, label="upgrade") != EXIT_OK:
+                return EXIT_FAIL
+            man = hup.upgrade_manifest(image=f"{hup.NS}/{iname}", log=not args.no_log,
+                                       skip_single=args.skip_single_replica)
+            target = rel["harvester"]
+        else:
+            name = hup.check_name(args.version, "version")
+            ver = kube.get(hup.K_VERSION, hup.NS, name)
+            if ver is None and args.version_file:
+                v = hup.version_from_yaml(Path(args.version_file).read_text())
+                ver = kube.create(hup.version_manifest(v["name"], v["iso_url"], v["checksum"], v["release_date"],
+                                                       v["min_upgradable"], v["tags"]))
+                step("upgrade", "running", f"version {v['name']} added")
+            if ver is None:
+                raise ValueError(f"no version {name}: add it first")
+            ok, why = hup.eligible(current, name, (ver.get("spec") or {}).get("minUpgradableVersion"))
+            if ok is False:
+                raise ValueError(f"{name} cannot upgrade this cluster ({current}): {why}")
+            man = hup.upgrade_manifest(version=name, log=not args.no_log, skip_single=args.skip_single_replica)
+            target = name
+        made = kube.create(man)
+        uname = made["metadata"]["name"]
+        step("upgrade", "running", f"{uname}: {current} -> {target} started")
+        if srv is not None:
+            # l'ISO est importé : le guichet n'est plus utile
+            srv.shutdown()
+            srv.server_close()
+            srv = None
+        return _follow_upgrade(kube, uname, args.timeout)
+    finally:
+        if srv is not None:
+            srv.shutdown()
+            srv.server_close()
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(prog="harvester-resources", description=__doc__.split("\n\n")[0])
     sub = ap.add_subparsers(dest="cmd", required=True)
@@ -2935,6 +3235,25 @@ def main(argv=None):
     sp.add_argument("--vfs", type=int, default=0, help="sriov: number of virtual functions, 0 to disable")
     sp.add_argument("--user", default="admin", help="enable: the userName written in the claim")
     sp.add_argument("--timeout", type=int, default=600)
+    sp = sub.add_parser("upgrade", help="upgrade Harvester: versions, start (online or from an ISO), follow, logs")
+    sp.set_defaults(fn=cmd_upgrade)
+    sp.add_argument("action", choices=("version-add", "version-delete", "start", "follow", "logs", "dismiss",
+                                       "abort", "resume-node"))
+    sp.add_argument("--cluster")
+    sp.add_argument("--kubeconfig")
+    sp.add_argument("--name", help="the upgrade (follow, logs, dismiss, abort, resume-node) or the version (version-delete)")
+    sp.add_argument("--version", help="start: the Version to upgrade to")
+    sp.add_argument("--version-file", help="version-add, start: a published version.yaml")
+    sp.add_argument("--iso", help="start: an ISO of the console, served to the cluster (air-gapped path)")
+    sp.add_argument("--checksum", help="start --iso: its SHA-512, checked before serving it")
+    sp.add_argument("--port", default=os.environ.get("HARVESTER_OPS_IMAGE_UPLOAD_PORT", "8092"))
+    sp.add_argument("--advertise", help="start --iso: the address the cluster reaches the console at")
+    sp.add_argument("--no-log", action="store_true", help="start: do not collect the upgrade logs")
+    sp.add_argument("--skip-single-replica", action="store_true",
+                    help="start: skip Harvester's check of detached single-replica volumes")
+    sp.add_argument("--node", help="resume-node: the paused host")
+    sp.add_argument("--out", help="logs: where to write the archive (mode 0600)")
+    sp.add_argument("--timeout", type=int, default=6 * 3600)
     args = ap.parse_args(argv)
     signal.signal(signal.SIGTERM, _on_signal)
     try:

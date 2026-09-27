@@ -3,7 +3,7 @@
 # Statuts : ok (fait), part (partiel), todo (manquant), plus (console seulement), na (hors périmètre).
 # v : version où c'est arrivé (ok/part) ou prévue (todo).
 
-AS_OF = "1.68.1"
+AS_OF = "1.69.0"
 DATE = "2026-09-27"
 
 S = []  # sections
@@ -21,8 +21,8 @@ sec("dashboard", "Tableau de bord", "Dashboard", "Dashboard", "Dashboard")
 r("ok", "1.2", "Compteurs nœuds, VMs, volumes", "Host, VM and volume counts", "Vue d'ensemble", "Overview tiles")
 r("ok", "1.62", "Capacité CPU, mémoire, stockage", "CPU, memory and storage capacity", "usage réel (metrics.k8s.io), réservé, stockage écrit et promis", "live usage (metrics.k8s.io), reserved, storage written and promised")
 r("ok", "1.62", "Événements du cluster (hôtes, VMs, volumes, images)", "Cluster events (hosts, VMs, volumes, images)", "onglet Événements de l'aperçu, filtre avertissements", "Overview Events tab, warnings filter")
-r("todo", "1.69", "Métriques du cluster et des VMs (rancher-monitoring)", "Cluster and VM metrics (rancher-monitoring)", "", "")
-r("todo", "1.69", "Bouton Mettre à jour Harvester", "Upgrade Harvester button", "", "")
+r("todo", "1.70", "Métriques du cluster et des VMs (rancher-monitoring)", "Cluster and VM metrics (rancher-monitoring)", "", "")
+r("ok", "1.69", "Bouton Mettre à jour Harvester", "Upgrade Harvester button", "dans l'en-tête de l'aperçu et sur server-version", "in the Overview header and on server-version")
 
 sec("hosts", "Hôtes", "Hosts", "Hosts", "Hosts")
 r("ok", "1.0", "Liste des hôtes, état, rôles", "Host list, state, roles")
@@ -157,8 +157,8 @@ r("ok", "1.60", "YAML des sauvegardes et planifications", "Backup and schedule Y
 
 sec("monitoring", "Monitoring et logging", "Monitoring and logging", "Monitoring & Logging", "Monitoring & Logging")
 r("ok", "1.57", "Activer rancher-monitoring / rancher-logging et leur configuration", "Enable rancher-monitoring / rancher-logging and their configuration", "par les add-ons", "through add-ons")
-r("todo", "1.69", "Configurations Alertmanager (récepteurs)", "Alertmanager configurations (receivers)")
-r("todo", "1.69", "Flows, cluster flows, outputs, cluster outputs", "Flows, cluster flows, outputs, cluster outputs")
+r("todo", "1.70", "Configurations Alertmanager (récepteurs)", "Alertmanager configurations (receivers)")
+r("todo", "1.70", "Flows, cluster flows, outputs, cluster outputs", "Flows, cluster flows, outputs, cluster outputs")
 
 sec("advanced", "Avancé", "Advanced", "Advanced", "Advanced")
 r("ok", "1.64", "Templates : versions, par défaut, lancer une version, supprimer", "Templates: versions, default, launch a version, delete")
@@ -176,8 +176,12 @@ r("ok", "1.67", "Réglages de Harvester (les 40 : NTP, proxy, CA, TLS, overcommi
   "typed forms, checked beforehand as the webhook would, applied state, masked secrets, warning on settings that can cut an access")
 
 sec("upgrade", "Mise à jour de Harvester", "Harvester upgrade", "Upgrade", "Upgrade")
-r("todo", "1.69", "Mettre à jour (version, notes, suivi par nœud, journaux)", "Upgrade (version, notes, per-node progress, logs)")
-r("todo", "1.69", "Mise à jour airgap (image envoyée)", "Air-gapped upgrade (uploaded image)")
+r("ok", "1.69", "Mettre à jour (version, notes, suivi par nœud, journaux)", "Upgrade (version, notes, per-node progress, logs)",
+  "éligibilité dite avant le téléchargement de l'ISO, suivi qui tient à la coupure de l'API, abandon tant que Harvester l'accepte",
+  "eligibility said before the ISO download, follow that survives the API outage, abort while Harvester accepts it")
+r("ok", "1.69", "Mise à jour airgap (image envoyée)", "Air-gapped upgrade (uploaded image)",
+  "ISO du magasin de la console, SHA-512 vérifié, servi par le guichet de la console",
+  "ISO from the console's store, SHA-512 checked, served by the console's counter")
 
 sec("support", "Support", "Support", "Support", "Support")
 r("ok", "1.67", "Bundle de support", "Support bundle", "celui de Harvester (créer, suivre, télécharger, supprimer) et celui de la console (anonymisé)", "Harvester's (create, follow, download, delete) and the console's own (anonymised)")
@@ -195,7 +199,7 @@ r("part", "1.50", "Rôles de virtualisation (chart Harvester RBAC, Rancher 2.14.
   "Virtualization roles (Harvester RBAC chart, Rancher 2.14.1, experimental)",
   "appliqués d'office par le jeton Rancher ; vérifié avec un membre du cluster, pas encore avec les rôles de ce chart",
   "applied by the Rancher token; checked with a cluster member, not yet with this chart's roles")
-r("todo", "1.69", "Projets Rancher : namespaces rangés par projet, quotas de ressources",
+r("todo", "1.71", "Projets Rancher : namespaces rangés par projet, quotas de ressources",
   "Rancher projects: namespaces grouped by project, resource quotas")
 r("part", "1.31", "Membres du cluster", "Cluster members", "comptes du cluster : activer, désactiver, admin ; pas encore les rôles Rancher", "cluster accounts: enable, disable, admin; Rancher roles not yet")
 r("plus", "1.57", "Connexion obligatoire, comptes et rôles propres à la console",
@@ -203,7 +207,7 @@ r("plus", "1.57", "Connexion obligatoire, comptes et rôles propres à la consol
   "sans Rancher ; Harvester seul n'a qu'un compte admin", "without Rancher; standalone Harvester has a single admin")
 
 sec("addonmenus", "Menus apportés par des add-ons", "Menus brought by add-ons", "VM Imports / VM Migration", "VM Imports / VM Migration")
-r("todo", "1.69", "Imports de VM (VMware, OpenStack, OVA)", "VM imports (VMware, OpenStack, OVA)")
+r("todo", "1.71", "Imports de VM (VMware, OpenStack, OVA)", "VM imports (VMware, OpenStack, OVA)")
 r("na", "", "Migration par forklift-operator", "Migration through forklift-operator", "add-on absent de la documentation 1.9", "add-on missing from the 1.9 docs")
 
 sec("console", "Ce que la console ajoute", "What the console adds", "", "")

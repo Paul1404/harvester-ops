@@ -181,6 +181,12 @@
           <button type="button" class="sub-tab" data-overview-tab="cluster"><span class="tab-icon" data-icon="node"></span> <span data-i18n="overview.tabCluster">Cluster</span></button>
           <button type="button" class="sub-tab tip" data-overview-tab="events" data-tip-i18n="ev.tip.tab" data-i18n-title="ev.tip.tab" title="The cluster events, by hosts, VMs, volumes and images, as on Harvester's dashboard"><span class="tab-icon" data-icon="activity"></span> <span data-i18n="ev.tab">Events</span></button>
         </div>
+        <!-- v1.69.0 : le bouton Upgrade du tableau de bord de Harvester -->
+        <div class="section-actions">
+          <button type="button" id="btn-upgrade" class="btn btn-sm btn-secondary tip"
+                  data-tip-i18n="upg.t.open" data-i18n-title="upg.t.open" title="Upgrade Harvester: versions, progress, logs">
+            <span data-icon="upload"></span> <span data-i18n="upg.open">Upgrade</span></button>
+        </div>
       </div>
 
       <!-- Metrics subtab — the classic landing view -->
@@ -1046,6 +1052,7 @@
   <script src="/static/js/ovnextra.js"></script>
   <script src="/static/js/advanced.js"></script>
   <script src="/static/js/devices.js"></script>
+  <script src="/static/js/upgrade.js"></script>
 <script src="/static/js/versions.js"></script>
 <script src="/static/js/console-accounts.js"></script>
 <script src="/static/js/user-menu.js"></script>

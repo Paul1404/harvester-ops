@@ -5071,3 +5071,20 @@ td.tpl-acts .btn + .btn { margin-left: 4px; }
 .hs-dl { display: grid; grid-template-columns: max-content 1fr; gap: 4px 14px; margin: 0; font-size: 13px; }
 .hs-dl dt { color: var(--text-dim); }
 .hs-dl dd { margin: 0; overflow-wrap: anywhere; }
+/* v1.69.0 : mise à jour de Harvester */
+.upg-head { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
+.upg-card { padding: 10px 12px; margin-bottom: 12px; }
+.upg-steps { list-style: none; margin: 8px 0; padding: 0; display: grid; gap: 4px; }
+.upg-step { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; font-size: 13px; }
+.upg-step.upg-ok { color: var(--done); }
+.upg-step.upg-fail { color: var(--error); }
+.upg-step.upg-dim { color: var(--text-dim); }
+.upg-step .res-error, .upg-step .res-dim { flex-basis: 100%; padding-left: 20px; }
+.upg-bar { margin: 8px 0; font-size: 12.5px; }
+.upg-sources { display: flex; gap: 16px; margin: 6px 0; }
+.upg-checks { list-style: none; margin: 4px 0 8px; padding: 0; font-size: 13px; display: grid; gap: 2px; }
+.upg-checks .upg-fail { color: var(--warn); }
+.upg-vlist { list-style: none; padding: 0; margin: 6px 0; display: grid; gap: 4px; font-size: 12.5px; }
+.upg-vlist li { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.upg-versions summary { cursor: pointer; margin: 6px 0; }
+/* v1.70.0 : Monitoring & Logging */

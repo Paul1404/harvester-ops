@@ -1054,6 +1054,52 @@ given back to its driver after; two virtual functions created on the igb,
 one passed then given back, SR-IOV refused off while it was taken, then
 disabled; the tablet passed to a VM on another host and given back.
 
+### Upgrading Harvester (1.69.0)
+
+**Upgrade**, in the Overview header (and on the `server-version` setting, as
+in Harvester), opens a window per cluster.
+
+- **Before**: the current version, and two ways to go:
+  - **a version**: a Harvester `Version` object. The list says which ones
+    this cluster can reach, with the reason Harvester would give; Harvester
+    itself only checks that after downloading the 8 GB ISO. A version is
+    added from its published `version.yaml` (the console reads it) or
+    deleted. When Harvester's version checker is on, it deletes the versions
+    it does not offer itself at its next hourly check: start soon after
+    adding one;
+  - **an ISO of the console** (the Bare-metal store): the air-gapped path.
+    The console reads the Harvester version inside the ISO, checks its
+    SHA-512 (Harvester does not; the published `.sha512` file is used when it
+    sits next to the ISO), serves it to the cluster through its token
+    counter, waits for Harvester to import it, then starts the upgrade.
+
+  Options: collect the upgrade logs (Harvester keeps them in a 1 GiB volume
+  until the upgrade is dismissed; without rancher-logging it deploys its own
+  collector), skip the check of detached single-replica volumes. The checks
+  Harvester's webhook would refuse on are listed beforehand (another upgrade
+  running or cleaning up, hosts not ready or cordoned, degraded volumes on
+  three hosts or more, backups running, schedules not suspended, add-ons
+  changing state, Harvester's charts not ready). The release notes of the
+  target are linked, and "I have read and understood the upgrade
+  instructions" is required, as in Harvester.
+- **During**: each step with its time (logs, ISO downloaded with its
+  percentage, repository, images preloaded, system services, hosts,
+  completed), the state of every host (a host paused by the manual mode of
+  `upgrade-config` can be resumed), what the new version brings. The start
+  is an action followed to the end in the dock; the cluster API disappears
+  while Kubernetes and the hosts restart, and the console keeps following
+  (up to 45 minutes without an answer). **Follow** attaches a new action to
+  a running upgrade, after a console restart for instance.
+- **After**: success, or the cause of the failure (Harvester puts it in the
+  reason of the Completed condition, or in the first failed step, or in a
+  host); **Logs** packages and downloads the upgrade logs; **Dismiss** lets
+  Harvester remove the log collector and its volume. **Abort** deletes the
+  upgrade while Harvester still accepts it, before its hosts are touched
+  (Harvester then cleans up, its logs and ISO image included).
+
+Administrators only. On the command line: `harvester-resources upgrade
+version-add|version-delete|start|follow|logs|dismiss|abort|resume-node`.
+
 ## 4. Cluster API: downstream RKE2 clusters (console + CLI)
 
 Create and operate Kubernetes clusters whose nodes are Harvester VMs,

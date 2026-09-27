@@ -196,6 +196,10 @@ const Advanced = (() => {
   }
 
   function actions(s) {
+    // v1.69.0 : « Upgrade » sur server-version, comme dans Harvester
+    if (s.name === 'server-version') {
+      return `<button type="button" class="btn btn-sm btn-secondary tip" data-adv="upgrade" data-tip="${esc(tr('upg.t.open'))}">${icon('upload')} ${esc(tr('upg.open'))}</button>`;
+    }
     if (s.readonly) return `<span class="res-dim tip" data-tip="${esc(tr('adv.t.readonly'))}">${esc(tr('adv.readonly'))}</span>`;
     if (s.elsewhere) {
       return `<button type="button" class="btn btn-sm btn-secondary tip" data-adv="elsewhere" data-tip="${esc(tr('adv.t.elsewhere'))}">${icon('network')} ${esc(tr('adv.openNetwork'))}</button>`;
@@ -236,6 +240,7 @@ const Advanced = (() => {
     const again = () => setTimeout(load, 1500);
     if (act === 'refresh') return load();
     if (act === 'group') { cur.group = b.dataset.group; return renderSettings(); }
+    if (act === 'upgrade' && window.Upgrade) return Upgrade.open(c);
     const s = ((cur.data && cur.data.items) || []).find(x => x.name === b.closest('[data-setting]')?.dataset.setting);
     if (act === 'elsewhere' && window.Sections) return Sections.open('network', 'clusternets');
     if (act === 'edit' && s) return s.kind === 'backup' ? openBackupTarget(c, s, again) : openSetting(c, s, again);

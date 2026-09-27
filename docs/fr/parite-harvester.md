@@ -1,8 +1,8 @@
 # Parité avec l'interface de Harvester
 
-État au 2026-09-27, console **v1.68.1**, comparée à l'interface de **Harvester v1.9** (menus relevés dans le code de harvester-ui-extension v1.9.0 et la documentation v1.9).
+État au 2026-09-27, console **v1.69.0**, comparée à l'interface de **Harvester v1.9** (menus relevés dans le code de harvester-ui-extension v1.9.0 et la documentation v1.9).
 
-Sur 135 fonctions de l'interface de Harvester : **122 faites**, **4 partielles**, **9 manquantes** ; 2 hors périmètre. Une fonction manquante porte la version où elle est prévue.
+Sur 135 fonctions de l'interface de Harvester : **125 faites**, **4 partielles**, **6 manquantes** ; 2 hors périmètre. Une fonction manquante porte la version où elle est prévue.
 
 Statuts : Fait, Partiel (ce qui manque est dit), Manquant (version prévue), Console seulement (ce que Harvester n'a pas), Hors périmètre.
 
@@ -15,8 +15,8 @@ Menu Harvester : *Dashboard*
 | Compteurs nœuds, VMs, volumes | Fait | 1.2 | Vue d'ensemble |
 | Capacité CPU, mémoire, stockage | Fait | 1.62 | usage réel (metrics.k8s.io), réservé, stockage écrit et promis |
 | Événements du cluster (hôtes, VMs, volumes, images) | Fait | 1.62 | onglet Événements de l'aperçu, filtre avertissements |
-| Métriques du cluster et des VMs (rancher-monitoring) | Manquant | prévue 1.69 |  |
-| Bouton Mettre à jour Harvester | Manquant | prévue 1.69 |  |
+| Métriques du cluster et des VMs (rancher-monitoring) | Manquant | prévue 1.70 |  |
+| Bouton Mettre à jour Harvester | Fait | 1.69 | dans l'en-tête de l'aperçu et sur server-version |
 
 ## Hôtes
 
@@ -198,8 +198,8 @@ Menu Harvester : *Monitoring & Logging*
 | Fonction | Statut | Version | Précision |
 |---|---|---|---|
 | Activer rancher-monitoring / rancher-logging et leur configuration | Fait | 1.57 | par les add-ons |
-| Configurations Alertmanager (récepteurs) | Manquant | prévue 1.69 |  |
-| Flows, cluster flows, outputs, cluster outputs | Manquant | prévue 1.69 |  |
+| Configurations Alertmanager (récepteurs) | Manquant | prévue 1.70 |  |
+| Flows, cluster flows, outputs, cluster outputs | Manquant | prévue 1.70 |  |
 
 ## Avancé
 
@@ -225,8 +225,8 @@ Menu Harvester : *Upgrade*
 
 | Fonction | Statut | Version | Précision |
 |---|---|---|---|
-| Mettre à jour (version, notes, suivi par nœud, journaux) | Manquant | prévue 1.69 |  |
-| Mise à jour airgap (image envoyée) | Manquant | prévue 1.69 |  |
+| Mettre à jour (version, notes, suivi par nœud, journaux) | Fait | 1.69 | éligibilité dite avant le téléchargement de l'ISO, suivi qui tient à la coupure de l'API, abandon tant que Harvester l'accepte |
+| Mise à jour airgap (image envoyée) | Fait | 1.69 | ISO du magasin de la console, SHA-512 vérifié, servi par le guichet de la console |
 
 ## Support
 
@@ -246,7 +246,7 @@ Menu Harvester : *Authentication / Rancher*
 |---|---|---|---|
 | Connexion par Rancher (ses fournisseurs d'identité), droits de la personne | Fait | 1.50 | comme Harvester importé dans Rancher (Virtualization Management) : les appels partent avec le jeton de la personne, les droits Rancher du cluster et du projet s'appliquent |
 | Rôles de virtualisation (chart Harvester RBAC, Rancher 2.14.1, expérimental) | Partiel | 1.50 | appliqués d'office par le jeton Rancher ; vérifié avec un membre du cluster, pas encore avec les rôles de ce chart |
-| Projets Rancher : namespaces rangés par projet, quotas de ressources | Manquant | prévue 1.69 |  |
+| Projets Rancher : namespaces rangés par projet, quotas de ressources | Manquant | prévue 1.71 |  |
 | Membres du cluster | Partiel | 1.31 | comptes du cluster : activer, désactiver, admin ; pas encore les rôles Rancher |
 | Connexion obligatoire, comptes et rôles propres à la console | Console seulement | 1.57 | sans Rancher ; Harvester seul n'a qu'un compte admin |
 
@@ -256,7 +256,7 @@ Menu Harvester : *VM Imports / VM Migration*
 
 | Fonction | Statut | Version | Précision |
 |---|---|---|---|
-| Imports de VM (VMware, OpenStack, OVA) | Manquant | prévue 1.69 |  |
+| Imports de VM (VMware, OpenStack, OVA) | Manquant | prévue 1.71 |  |
 | Migration par forklift-operator | Hors périmètre |  | add-on absent de la documentation 1.9 |
 
 ## Ce que la console ajoute

@@ -1184,6 +1184,55 @@ fonctions virtuelles créées sur l'igb, l'une passée puis rendue, le SR-IOV
 refusé à l'arrêt tant qu'elle était prise, puis désactivé ; la tablette
 passée à une VM d'un autre hôte puis rendue.
 
+### Mettre à jour Harvester (1.69.0)
+
+**Mettre à jour**, dans l'en-tête de l'Aperçu (et sur le réglage
+`server-version`, comme dans Harvester), ouvre une fenêtre par cluster.
+
+- **Avant** : la version actuelle, et deux chemins :
+  - **une version** : un objet `Version` de Harvester. La liste dit celles
+    que ce cluster peut atteindre, avec la raison que donnerait Harvester ;
+    Harvester lui-même ne le vérifie qu'après avoir téléchargé l'ISO de
+    8 Go. Une version s'ajoute depuis son `version.yaml` publié (la console
+    le lit) ou se supprime. Quand le vérificateur de versions de Harvester
+    est actif, il supprime à son prochain passage (toutes les heures) les
+    versions qu'il ne propose pas lui-même : lancer peu après en avoir
+    ajouté une ;
+  - **un ISO de la console** (le magasin de Bare-metal) : le chemin airgap.
+    La console lit la version de Harvester dans l'ISO, vérifie son SHA-512
+    (Harvester ne le fait pas ; le fichier `.sha512` publié est utilisé
+    quand il est posé à côté de l'ISO), le sert au cluster par son guichet à
+    jeton, attend que Harvester l'ait importé, puis lance la mise à jour.
+
+  Options : collecter les journaux de la mise à jour (Harvester les garde
+  dans un volume de 1 Gio jusqu'au classement ; sans rancher-logging il
+  déploie son propre collecteur), sauter le contrôle des volumes détachés à
+  une réplique. Les refus que le webhook de Harvester opposerait sont dits
+  d'avance (autre mise à jour en cours ou en nettoyage, hôtes pas prêts ou
+  isolés, volumes dégradés à partir de trois hôtes, sauvegardes en cours,
+  planifications non suspendues, add-ons en transition, charts de Harvester
+  pas prêts). Les notes de version de la cible sont liées, et « J'ai lu et
+  compris les instructions de mise à jour » est exigé, comme dans Harvester.
+- **Pendant** : chaque étape avec son heure (journaux, ISO téléchargé avec
+  son pourcentage, dépôt, images préchargées, services système, hôtes,
+  terminé), l'état de chaque hôte (un hôte mis en pause par le mode manuel
+  d'`upgrade-config` peut être repris), ce qu'apporte la nouvelle version.
+  Le lancement est une action suivie jusqu'au bout dans le dock ; l'API du
+  cluster disparaît pendant le redémarrage de Kubernetes et des hôtes, et la
+  console continue de suivre (jusqu'à 45 minutes sans réponse). **Suivre**
+  rattache une nouvelle action à une mise à jour en cours, après un
+  redémarrage de la console par exemple.
+- **Après** : la réussite, ou la cause de l'échec (Harvester la met dans la
+  raison de la condition Completed, ou dans la première étape en échec, ou
+  dans un hôte) ; **Journaux** empaquette et télécharge les journaux de la
+  mise à jour ; **Classer** laisse Harvester retirer le collecteur de
+  journaux et son volume. **Abandonner** supprime la mise à jour tant que
+  Harvester l'accepte, avant qu'elle ne touche aux hôtes (Harvester nettoie
+  alors, journaux et image ISO compris).
+
+Réservé aux administrateurs. En ligne de commande : `harvester-resources
+upgrade version-add|version-delete|start|follow|logs|dismiss|abort|resume-node`.
+
 ## 4. Cluster API : clusters RKE2 en aval (console + CLI)
 
 Créer et exploiter des clusters Kubernetes dont les nœuds sont des VMs

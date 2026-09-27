@@ -671,6 +671,7 @@ ADMIN_ONLY_PREFIXES = (
     "/api/hv-settings/",        # v1.67.0 : réglages de Harvester (certains coupent l'accès)
     "/api/hv-support/",         # v1.67.0 : paquet de support, kubeconfigs délivrés
     "/api/devices/",            # v1.68.0 : passthrough PCI et USB, SR-IOV (détache un périphérique de l'hôte)
+    "/api/upgrade/",            # v1.69.0 : mise à jour de Harvester (redémarre les hôtes)
     "/api/users",               # gestion des comptes de la console
     "/api/harvester-users",     # comptes du cluster Harvester
     "/api/kubeovn/",            # réseaux kube-ovn : un changement peut couper des VMs
@@ -10838,6 +10839,7 @@ import hv_backups as _hb  # noqa: E402
 import hv_net as _hnet  # noqa: E402
 import hv_settings as _hset  # noqa: E402
 import hv_devices as _hdev  # noqa: E402
+import hv_upgrade as _hup  # noqa: E402
 import hv_objects as _ho  # noqa: E402
 
 # v1.58.0 : les listes de la fenêtre Backups, servies par la même route
@@ -12881,6 +12883,192 @@ def api_hostdevices(cluster):
                      "display_name": f"USB · {(st.get('description') or name)[:60]} ({st.get('nodeName')} · "
                                      f"{'passthrough' if st.get('enabled') else 'host'})"})
     return jsonify(rows)
+
+
+# ---------------------------------------------------------------------------
+# v1.69.0 : mise à jour de Harvester. Lecture de l'état complet ; gestes par
+# bin/harvester-resources.py upgrade (lancement suivi jusqu'au bout).
+# ---------------------------------------------------------------------------
+
+_UPGRADE_DO = ("version-add", "version-delete", "start", "follow", "dismiss", "abort", "resume-node", "logs")
+_ISO_RELEASE_CACHE = {}
+_UPG_LOGS = {}                    # jeton -> (chemin, horodatage) des archives de journaux à retirer une fois
+
+
+def _iso_release_info(path):
+    """harvester-release.yaml d'un ISO du magasin, mis en cache par date."""
+    key = (str(path), path.stat().st_mtime)
+    if key not in _ISO_RELEASE_CACHE:
+        try:
+            with tempfile.TemporaryDirectory() as d:
+                out = Path(d) / "hr.yaml"
+                r = subprocess.run(["xorriso", "-osirrox", "on", "-indev", str(path), "-extract",
+                                    "/harvester-release.yaml", str(out)], capture_output=True, text=True, timeout=60)
+                _ISO_RELEASE_CACHE[key] = _hup.release_info(out.read_text()) if r.returncode == 0 and out.exists() else None
+        except (OSError, ValueError, subprocess.SubprocessError):
+            _ISO_RELEASE_CACHE[key] = None
+    return _ISO_RELEASE_CACHE[key]
+
+
+def _iso_sha512(name):
+    """Le SHA-512 publié d'un ISO du magasin, s'il est posé à côté (fichier
+    .sha512 de la release, une ligne « <hash>  <nom> »)."""
+    for f in _iso_dir().glob("*.sha512"):
+        try:
+            for line in f.read_text().splitlines():
+                parts = line.split()
+                if len(parts) == 2 and parts[1].lstrip("*") == name and _hup.SHA512_RE.match(parts[0].lower()):
+                    return parts[0].lower()
+        except OSError:
+            continue
+    return ""
+
+
+@app.route("/api/upgrade/<cluster>")
+@requires_auth
+def api_upgrade(cluster):
+    """Tout ce que montre la fenêtre de mise à jour : version courante,
+    versions et leur éligibilité, dernière mise à jour et sa progression,
+    ISO de la console utilisables, pré-contrôles."""
+    kc = _kubectl_for_cluster(cluster)
+    if not kc:
+        return jsonify({"error": f"unknown cluster: {cluster}"}), 404
+    if _cluster_reachable(kc) is False:
+        return jsonify(_unreachable_payload(cluster, kc)), 200
+    from concurrent.futures import ThreadPoolExecutor
+    reads = {"sv": ("settings.harvesterhci.io", "server-version"), "checker": ("settings.harvesterhci.io", "upgrade-checker-enabled"),
+             "versions": (_hup.K_VERSION, "-n", _hup.NS), "upgrades": (_hup.K_UPGRADE, "-n", _hup.NS),
+             "nodes": ("nodes",), "volumes": ("volumes.longhorn.io", "-n", "longhorn-system"),
+             "backups": ("virtualmachinebackups.harvesterhci.io", "-A"), "schedules": ("schedulevmbackups.harvesterhci.io", "-A"),
+             "addons": ("addons.harvesterhci.io", "-A"), "charts": ("managedcharts.management.cattle.io", "-n", "fleet-local"),
+             "images": (_hup.K_IMAGE, "-n", _hup.NS)}
+    with ThreadPoolExecutor(max_workers=len(reads)) as pool:
+        futs = {k: pool.submit(_kubectl_json, kc, "get", *a, timeout=30, cluster=cluster) for k, a in reads.items()}
+        got = {k: f.result() for k, f in futs.items()}
+    items = lambda k: (got[k] or {}).get("items") or []  # noqa: E731
+    current = (got["sv"] or {}).get("value") or ""
+    ups = items("upgrades")
+    lat = _hup.latest(ups)
+    img = None
+    if lat and (lat.get("status") or {}).get("imageID"):
+        iname = lat["status"]["imageID"].partition("/")[2]
+        img = next((i for i in items("images") if (i.get("metadata") or {}).get("name") == iname), None)
+    isos = []
+    for p in sorted(_iso_dir().glob("*.iso"), key=lambda x: x.stat().st_mtime, reverse=True):
+        rel = _iso_release_info(p)
+        if not rel:
+            continue
+        ok, why = _hup.eligible(current, rel["harvester"], rel["min_upgradable"])
+        isos.append({"name": p.name, "size": p.stat().st_size, "release": rel, "eligible": ok, "reason": why,
+                     "sha512": _iso_sha512(p.name)})
+    os_images = [{"name": (i.get("metadata") or {}).get("name"), "display": (i.get("spec") or {}).get("displayName"),
+                  "progress": (i.get("status") or {}).get("progress")}
+                 for i in items("images") if ((i.get("metadata") or {}).get("annotations") or {}).get(_hup.A_OS_IMAGE) == "True"]
+    return jsonify({"cluster": cluster, "current": current,
+                    "checker": ((got["checker"] or {}).get("value") or (got["checker"] or {}).get("default") or "true") == "true",
+                    "versions": _hup.version_rows(items("versions"), current),
+                    "upgrade": _hup.upgrade_view(lat, img, items("nodes")) if lat else None,
+                    "running": _hup.running(ups), "history": len(ups),
+                    "isos": isos, "os_images": os_images,
+                    "prechecks": _hup.prechecks(items("nodes"), items("volumes"), items("backups"), items("schedules"),
+                                                items("addons"), items("charts"), ups)})
+
+
+@app.route("/api/upgrade/<cluster>/do/<action>", methods=["POST"])
+@requires_auth
+@_rate_limit("20/minute")
+def api_upgrade_do(cluster, action):
+    if action not in _UPGRADE_DO:
+        return jsonify({"error": "action: " + ", ".join(_UPGRADE_DO)}), 400
+    kc = _kubectl_for_cluster(cluster)
+    if not kc:
+        return jsonify({"error": f"unknown cluster: {cluster}"}), 404
+    b = request.get_json(silent=True) or {}
+    files, extra = [], {}
+    try:
+        args = ["upgrade", action]
+        if action == "version-add":
+            text = str(b.get("yaml") or "")
+            if not text.strip() and b.get("url"):
+                url = str(b["url"])
+                if not re.match(r"^https?://", url):
+                    raise ValueError("url: an http(s) address")
+                import urllib.request
+                with urllib.request.urlopen(url, timeout=20) as r:     # noqa: S310 - adresse contrôlée
+                    text = r.read(65536).decode("utf-8", "replace")
+            v = _hup.version_from_yaml(text)
+            args += ["--version-file", _private_file(files, text, "version-")]
+            label = f"upgrade:version-add:{v['name']}"
+        elif action == "version-delete":
+            args += ["--name", _hup.check_name(b.get("name"), "version")]
+            label = f"upgrade:version-delete:{b['name']}"
+        elif action == "start":
+            if b.get("iso"):
+                name = _safe_artifact_name(str(b["iso"]))
+                if not name or not (_iso_dir() / name).is_file():
+                    raise ValueError("iso: an ISO of the console's store")
+                args += ["--iso", str(_iso_dir() / name)]
+                sha = str(b.get("checksum") or "").strip().lower() or _iso_sha512(name)
+                if sha:
+                    if not _hup.SHA512_RE.match(sha):
+                        raise ValueError("checksum: a SHA-512 (128 hexadecimal characters)")
+                    args += ["--checksum", sha]
+                args += ["--port", str(os.environ.get("HARVESTER_OPS_IMAGE_UPLOAD_PORT", 8092))]
+                if b.get("advertise"):
+                    args += ["--advertise", str(b["advertise"])]
+                label = f"upgrade:start:{name}"
+            else:
+                args += ["--version", _hup.check_name(b.get("version"), "version")]
+                label = f"upgrade:start:{b['version']}"
+            if b.get("log") is False:
+                args.append("--no-log")
+            if b.get("skip_single_replica"):
+                args.append("--skip-single-replica")
+        elif action == "logs":
+            name = _hup.check_name(b.get("name"), "upgrade")
+            _kc_sweep()
+            token = _secrets.token_hex(16)
+            wd = _capi_work_dir()
+            fd, out = tempfile.mkstemp(prefix="upglog-", suffix=".zip", dir=str(wd) if wd else None)
+            os.close(fd)
+            _UPG_LOGS[token] = (out, time.time())
+            args += ["--name", name, "--out", out]
+            label, extra = f"upgrade:logs:{name}", {"download": token}
+        else:
+            name = _hup.check_name(b.get("name"), "upgrade")
+            args += ["--name", name]
+            if action == "resume-node":
+                args += ["--node", _hup.check_name(b.get("node"), "node")]
+            label = f"upgrade:{action}:{name}"
+    except (ValueError, KeyError, OSError) as e:
+        for f in files:
+            Path(f).unlink(missing_ok=True)
+        return jsonify({"error": str(e)}), 400
+    run, err = _res_cli(cluster, kc, label, args, files)
+    return _res_reply(run, err, action=action, **extra)
+
+
+@app.route("/api/upgrade/<cluster>/logs/<token>")
+@requires_auth
+def api_upgrade_logs(cluster, token):
+    """L'archive des journaux d'une mise à jour, une seule fois, puis effacée."""
+    if ROLE_RANK.get(current_role(), 0) < ROLE_RANK["admin"]:
+        return jsonify({"error": "forbidden", "required": "admin"}), 403
+    now = time.time()
+    for tok, (path, ts) in list(_UPG_LOGS.items()):
+        if now - ts > 3600:
+            Path(path).unlink(missing_ok=True)
+            _UPG_LOGS.pop(tok, None)
+    entry = _UPG_LOGS.pop(token, None) if re.fullmatch(r"[0-9a-f]{32}", token or "") else None
+    if not entry or not Path(entry[0]).is_file() or Path(entry[0]).stat().st_size == 0:
+        if entry:
+            _UPG_LOGS[token] = entry          # pas encore prête : on la garde
+        return jsonify({"error": "no such archive yet, or already downloaded"}), 404
+    data = Path(entry[0]).read_bytes()
+    Path(entry[0]).unlink(missing_ok=True)
+    return Response(data, mimetype="application/zip",
+                    headers={"Content-Disposition": f'attachment; filename="{cluster}-upgrade-logs.zip"',
+                             "Cache-Control": "no-store"})
 
 
 @app.route("/api/storage-options/<cluster>")

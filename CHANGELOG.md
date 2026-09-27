@@ -4,6 +4,47 @@ All notable changes to this project will be documented here.
 Format inspired by [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 This file summarises each minor release; per-patch detail lives in `git log`.
 
+## [1.69.0] - 2026-09-27 - Upgrading Harvester
+
+### Added
+- **Upgrade** window, from the Overview header and from the `server-version`
+  setting, as in Harvester: the current version, the versions of the cluster
+  with the eligibility Harvester would only check after downloading the ISO
+  (downgrade, minimum version, prerelease), a version added from its
+  published `version.yaml` or deleted, and the air-gapped path from an ISO of
+  the console's store: its Harvester version read inside it, its SHA-512
+  checked (Harvester does not), served to the cluster by the console's token
+  counter (HEAD and byte ranges), imported, then upgraded.
+- Checks Harvester's webhook would refuse on, listed beforehand; release
+  notes of the target; "I have read and understood" required.
+- Progress: each step with its time, the ISO download percentage, every
+  host's state (a paused host can be resumed), what the new version brings,
+  the cause of a failure; Logs (packaged and downloaded once), Dismiss,
+  Abort while Harvester accepts it, Follow to attach a new action.
+- The start is an action followed to the end; the cluster API disappearing
+  while Kubernetes and the hosts restart is not a failure (up to 45 min).
+- `harvester-resources upgrade version-add|version-delete|start|follow|logs|dismiss|abort|resume-node`.
+
+### Tests
+- Library: eligibility as Harvester's version guard, version and release
+  files, the objects of the Harvester UI (no "false" skip annotation), the
+  state and its failure cause, what blocks a new upgrade, prechecks.
+- Command line and routes: start and follow through an API outage, the 45
+  minutes of patience, refusals before anything is created, guarded dismiss
+  and abort, the ISO counter (HEAD, ranges, token), the air-gapped path,
+  admin-only gestures, logs handed over once.
+- In Chromium: the form and its rules, the ISO path, adding a version, a
+  running and a finished upgrade.
+- Real, on the single-node bench harvlab2 (Harvester 1.8.2): a v1.9.0
+  Version added from its published `version.yaml`, offered as reachable,
+  deleted; then the air-gapped path from the console's ISO store: SHA-512
+  prefilled from the published file, checks all green, the ISO served by
+  the counter and imported in 5 min, the upgrade to v1.9.0 followed to the
+  end in 44 min (images preloaded 9 min, system services 15 min, the host
+  13 min of which 10 without a cluster API), `server-version` and the host
+  OS in v1.9.0, Harvester's cleanup done and its ISO image removed, the
+  logs downloaded (a 1.6 MB archive of 112 files), then dismissed.
+
 ## [1.68.1] - 2026-09-27 - A host's page, as in Harvester
 
 ### Added

@@ -1,8 +1,8 @@
 # Parity with the Harvester UI
 
-Status on 2026-09-27, console **v1.68.1**, compared with the **Harvester v1.9** UI (menus taken from the harvester-ui-extension v1.9.0 source and the v1.9 documentation).
+Status on 2026-09-27, console **v1.69.0**, compared with the **Harvester v1.9** UI (menus taken from the harvester-ui-extension v1.9.0 source and the v1.9 documentation).
 
-Of 135 functions of the Harvester UI: **122 done**, **4 partial**, **9 missing**; 2 out of scope. A missing function shows the version it is planned for.
+Of 135 functions of the Harvester UI: **125 done**, **4 partial**, **6 missing**; 2 out of scope. A missing function shows the version it is planned for.
 
 Statuses: Done, Partial (what is missing is said), Missing (planned version), Console only (what Harvester does not have), Out of scope.
 
@@ -15,8 +15,8 @@ Harvester menu: *Dashboard*
 | Host, VM and volume counts | Done | 1.2 | Overview tiles |
 | CPU, memory and storage capacity | Done | 1.62 | live usage (metrics.k8s.io), reserved, storage written and promised |
 | Cluster events (hosts, VMs, volumes, images) | Done | 1.62 | Overview Events tab, warnings filter |
-| Cluster and VM metrics (rancher-monitoring) | Missing | planned 1.69 |  |
-| Upgrade Harvester button | Missing | planned 1.69 |  |
+| Cluster and VM metrics (rancher-monitoring) | Missing | planned 1.70 |  |
+| Upgrade Harvester button | Done | 1.69 | in the Overview header and on server-version |
 
 ## Hosts
 
@@ -198,8 +198,8 @@ Harvester menu: *Monitoring & Logging*
 | Function | Status | Version | Note |
 |---|---|---|---|
 | Enable rancher-monitoring / rancher-logging and their configuration | Done | 1.57 | through add-ons |
-| Alertmanager configurations (receivers) | Missing | planned 1.69 |  |
-| Flows, cluster flows, outputs, cluster outputs | Missing | planned 1.69 |  |
+| Alertmanager configurations (receivers) | Missing | planned 1.70 |  |
+| Flows, cluster flows, outputs, cluster outputs | Missing | planned 1.70 |  |
 
 ## Advanced
 
@@ -225,8 +225,8 @@ Harvester menu: *Upgrade*
 
 | Function | Status | Version | Note |
 |---|---|---|---|
-| Upgrade (version, notes, per-node progress, logs) | Missing | planned 1.69 |  |
-| Air-gapped upgrade (uploaded image) | Missing | planned 1.69 |  |
+| Upgrade (version, notes, per-node progress, logs) | Done | 1.69 | eligibility said before the ISO download, follow that survives the API outage, abort while Harvester accepts it |
+| Air-gapped upgrade (uploaded image) | Done | 1.69 | ISO from the console's store, SHA-512 checked, served by the console's counter |
 
 ## Support
 
@@ -246,7 +246,7 @@ Harvester menu: *Authentication / Rancher*
 |---|---|---|---|
 | Sign-in through Rancher (its identity providers), the person's own rights | Done | 1.50 | as Harvester imported into Rancher (Virtualization Management): calls carry the person's token, Rancher's cluster and project rights apply |
 | Virtualization roles (Harvester RBAC chart, Rancher 2.14.1, experimental) | Partial | 1.50 | applied by the Rancher token; checked with a cluster member, not yet with this chart's roles |
-| Rancher projects: namespaces grouped by project, resource quotas | Missing | planned 1.69 |  |
+| Rancher projects: namespaces grouped by project, resource quotas | Missing | planned 1.71 |  |
 | Cluster members | Partial | 1.31 | cluster accounts: enable, disable, admin; Rancher roles not yet |
 | Mandatory sign-in, the console's own accounts and roles | Console only | 1.57 | without Rancher; standalone Harvester has a single admin |
 
@@ -256,7 +256,7 @@ Harvester menu: *VM Imports / VM Migration*
 
 | Function | Status | Version | Note |
 |---|---|---|---|
-| VM imports (VMware, OpenStack, OVA) | Missing | planned 1.69 |  |
+| VM imports (VMware, OpenStack, OVA) | Missing | planned 1.71 |  |
 | Migration through forklift-operator | Out of scope |  | add-on missing from the 1.9 docs |
 
 ## What the console adds

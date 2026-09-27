@@ -29,7 +29,7 @@ visuellement, avec la bascule maîtrisée et le retour arrière.
 
 | Question | Décision |
 |---|---|
-| Source VMware pour tester en réel | Banc imbriqué sur node2 (ESXi 8 + vCenter en évaluation) ; l'exploitant télécharge l'ISO ESXi, le VCSA et le VDDK sur le portail Broadcom |
+| Source VMware pour tester en réel | Banc imbriqué sur node2 (ESXi + vCenter en évaluation) avec les médias de l'exploitant, **vérifiés** avant usage : ESXi 7.0 GA et VDDK 8.0.3 par leurs empreintes publiées, vCenter 8.0.1 par la signature VMware de son OVA ; réseau du banc filtré |
 | Moment de la bascule | Les deux : date planifiée par vague ET bouton « Basculer maintenant » ; la taille de la dernière copie incrémentale est montrée |
 | Regroupement | Vagues composées à la main depuis l'inventaire vCenter (une vague = un plan Forklift = une bascule) |
 | Après la bascule | Sources gardées éteintes, retour arrière possible ; la console ne supprime jamais une VM dans vCenter |
@@ -42,13 +42,18 @@ Chacun est vérifié en réel avant le suivant.
 
 ### A. Le banc VMware sur node2
 
-- ESXi 8 imbriqué et un vCenter (VCSA) en mode évaluation (60 jours), en
-  VMs KVM sur node2 à côté des bancs Harvester (budget : environ 24 Gio de
-  mémoire, ce qui tient avec harvlab2 ; harvlab et le banc VMware ensemble
-  dépassent node2, on n'en allume qu'un des deux gros).
+- ESXi 7.0 imbriqué (VM KVM sur node2) et un vCenter 8.0.1 (VCSA « tiny »,
+  déployé DANS l'ESXi) en mode évaluation (60 jours) ; vCenter 8 gère les
+  ESXi 7.0 et 8.0. Budget : 28 Gio de mémoire pour la VM ESXi (le vCenter en
+  prend 14), ce qui tient avec harvlab2 ; harvlab et le banc VMware
+  ensemble serrent node2, on n'en allume qu'un des deux gros.
+- Réseau du banc filtré sur node2 (versions non corrigées) : il ne parle
+  qu'à node1, node2 et aux bancs Harvester. Détails, provenance des médias
+  et pièges : `tests/bench/vmware/README.md`.
 - Quelques VMs d'exemple dans vCenter, CBT activé : une Linux, une Windows.
-- Outil `tests/bench/vmware/` sur le modèle de `harvlab.sh` : `install`,
-  `start`, `stop`, `status`, `destroy`, secrets dans Vault
+- Outil `tests/bench/vmware/vmwlab.sh` sur le modèle de `harvlab.sh` :
+  `verify`, `filter`, `media`, `install`, `vcenter`, `inventory`, `start`,
+  `stop`, `status`, `destroy`, secrets dans Vault
   (`secret/infra/vmware-lab`), jamais affichés.
 - IP et noms réservés AVANT l'installation dans NetBox et Pi-hole (règle
   d'enregistrement systématique).

@@ -519,6 +519,10 @@ const VpcBoard = (() => {
       <div class="fabric-toolbar">
         <span class="fabric-meta"></span>
         <span class="apply-result vpc-feedback"></span>
+        <button type="button" class="btn btn-sm btn-secondary tip" data-ovn-open="policies"
+                data-tip-i18n="ox.t.openPolicies" data-tip="Network policies of the VMs">${Icons.svg('lock', { size: 14 })} ${esc(tr('ox.policies', 'Policies'))}</button>
+        <button type="button" class="btn btn-sm btn-secondary tip" data-ovn-open="nat"
+                data-tip-i18n="ox.t.openNat" data-tip="NAT gateways, external IPs, SNAT and DNAT rules">${Icons.svg('network', { size: 14 })} ${esc(tr('ox.nat', 'NAT & Internet'))}</button>
         <button type="button" class="btn btn-sm btn-primary tip needs-admin" data-vpc-new
                 data-tip-i18n="vpc.t.newVpc" data-tip="New VPC">${Icons.svg('add', { size: 14 })} ${esc(tr('vpc.newVpc', 'New VPC'))}</button>
         <button type="button" class="btn btn-sm fabric-refresh tip"
@@ -530,6 +534,9 @@ const VpcBoard = (() => {
     host.addEventListener('click', (e) => {
       if (e.target.closest('[data-copy]')) return;
       if (e.target.closest('.fabric-refresh')) { refresh(true); return; }
+      // v1.66.0 : politiques et NAT de kube-ovn, en fenêtres
+      const ovn = e.target.closest('[data-ovn-open]');
+      if (ovn && window.OvnExtra) { OvnExtra.open(ovn.dataset.ovnOpen, cluster); return; }
       if (e.target.closest('[data-vpc-new]')) { openForm('vpc'); return; }
       const t = (sel) => e.target.closest(sel);
       let el;

@@ -1,8 +1,8 @@
 # Parity with the Harvester UI
 
-Status on 2026-09-27, console **v1.65.0**, compared with the **Harvester v1.9** UI (menus taken from the harvester-ui-extension v1.9.0 source and the v1.9 documentation).
+Status on 2026-09-27, console **v1.66.0**, compared with the **Harvester v1.9** UI (menus taken from the harvester-ui-extension v1.9.0 source and the v1.9 documentation).
 
-Of 135 functions of the Harvester UI: **108 done**, **9 partial**, **18 missing**; 2 out of scope. A missing function shows the version it is planned for.
+Of 135 functions of the Harvester UI: **111 done**, **9 partial**, **15 missing**; 2 out of scope. A missing function shows the version it is planned for.
 
 Statuses: Done, Partial (what is missing is said), Missing (planned version), Console only (what Harvester does not have), Out of scope.
 
@@ -172,9 +172,10 @@ Harvester menu: *Overlay / Underlay Networks*
 |---|---|---|---|
 | VPC: create, static routes, peerings | Done | 1.49 |  |
 | Subnets (CIDR, gateway, NAT outgoing, DHCP, ACL) | Done | 1.49 |  |
-| Network policies (VM isolation) | Missing | planned 1.66 |  |
-| NAT gateways, external IPs, SNAT / DNAT rules | Missing | planned 1.66 |  |
-| Underlay: provider networks, VLANs | Missing | planned 1.66 |  |
+| Network policies (VM isolation) | Done | 1.66 |  |
+| NAT gateways, external IPs, SNAT / DNAT rules | Done | 1.66 |  |
+| Underlay: provider networks, VLANs, external networks | Done | 1.66 |  |
+| kube-ovn health said before any change; repair of a NAT gateway (kube-ovn before 1.16.1) | Console only | 1.66 | console only |
 
 ## Backup and snapshots
 

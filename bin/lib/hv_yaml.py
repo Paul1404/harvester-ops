@@ -53,6 +53,9 @@ KINDS = {
     # v1.65.0 : les réseaux d'hôte
     "hostnetwork": ("hostnetworkconfigs.network.harvesterhci.io", False, "viewer", "admin",
                     "network.harvesterhci.io/v1beta1", "HostNetworkConfig"),
+    # v1.66.0 : politiques réseau (celles que le formulaire ne sait pas dire)
+    "networkpolicy": ("networkpolicies.networking.k8s.io", True, "viewer", "admin",
+                      "networking.k8s.io/v1", "NetworkPolicy"),
     "setting": ("settings.harvesterhci.io", False, "admin", "admin", "harvesterhci.io/v1beta1", "Setting"),
     "node": ("nodes", False, "viewer", "admin", "v1", "Node"),
     "cloudtemplate": ("configmaps", True, "viewer", "operator", "v1", "ConfigMap"),

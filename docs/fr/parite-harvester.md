@@ -1,8 +1,8 @@
 # Parité avec l'interface de Harvester
 
-État au 2026-09-27, console **v1.65.0**, comparée à l'interface de **Harvester v1.9** (menus relevés dans le code de harvester-ui-extension v1.9.0 et la documentation v1.9).
+État au 2026-09-27, console **v1.66.0**, comparée à l'interface de **Harvester v1.9** (menus relevés dans le code de harvester-ui-extension v1.9.0 et la documentation v1.9).
 
-Sur 135 fonctions de l'interface de Harvester : **108 faites**, **9 partielles**, **18 manquantes** ; 2 hors périmètre. Une fonction manquante porte la version où elle est prévue.
+Sur 135 fonctions de l'interface de Harvester : **111 faites**, **9 partielles**, **15 manquantes** ; 2 hors périmètre. Une fonction manquante porte la version où elle est prévue.
 
 Statuts : Fait, Partiel (ce qui manque est dit), Manquant (version prévue), Console seulement (ce que Harvester n'a pas), Hors périmètre.
 
@@ -172,9 +172,10 @@ Menu Harvester : *Overlay / Underlay Networks*
 |---|---|---|---|
 | VPC : créer, routes statiques, peerings | Fait | 1.49 |  |
 | Sous-réseaux (CIDR, passerelle, NAT sortant, DHCP, ACL) | Fait | 1.49 |  |
-| Politiques réseau (isolation des VMs) | Manquant | prévue 1.66 |  |
-| Passerelles NAT, IP externes, règles SNAT / DNAT | Manquant | prévue 1.66 |  |
-| Underlay : réseaux fournisseurs, VLANs | Manquant | prévue 1.66 |  |
+| Politiques réseau (isolation des VMs) | Fait | 1.66 |  |
+| Passerelles NAT, IP externes, règles SNAT / DNAT | Fait | 1.66 |  |
+| Underlay : réseaux fournisseurs, VLANs, réseaux externes | Fait | 1.66 |  |
+| Santé de kube-ovn dite avant tout geste ; réparation d'une passerelle NAT (kube-ovn avant 1.16.1) | Console seulement | 1.66 | propre à la console |
 
 ## Sauvegardes et instantanés
 

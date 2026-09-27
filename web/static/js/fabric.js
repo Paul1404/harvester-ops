@@ -517,6 +517,8 @@ const Fabric = (() => {
     host.innerHTML = `
       <div class="fabric-toolbar">
         <span class="fabric-meta"></span>
+        <button type="button" class="btn btn-sm btn-secondary tip" data-ovn-open="underlay"
+                data-tip-i18n="ox.t.openUnderlay" data-tip="kube-ovn provider networks, VLANs and external networks">${window.Icons ? Icons.svg('switch', { size: 14 }) : ''} ${esc(tr('ox.underlay', 'Provider networks'))}</button>
         <button type="button" class="btn btn-sm fabric-refresh tip"
                 data-tip-i18n="topology.refreshTip">${icon} ${esc(tr('topology.refresh', 'Refresh'))}</button>
       </div>
@@ -530,6 +532,9 @@ const Fabric = (() => {
     host.addEventListener('click', (e) => {
       if (e.target.closest('[data-copy]')) return;
       if (e.target.closest('.fabric-refresh')) { refresh(); return; }
+      // v1.66.0 : réseaux fournisseurs, VLANs, réseaux externes (kube-ovn)
+      const ovn = e.target.closest('[data-ovn-open]');
+      if (ovn && window.OvnExtra) { OvnExtra.open(ovn.dataset.ovnOpen, cluster); return; }
       const mon = e.target.closest('[data-fabric-monitor]');
       if (mon) { toggleMonitor(mon); return; }
       const lldp = e.target.closest('[data-fabric-lldp]');

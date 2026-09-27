@@ -3,7 +3,7 @@
 # Statuts : ok (fait), part (partiel), todo (manquant), plus (console seulement), na (hors périmètre).
 # v : version où c'est arrivé (ok/part) ou prévue (todo).
 
-AS_OF = "1.65.0"
+AS_OF = "1.66.0"
 DATE = "2026-09-27"
 
 S = []  # sections
@@ -138,9 +138,11 @@ r("plus", "1.36", "Chemin réseau d'une VM jusqu'au switch (LLDP)", "VM network 
 sec("kubeovn", "Réseaux overlay et underlay (kube-ovn)", "Overlay and underlay networks (kube-ovn)", "Overlay / Underlay Networks", "Overlay / Underlay Networks")
 r("ok", "1.49", "VPC : créer, routes statiques, peerings", "VPC: create, static routes, peerings")
 r("ok", "1.49", "Sous-réseaux (CIDR, passerelle, NAT sortant, DHCP, ACL)", "Subnets (CIDR, gateway, NAT outgoing, DHCP, ACL)")
-r("todo", "1.66", "Politiques réseau (isolation des VMs)", "Network policies (VM isolation)")
-r("todo", "1.66", "Passerelles NAT, IP externes, règles SNAT / DNAT", "NAT gateways, external IPs, SNAT / DNAT rules")
-r("todo", "1.66", "Underlay : réseaux fournisseurs, VLANs", "Underlay: provider networks, VLANs")
+r("ok", "1.66", "Politiques réseau (isolation des VMs)", "Network policies (VM isolation)")
+r("ok", "1.66", "Passerelles NAT, IP externes, règles SNAT / DNAT", "NAT gateways, external IPs, SNAT / DNAT rules")
+r("ok", "1.66", "Underlay : réseaux fournisseurs, VLANs, réseaux externes", "Underlay: provider networks, VLANs, external networks")
+r("plus", "1.66", "Santé de kube-ovn dite avant tout geste ; réparation d'une passerelle NAT (kube-ovn avant 1.16.1)",
+  "kube-ovn health said before any change; repair of a NAT gateway (kube-ovn before 1.16.1)", "propre à la console", "console only")
 
 sec("backups", "Sauvegardes et instantanés", "Backup and snapshots", "Backup & Snapshots", "Backup & Snapshots")
 r("part", "1.58", "Planifications (créer, suspendre, reprendre, supprimer)", "Schedules (create, suspend, resume, delete)", "pas encore modifier", "no edit yet")

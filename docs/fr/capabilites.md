@@ -974,6 +974,56 @@ les réseaux de stockage et RWX appliqués VMs arrêtées puis rétablis, des
 équilibreurs par DHCP et par pool joints en SSH depuis l'extérieur, une
 adresse orpheline libérée.
 
+### Réseaux overlay et underlay : NAT, réseaux fournisseurs, politiques (1.66.0)
+
+Trois fenêtres complètent la partie kube-ovn du menu Networks de Harvester.
+Chacune commence par la **santé de kube-ovn** : la base OVN, le contrôleur, et
+les hôtes où l'agent réseau de kube-ovn n'est pas prêt. (Un hôte supprimé puis
+revenu a laissé un jour la base OVN sans quorum pendant des heures, sans rien
+dire ; les fenêtres le disent désormais d'abord.)
+
+- **Réseaux fournisseurs** (onglet Underlay, bouton du même nom) : les réseaux
+  fournisseurs (kube-ovn reprend une carte de chaque hôte dans un pont
+  `br-<nom>`, avec ses adresses et ses routes ; une carte déjà prise dans un
+  bond de Harvester, celle de la gestion comprise, est refusée), leurs VLANs
+  (0 = sans étiquette), et les **réseaux externes** : le côté LAN des
+  passerelles NAT, un subnet underlay au vrai préfixe du LAN et à sa
+  passerelle, avec une plage d'adresses que personne d'autre n'utilise.
+  Seule la première de la plage peut être tirée par kube-ovn (l'adresse
+  propre de la passerelle) ; les IP externes prennent les suivantes.
+- **NAT et Internet** (onglet Overlay) : les **passerelles NAT** d'une VPC (un
+  pod dans un subnet de la VPC à une IP LAN, qui sort par un réseau externe ;
+  la console ajoute la route par défaut de la VPC vers elle, ce que kube-ovn
+  ne fait jamais, et la retire avec la passerelle), les **IP externes** (la
+  prochaine adresse réservée est proposée), les règles **SNAT** et **DNAT**.
+  kube-ovn fige ces objets une fois prêts : on les supprime et on les recrée,
+  règles d'abord, puis IP externe, puis passerelle, un ordre que la console
+  fait respecter.
+  Avec kube-ovn avant 1.16.1 (Harvester 1.8), le pod d'une passerelle perd
+  son propre réseau au profit de celui du locataire et plus rien ne revient
+  par elle (issue kube-ovn 6632) : la console le répare à la création, signale
+  une passerelle cassée de nouveau (kube-ovn la réécrit quand son conteneur
+  redémarre) et propose **Réparer**. Harvester 1.9 embarque un kube-ovn sans
+  ce défaut.
+- **Politiques** (onglet Overlay) : des politiques réseau qui visent des VMs
+  par leur nom, avec des règles d'entrée et de sortie (tout le monde, un
+  réseau, un namespace ou des VMs, et des ports), et un mode souple, coché par
+  défaut, qui garde le DHCP de kube-ovn. kube-ovn applique une politique à
+  chaque interface kube-ovn des VMs visées, jamais à une carte sur un pont VLAN
+  de Harvester. Une politique écrite avec des sélecteurs que le formulaire ne
+  sait pas dire se modifie en YAML.
+
+En ligne de commande : `harvester-network apply|delete --kind
+provider|vlan|external|gateway|eip|snat|dnat|policy` et `harvester-network
+state`.
+
+Essayé pour de vrai sur le banc à trois nœuds : un réseau fournisseur sur la
+seconde carte de chaque hôte, un VLAN sans étiquette, un réseau externe sur le
+LAN qui garde six adresses ; une VM d'un subnet de VPC jointe en SSH depuis
+l'extérieur par une IP externe et une règle DNAT ; une politique qui l'a
+coupée puis, modifiée, l'a laissée passer ; tout retiré dans l'ordre de
+kube-ovn.
+
 ## 4. Cluster API : clusters RKE2 en aval (console + CLI)
 
 Créer et exploiter des clusters Kubernetes dont les nœuds sont des VMs

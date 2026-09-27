@@ -4,6 +4,52 @@ All notable changes to this project will be documented here.
 Format inspired by [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 This file summarises each minor release; per-patch detail lives in `git log`.
 
+## [1.66.0] - 2026-09-27 - Overlay and underlay networks: NAT, provider networks, policies
+
+### Added
+- **NAT & Internet** window (Overlay tab): NAT gateways of a VPC (the VPC
+  default route through the gateway is added and removed with it), external
+  IPs (the next reserved address proposed), SNAT and DNAT rules, deleted in
+  the order kube-ovn requires.
+- **Provider networks** window (Underlay tab): provider networks (a NIC
+  bonded by Harvester, the management one included, is refused), VLANs, and
+  external networks for NAT gateways, an underlay subnet at the real LAN
+  prefix keeping only a reserved range of addresses.
+- **Policies** window (Overlay tab): network policies aimed at VMs by name,
+  incoming and outgoing rules (anyone, a network, a namespace or VMs, and
+  ports), lax mode on by default so kube-ovn's DHCP keeps working; a policy
+  the form cannot express is changed in YAML.
+- Every window starts with the **health of kube-ovn**: OVN database,
+  controller, hosts where kube-ovn's agent is not ready.
+- `harvester-network apply|delete --kind provider|vlan|external|gateway|eip|snat|dnat|policy|repair`
+  and `harvester-network state`.
+
+### Fixed (found by the real tests)
+- With kube-ovn before 1.16.1 (Harvester 1.8), a NAT gateway pod had its
+  own network replaced by the tenant network (kube-ovn issue 6632) and
+  nothing came back through it. The console repairs it when it creates the
+  gateway, flags a gateway broken again after a restart, and offers Repair.
+- New buttons of these windows wait for the first read, so a form never
+  opens with empty lists.
+
+### Tests
+- Library, command line and routes: every kube-ovn object shape, the NIC
+  guard, the reserved address range, the gateway placement and route, the
+  deletion order, the policy shapes read back, the kube-ovn health, the
+  gateway repair.
+- In Chromium: the three windows, their forms and what they send, the
+  health banner, Repair.
+- Real, on the three-node bench: a provider network on each host's second
+  NIC (ready in 30 s), an untagged VLAN, an external network keeping six LAN
+  addresses; a VM in a VPC subnet reached over SSH from outside through an
+  external IP and a DNAT rule; the gateway broken as kube-ovn rewrites it
+  after a restart, flagged, and repaired in 40 s; a policy that cut SSH and,
+  once changed, let it through again; everything removed in kube-ovn's
+  order.
+- The bench's kube-ovn had been down for hours since a host was removed and
+  joined again (OVN database without quorum): repaired by rebuilding the
+  OVN database, which led to the health banner.
+
 ## [1.65.0] - 2026-09-27 - Networks, as in Harvester
 
 ### Added

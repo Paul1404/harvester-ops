@@ -10428,6 +10428,7 @@ def _capi_action(cluster, label, cmd, spec=None, dry_run=False):
 # ---------------------------------------------------------------------------
 
 import ovn_net as _on  # noqa: E402
+import ovn_extra as _ox  # noqa: E402
 
 NETWORK_SCRIPT = "harvester-network.py"
 _NET_INVENTORY_CACHE = {}           # (cluster, identité) -> (horodatage, réponse)
@@ -10526,6 +10527,147 @@ def api_kubeovn_apply(cluster):
     if err:
         return err
     return jsonify({"action_id": run.id, "name": spec["name"], "kind": kind}), 202
+
+
+# ---------------------------------------------------------------------------
+# v1.66.0 : underlay (réseaux fournisseurs, VLANs, réseau externe), NAT
+# (passerelles, IP externes, SNAT, DNAT) et politiques réseau des VMs. Les
+# écritures passent par bin/harvester-network.py (apply / delete).
+# ---------------------------------------------------------------------------
+
+OVN_EXTRA_KINDS = ("provider", "vlan", "external", "gateway", "eip", "snat", "dnat", "policy", "repair")
+
+
+def _ovn_extra_state(kc, cluster):
+    from concurrent.futures import ThreadPoolExecutor
+    reads = {"pns": (_ox.K_PN,), "vlans": (_ox.K_VLAN,), "subnets": (_ox.K_SUBNET,), "vpcs": (_ox.K_VPC,),
+             "gws": (_ox.K_GW,), "eips": (_ox.K_EIP,), "snats": (_ox.K_SNAT,), "dnats": (_ox.K_DNAT,),
+             "deploys": ("deployments", "-n", "kube-system"),
+             "cni": ("pods", "-n", "kube-system", "-l", "app=kube-ovn-cni"),
+             "gwpods": ("pods", "-n", "kube-system", "-l", "ovn.kubernetes.io/vpc-nat-gw=true"),
+             "sts": ("statefulsets", "-n", "kube-system", "-l", "ovn.kubernetes.io/vpc-nat-gw=true"),
+             "nodes": ("nodes",), "lm": ("linkmonitors.network.harvesterhci.io", "nic")}
+    with ThreadPoolExecutor(max_workers=6) as pool:
+        futs = {k: pool.submit(_kubectl_json, kc, "get", *a, timeout=30, cluster=cluster) for k, a in reads.items()}
+        got = {k: f.result() for k, f in futs.items()}
+    items = {k: ((v or {}).get("items") or []) for k, v in got.items() if k != "lm"}
+    if got["vpcs"] is None:
+        return {"kubeovn": False}
+    link = (((got.get("lm") or {}).get("status") or {}).get("linkStatus")) or {}
+    taken = _ox.taken_nics(link)
+    names = sorted({l.get("name") for links in link.values() for l in links or [] if l.get("name")})
+    tenants = []
+    for sub in items["subnets"]:
+        sp = sub.get("spec") or {}
+        if sp.get("vlan") or sub["metadata"]["name"] in _on.SYSTEM_SUBNETS:
+            continue
+        prov = str(sp.get("provider") or "").split(".")
+        tenants.append({"name": sub["metadata"]["name"], "vpc": sp.get("vpc"), "cidr": sp.get("cidrBlock"),
+                        "gateway": sp.get("gateway"),
+                        "network": f"{prov[1]}/{prov[0]}" if len(prov) == 3 and prov[2] == "ovn" else ""})
+    return {"kubeovn": True,
+            "health": _ox.ovn_health(items["deploys"], items["cni"], items["nodes"]),
+            "providers": _ox.provider_rows(items["pns"], items["vlans"]),
+            "vlans": _ox.vlan_rows(items["vlans"], items["subnets"]),
+            "externals": _ox.external_rows(items["subnets"], items["vlans"], items["eips"]),
+            "gateways": _ox.gateway_rows(items["gws"], items["gwpods"], items["sts"], items["eips"]),
+            "eips": _ox.eip_rows(items["eips"], items["snats"], items["dnats"]),
+            "snats": _ox.rule_rows(items["snats"], "snat"), "dnats": _ox.rule_rows(items["dnats"], "dnat"),
+            "vpcs": sorted(v["metadata"]["name"] for v in items["vpcs"]),
+            "tenant_subnets": sorted(tenants, key=lambda t: t["name"]),
+            "nodes": sorted(n["metadata"]["name"] for n in items["nodes"]),
+            "nics": [{"name": n, "taken_on": taken.get(n, [])} for n in names]}
+
+
+@app.route("/api/kubeovn/<cluster>/extra")
+@requires_auth
+def api_kubeovn_extra(cluster):
+    """Les vues Underlay et NAT : santé de kube-ovn, réseaux fournisseurs,
+    VLANs, réseaux externes, passerelles, IP externes, règles."""
+    kc = _kubectl_for_cluster(cluster)
+    if not kc:
+        return jsonify({"error": f"unknown cluster: {cluster}"}), 404
+    if _cluster_reachable(kc) is False:
+        return jsonify(_unreachable_payload(cluster, kc)), 200
+    return jsonify({"cluster": cluster, **_ovn_extra_state(kc, cluster)})
+
+
+@app.route("/api/kubeovn/<cluster>/policies")
+@requires_auth
+def api_kubeovn_policies(cluster):
+    """Les politiques réseau, et les VMs de chaque namespace à viser."""
+    kc = _kubectl_for_cluster(cluster)
+    if not kc:
+        return jsonify({"error": f"unknown cluster: {cluster}"}), 404
+    if _cluster_reachable(kc) is False:
+        return jsonify(_unreachable_payload(cluster, kc)), 200
+    got = _kubectl_json(kc, "get", "networkpolicies.networking.k8s.io,virtualmachines.kubevirt.io", "-A",
+                        timeout=30, cluster=cluster) or {}
+    nps = [i for i in got.get("items") or [] if i.get("kind") == "NetworkPolicy"]
+    vms = {}
+    for v in got.get("items") or []:
+        if v.get("kind") == "VirtualMachine":
+            vms.setdefault(v["metadata"]["namespace"], []).append(v["metadata"]["name"])
+    rows = [r for r in _ox.policy_rows(nps) if not str(r["namespace"]).startswith(_co.SYSTEM_NAMESPACE_PREFIXES)]
+    specs = {f"{np['metadata']['namespace']}/{np['metadata']['name']}": _ox.policy_to_spec(np) for np in nps}
+    for r in rows:
+        r["spec"] = specs.get(f"{r['namespace']}/{r['name']}")
+    return jsonify({"cluster": cluster, "items": rows, "vms": {k: sorted(v) for k, v in vms.items()}})
+
+
+@app.route("/api/kubeovn/<cluster>/extra/<kind>", methods=["POST"])
+@requires_auth
+@_rate_limit("20/minute")
+def api_kubeovn_extra_apply(cluster, kind):
+    """Crée un objet d'underlay, de NAT ou une politique (ou modifie une
+    politique), contrôlé d'avance, suivi dans le dock."""
+    if kind not in OVN_EXTRA_KINDS:
+        return jsonify({"error": f"kind must be one of {', '.join(OVN_EXTRA_KINDS)}"}), 400
+    body = request.get_json(silent=True)
+    if not isinstance(body, dict) or not isinstance(body.get("spec"), dict):
+        return jsonify({"error": "a JSON object with a spec is expected"}), 400
+    spec, update = body["spec"], bool(body.get("update"))
+    try:
+        {"provider": lambda: _ox.provider_network(spec), "vlan": lambda: _ox.vlan(spec),
+         "external": lambda: _ox.external_network(spec), "gateway": lambda: _ox.check_name(spec.get("name"), "gateway name", 48),
+         "eip": lambda: _ox.check_name(spec.get("name"), "external IP name"), "snat": lambda: _ox.snat(spec),
+         "dnat": lambda: _ox.dnat(spec), "policy": lambda: _ox.network_policy(spec),
+         "repair": lambda: _ox.check_name(spec.get("name"), "gateway name", 48)}[kind]()
+    except (ValueError, TypeError) as e:
+        return jsonify({"error": str(e)}), 400
+    if update and kind != "policy":
+        return jsonify({"error": "kube-ovn freezes this object once ready: delete it and create it again"}), 400
+    cmd, err = _net_base(cluster, "apply")
+    if err:
+        return err
+    cmd += ["--kind", kind] + (["--update"] if update else [])
+    name = spec.get("name")
+    label = f"network:{kind}-{'update' if update else 'create'}:" + (f"{spec.get('namespace') or 'default'}/{name}" if kind == "policy" else name)
+    run, err = _cli_action(cluster, label, cmd, "harvester-network", spec=spec,
+                           after=lambda: _NET_INVENTORY_CACHE.clear())
+    if err:
+        return err
+    return jsonify({"action_id": run.id, "kind": kind, "name": name}), 202
+
+
+@app.route("/api/kubeovn/<cluster>/extra/<kind>/<name>", methods=["DELETE"])
+@requires_auth
+@_rate_limit("20/minute")
+def api_kubeovn_extra_delete(cluster, kind, name):
+    if kind not in OVN_EXTRA_KINDS:
+        return jsonify({"error": f"kind must be one of {', '.join(OVN_EXTRA_KINDS)}"}), 400
+    ns = request.args.get("namespace") or ""
+    if kind == "policy" and not _K8S_NAME_RE.match(ns):
+        return jsonify({"error": "a policy is deleted with its namespace"}), 400
+    cmd, err = _net_base(cluster, "delete")
+    if err:
+        return err
+    cmd += ["--kind", kind, "--name", name] + (["--namespace", ns] if kind == "policy" else [])
+    run, err = _cli_action(cluster, f"network:{kind}-delete:" + (f"{ns}/{name}" if ns else name), cmd, "harvester-network",
+                           after=lambda: _NET_INVENTORY_CACHE.clear())
+    if err:
+        return err
+    return jsonify({"action_id": run.id, "kind": kind, "name": name}), 202
 
 
 @app.route("/api/kubeovn/<cluster>/<kind>/<name>", methods=["DELETE"])

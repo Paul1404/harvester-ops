@@ -863,6 +863,52 @@ the migration network proven by a live migration, the storage and RWX
 networks applied with the VMs stopped and restored, load balancers by DHCP
 and by pool reached over SSH from outside, an orphan address released.
 
+### Overlay and underlay networks: NAT, provider networks, policies (1.66.0)
+
+Three windows complete the kube-ovn part of Harvester's Networks menu. Each
+starts with the **health of kube-ovn**: the OVN database, the controller, and
+the hosts where kube-ovn's network agent is not ready. (A host removed and
+joined again once left the OVN database without quorum for hours, silently;
+the windows now say so first.)
+
+- **Provider networks** (Underlay tab, button of the same name): provider
+  networks (kube-ovn takes a NIC of every host into a bridge `br-<name>`, with
+  its addresses and routes; a NIC already bonded by Harvester, the management
+  one included, is refused), their VLANs (0 is untagged), and **external
+  networks**: the LAN side of NAT gateways, an underlay subnet at the real
+  LAN prefix and gateway with a range of addresses nobody else uses. Only the
+  first of the range can be picked by kube-ovn (the gateway's own address);
+  external IPs take the next ones.
+- **NAT & Internet** (Overlay tab): **NAT gateways** of a VPC (a pod in a VPC
+  subnet at a LAN IP, going out through an external network; the console
+  adds the VPC default route through it, which kube-ovn never does, and
+  removes it with the gateway), **external IPs** (the next reserved address
+  is proposed), **SNAT** and **DNAT** rules. kube-ovn freezes these objects
+  once ready: they are deleted and created again, rules first, then the
+  external IP, then the gateway, an order the console enforces.
+  With kube-ovn before 1.16.1 (Harvester 1.8), a gateway's pod loses its
+  own network to the tenant network and nothing comes back through it
+  (kube-ovn issue 6632): the console repairs it when it creates the gateway,
+  flags a gateway that broke again (kube-ovn rewrites it when its container
+  restarts), and offers **Repair**. Harvester 1.9 ships a kube-ovn without
+  the problem.
+- **Policies** (Overlay tab): network policies aimed at VMs by name, with
+  incoming and outgoing rules (anyone, a network, a namespace or some VMs,
+  and ports), and a lax mode, on by default, that keeps kube-ovn's DHCP
+  working. kube-ovn applies a policy to every kube-ovn interface of the VMs
+  it targets, never to a NIC on a Harvester VLAN bridge. A policy written
+  with selectors the form does not handle is changed in YAML.
+
+On the command line: `harvester-network apply|delete --kind
+provider|vlan|external|gateway|eip|snat|dnat|policy` and `harvester-network
+state`.
+
+Tried for real on the three-node bench: a provider network on each host's
+second NIC, an untagged VLAN, an external network on the LAN keeping six
+addresses; a VM in a VPC subnet reached over SSH from outside through an
+external IP and a DNAT rule; a policy that cut it and, once changed, let it
+through again; everything removed in kube-ovn's order.
+
 ## 4. Cluster API: downstream RKE2 clusters (console + CLI)
 
 Create and operate Kubernetes clusters whose nodes are Harvester VMs,

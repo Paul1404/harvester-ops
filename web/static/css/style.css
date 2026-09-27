@@ -5031,3 +5031,17 @@ td.tpl-acts .btn + .btn { margin-left: 4px; }
    droite (remarque de ju en 1.60.0), à l'écart des boutons ronds du coin */
 #tab-network .shutdown-header > .section-actions { grid-column: 2; grid-row: 2; align-self: center; margin: 0 156px 0 0; }
 #tab-network .sub-tab { white-space: nowrap; }
+
+/* v1.66.0 : fenêtres kube-ovn (NAT et Internet, réseaux fournisseurs, politiques) */
+.ox-win { display: flex; flex-direction: column; gap: 8px; padding: 6px 10px 10px; }
+.ox-win .bk-bar { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+.ox-win .bk-bar .form-hint { margin: 0; }
+.ox-win .hs-last:empty { display: none; }
+.ox-health { font-size: 12px; color: var(--text-dim); display: flex; align-items: center; gap: 6px; }
+.ox-tabs { margin: 0; }
+.ox-form { border: 1px solid var(--border); border-radius: 6px; background: var(--bg-panel); }
+.ox-dir { display: flex; flex-direction: column; gap: 6px; padding: 6px 0; border-top: 1px dashed var(--border); }
+.ox-rules { display: flex; flex-direction: column; gap: 6px; }
+.ox-rule { display: grid; grid-template-columns: 0.9fr 1.4fr 1fr auto; gap: 6px; align-items: center; }
+.ox-dir > .btn { align-self: flex-start; }
+@media (max-width: 640px) { .ox-rule { grid-template-columns: 1fr 1fr; } }

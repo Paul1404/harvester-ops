@@ -19,6 +19,7 @@ ENDPOINTS = [
     "/api/pvcs",
     "/api/cloudinits",
     "/api/pcidevices",
+    "/api/hostdevices",      # v1.68.0 : PCI et USB pour l'éditeur de VM
 ]
 
 

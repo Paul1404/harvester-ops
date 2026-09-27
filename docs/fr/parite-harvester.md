@@ -1,8 +1,8 @@
 # Parité avec l'interface de Harvester
 
-État au 2026-09-27, console **v1.67.0**, comparée à l'interface de **Harvester v1.9** (menus relevés dans le code de harvester-ui-extension v1.9.0 et la documentation v1.9).
+État au 2026-09-27, console **v1.68.0**, comparée à l'interface de **Harvester v1.9** (menus relevés dans le code de harvester-ui-extension v1.9.0 et la documentation v1.9).
 
-Sur 135 fonctions de l'interface de Harvester : **115 faites**, **7 partielles**, **13 manquantes** ; 2 hors périmètre. Une fonction manquante porte la version où elle est prévue.
+Sur 135 fonctions de l'interface de Harvester : **121 faites**, **5 partielles**, **9 manquantes** ; 2 hors périmètre. Une fonction manquante porte la version où elle est prévue.
 
 Statuts : Fait, Partiel (ce qui manque est dit), Manquant (version prévue), Console seulement (ce que Harvester n'a pas), Hors périmètre.
 
@@ -89,7 +89,7 @@ Menu Harvester : *Create / Edit VM*
 | Placement sur les nœuds (sélecteur, règles) | Fait | 1.13 |  |
 | Affinité / anti-affinité entre VMs | Fait | 1.13 |  |
 | Périphériques PCI | Fait | 1.15 |  |
-| Périphériques USB | Manquant | prévue 1.68 |  |
+| Périphériques USB | Fait | 1.68 | tablette QEMU passée à une VM sur le banc |
 | Access credentials (mot de passe, clés par l'agent) | Fait | 1.61 | appliqués au prochain redémarrage |
 | Volume de système de fichiers (virtiofs, v1.9) | Fait | 1.62 | à la création ; le noyau invité doit connaître virtiofs |
 | Labels, labels d'instance, annotations | Fait | 1.62 |  |
@@ -183,9 +183,9 @@ Menu Harvester : *Backup & Snapshots*
 
 | Fonction | Statut | Version | Précision |
 |---|---|---|---|
-| Planifications (créer, suspendre, reprendre, supprimer) | Partiel | 1.58 | pas encore modifier |
+| Planifications (créer, modifier, suspendre, reprendre, supprimer) | Fait | 1.68 |  |
 | Sauvegardes : restaurer en nouvelle VM ou remplacer | Fait | 1.58 |  |
-| Remplacer en supprimant les anciens volumes ; délai de gel du système de fichiers | Manquant | prévue 1.68 |  |
+| Remplacer en supprimant les anciens volumes ; délai de gel du système de fichiers | Fait | 1.68 | gel proposé sans « 0s » (gel sans limite : Harvester n'appelle jamais le dégel) ; ignoré avant Harvester 1.9 |
 | Instantanés de VM : restaurer, supprimer | Fait | 1.58 |  |
 | Instantanés de volume : restaurer, supprimer | Fait | 1.58 |  |
 | Cible de sauvegarde (NFS, S3) | Fait | 1.67 | formulaire NFS ou S3, test de connexion, retrait |
@@ -211,10 +211,10 @@ Menu Harvester : *Advanced*
 | Clés SSH (créer, lire depuis un fichier, modifier, supprimer) | Fait | 1.64 |  |
 | Modèles de configuration cloud (user / network data) | Fait | 1.64 |  |
 | Classes de stockage (Longhorn v1, chiffrement, topologies, par défaut, supprimer) | Partiel | 1.64 | LVM et Longhorn v2 proposés mais pas vérifiés en réel (absents des bancs) |
-| Périphériques PCI | Partiel | 1.15 | liste et attache aux VMs ; activer le passthrough en 1.68 |
-| SR-IOV réseau (nombre de VF) | Manquant | prévue 1.68 |  |
-| GPU SR-IOV, vGPU, configurations MIG | Manquant | prévue 1.68 | à documenter comme non vérifié : aucun GPU compatible sous Harvester |
-| Périphériques USB (passthrough) | Manquant | prévue 1.68 |  |
+| Périphériques PCI | Fait | 1.68 | activer ou désactiver le passthrough, par sélection ; groupe IOMMU et VMs qui s'en servent dits |
+| SR-IOV réseau (nombre de VF) | Fait | 1.68 | carte igb émulée sur le banc |
+| GPU SR-IOV, vGPU, configurations MIG | Manquant |  | non livré : aucun GPU compatible sous Harvester sur les bancs, rien ne peut y être essayé en réel |
+| Périphériques USB (passthrough) | Fait | 1.68 |  |
 | Add-ons : activer, désactiver, configurer | Fait | 1.57 |  |
 | Secrets (Opaque, TLS, Basic, Registry, SSH, chiffrement : créer, nouvelles valeurs, supprimer) | Fait | 1.64 |  |
 | Réglages de Harvester (les 40 : NTP, proxy, CA, TLS, overcommit…) | Fait | 1.67 | formulaires typés, contrôlés d'avance comme le webhook, état appliqué, secrets masqués, avertissement des réglages qui coupent un accès |

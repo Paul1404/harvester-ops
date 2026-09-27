@@ -261,11 +261,13 @@ const VMEdit = (() => {
             label: { en: 'Kind', fr: 'Type' },
             description: { en: 'gpu = declared under devices.gpus (vGPU/GPU), host = devices.hostDevices',
                            fr: 'gpu = déclaré sous devices.gpus (vGPU/GPU), host = devices.hostDevices' } },
-          { name: 'device_name', type: 'ref', ref_endpoint: '/api/pcidevices',
+          // v1.68.0 : PCI et USB (Advanced > PCI Devices / USB Devices pour
+          // activer le passthrough)
+          { name: 'device_name', type: 'ref', ref_endpoint: '/api/hostdevices',
             ref_value_field: 'device_name', ref_label_field: 'display_name',
-            label: { en: 'PCI device', fr: 'Périphérique PCI' },
-            description: { en: 'The device must be claimed and unbound from its host driver in Harvester first',
-                           fr: 'Le périphérique doit d’abord être réservé et détaché de son pilote hôte dans Harvester' } },
+            label: { en: 'Device (PCI or USB)', fr: 'Périphérique (PCI ou USB)' },
+            description: { en: 'Enable its passthrough first in Advanced > PCI Devices or USB Devices',
+                           fr: 'Activer d’abord son passthrough dans Avancé > Périphériques PCI ou USB' } },
         ],
       },
     },
@@ -2404,8 +2406,14 @@ const VMEdit = (() => {
         const devEditor = sectionEl.querySelector('[data-cards="hostdev"] .tf-form');
         const rows = ((devEditor ? TFForm.read(devEditor, HOSTDEV_SCHEMA, { emitEmptyLists: true }).dev : []) || [])
           .filter(d => (d.name || '').trim() && (d.device_name || '').trim());
+        // Un périphérique USB porte le nom de son USBDevice, comme dans
+        // Harvester : c'est par ce nom qu'il sait qu'une VM s'en sert.
         const host = rows.filter(d => d.kind !== 'gpu')
-          .map(d => ({ name: d.name.trim(), deviceName: d.device_name.trim() }));
+          .map(d => {
+            const dn = d.device_name.trim();
+            const usb = dn.startsWith('kubevirt.io/') ? dn.slice('kubevirt.io/'.length) : '';
+            return { name: usb || d.name.trim(), deviceName: dn };
+          });
         const gpus = rows.filter(d => d.kind === 'gpu')
           .map(d => ({ name: d.name.trim(), deviceName: d.device_name.trim() }));
         domain.devices.hostDevices = host.length ? host : null;

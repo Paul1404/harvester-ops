@@ -3,7 +3,7 @@
 # Statuts : ok (fait), part (partiel), todo (manquant), plus (console seulement), na (hors périmètre).
 # v : version où c'est arrivé (ok/part) ou prévue (todo).
 
-AS_OF = "1.67.0"
+AS_OF = "1.68.0"
 DATE = "2026-09-27"
 
 S = []  # sections
@@ -80,7 +80,7 @@ r("ok", "1.62", "IP statique d'une carte (v1.9)", "Static IP of an interface (v1
 r("ok", "1.13", "Placement sur les nœuds (sélecteur, règles)", "Node scheduling (selector, rules)")
 r("ok", "1.13", "Affinité / anti-affinité entre VMs", "VM affinity / anti-affinity")
 r("ok", "1.15", "Périphériques PCI", "PCI devices")
-r("todo", "1.68", "Périphériques USB", "USB devices")
+r("ok", "1.68", "Périphériques USB", "USB devices", "tablette QEMU passée à une VM sur le banc", "a QEMU tablet passed to a VM on the bench")
 r("ok", "1.61", "Access credentials (mot de passe, clés par l'agent)", "Access credentials (password, keys through the agent)", "appliqués au prochain redémarrage", "applied at the next restart")
 r("ok", "1.62", "Volume de système de fichiers (virtiofs, v1.9)", "Filesystem volume (virtiofs, v1.9)", "à la création ; le noyau invité doit connaître virtiofs", "at creation; the guest kernel needs virtiofs")
 r("ok", "1.62", "Labels, labels d'instance, annotations", "Labels, instance labels, annotations")
@@ -145,9 +145,11 @@ r("plus", "1.66", "Santé de kube-ovn dite avant tout geste ; réparation d'une 
   "kube-ovn health said before any change; repair of a NAT gateway (kube-ovn before 1.16.1)", "propre à la console", "console only")
 
 sec("backups", "Sauvegardes et instantanés", "Backup and snapshots", "Backup & Snapshots", "Backup & Snapshots")
-r("part", "1.58", "Planifications (créer, suspendre, reprendre, supprimer)", "Schedules (create, suspend, resume, delete)", "pas encore modifier", "no edit yet")
+r("ok", "1.68", "Planifications (créer, modifier, suspendre, reprendre, supprimer)", "Schedules (create, edit, suspend, resume, delete)")
 r("ok", "1.58", "Sauvegardes : restaurer en nouvelle VM ou remplacer", "Backups: restore new or replace existing")
-r("todo", "1.68", "Remplacer en supprimant les anciens volumes ; délai de gel du système de fichiers", "Replace deleting previous volumes; file system freeze deadline")
+r("ok", "1.68", "Remplacer en supprimant les anciens volumes ; délai de gel du système de fichiers", "Replace deleting previous volumes; file system freeze deadline",
+  "gel proposé sans « 0s » (gel sans limite : Harvester n'appelle jamais le dégel) ; ignoré avant Harvester 1.9",
+  "freeze offered without \"0s\" (no limit: Harvester never calls the thaw); ignored before Harvester 1.9")
 r("ok", "1.58", "Instantanés de VM : restaurer, supprimer", "VM snapshots: restore, delete")
 r("ok", "1.58", "Instantanés de volume : restaurer, supprimer", "Volume snapshots: restore, delete")
 r("ok", "1.67", "Cible de sauvegarde (NFS, S3)", "Backup target (NFS, S3)", "formulaire NFS ou S3, test de connexion, retrait", "NFS or S3 form, connection test, removal")
@@ -163,10 +165,10 @@ r("ok", "1.64", "Templates : versions, par défaut, lancer une version, supprime
 r("ok", "1.64", "Clés SSH (créer, lire depuis un fichier, modifier, supprimer)", "SSH keys (create, read from file, edit, delete)")
 r("ok", "1.64", "Modèles de configuration cloud (user / network data)", "Cloud configuration templates (user / network data)")
 r("part", "1.64", "Classes de stockage (Longhorn v1, chiffrement, topologies, par défaut, supprimer)", "Storage classes (Longhorn v1, encryption, topologies, default, delete)", "LVM et Longhorn v2 proposés mais pas vérifiés en réel (absents des bancs)", "LVM and Longhorn v2 offered but not verified for real (absent from the benches)")
-r("part", "1.15", "Périphériques PCI", "PCI devices", "liste et attache aux VMs ; activer le passthrough en 1.68", "list and attach to VMs; enable passthrough in 1.68")
-r("todo", "1.68", "SR-IOV réseau (nombre de VF)", "SR-IOV network devices (VF count)")
-r("todo", "1.68", "GPU SR-IOV, vGPU, configurations MIG", "SR-IOV GPU, vGPU, MIG configurations", "à documenter comme non vérifié : aucun GPU compatible sous Harvester", "to be documented as unverified: no compatible GPU under Harvester")
-r("todo", "1.68", "Périphériques USB (passthrough)", "USB devices (passthrough)")
+r("ok", "1.68", "Périphériques PCI", "PCI devices", "activer ou désactiver le passthrough, par sélection ; groupe IOMMU et VMs qui s'en servent dits", "enable or disable passthrough, by selection; IOMMU group and the VMs using them said")
+r("ok", "1.68", "SR-IOV réseau (nombre de VF)", "SR-IOV network devices (VF count)", "carte igb émulée sur le banc", "emulated igb card on the bench")
+r("todo", "", "GPU SR-IOV, vGPU, configurations MIG", "SR-IOV GPU, vGPU, MIG configurations", "non livré : aucun GPU compatible sous Harvester sur les bancs, rien ne peut y être essayé en réel", "not shipped: no compatible GPU under Harvester on the benches, nothing can be tried for real")
+r("ok", "1.68", "Périphériques USB (passthrough)", "USB devices (passthrough)")
 r("ok", "1.57", "Add-ons : activer, désactiver, configurer", "Add-ons: enable, disable, configure")
 r("ok", "1.64", "Secrets (Opaque, TLS, Basic, Registry, SSH, chiffrement : créer, nouvelles valeurs, supprimer)", "Secrets (Opaque, TLS, Basic, Registry, SSH, encryption: create, new values, delete)")
 r("ok", "1.67", "Réglages de Harvester (les 40 : NTP, proxy, CA, TLS, overcommit…)", "Harvester settings (all 40: NTP, proxy, CA, TLS, overcommit…)",

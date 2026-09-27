@@ -25,10 +25,14 @@ const Sections = (() => {
                                            sshkeys: { list: 'sshkeys' } } },
     // v1.67.0 : le menu Advanced de Harvester (réglages, paquet de support, kubeconfigs)
     advanced: { first: 'settings', panes: { settings: { mod: 'Advanced' },
+                                            // v1.68.0 : les périphériques de Harvester
+                                            pci: { mod: 'Devices' },
+                                            usb: { mod: 'Devices' },
+                                            sriov: { mod: 'Devices' },
                                             support: { mod: 'Advanced' } } },
   };
   // les modules qui tiennent leur onglet eux-mêmes : un seul vit à la fois
-  const MODS = ['NetAdmin', 'Advanced'];
+  const MODS = ['NetAdmin', 'Advanced', 'Devices'];
   const KEY = (sec) => `harvester_ops_section_${sec}`;
 
   function isSection(name) { return Object.prototype.hasOwnProperty.call(DEF, name); }

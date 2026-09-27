@@ -137,11 +137,15 @@ const Backups = (() => {
       <label class="bk-field"><span>${esc(tr('bk.f.vm'))}</span>
         <select name="vm" required class="tip" data-tip="${esc(tr('bk.f.vmTip'))}">${opts}</select></label>
       <label class="bk-field"><span>${esc(tr('bk.f.name'))}</span>
-        <input name="name" placeholder="${esc(tr('bk.f.namePh'))}" class="tip" data-tip="${esc(tr('bk.f.nameTip'))}"></label>`,
+        <input name="name" placeholder="${esc(tr('bk.f.namePh'))}" class="tip" data-tip="${esc(tr('bk.f.nameTip'))}"></label>
+      <label class="bk-field"><span>${esc(tr('bk.f.freeze'))}</span>
+        <select name="freeze" class="tip" data-tip="${esc(tr('bk.f.freezeTip'))}">
+          <option value="">${esc(tr('bk.f.freezeDefault'))}</option>
+          ${['5s', '10s', '30s', '1m', '3m', '5m'].map(v => `<option value="${v}">${v}</option>`).join('')}</select></label>`,
     async (f) => {
       const [ns, vm] = String(f.get('vm')).split('/');
       const out = await call('POST', `/api/backups/${enc(w.cluster)}/${enc(ns)}`,
-        { vm, type: isSnap ? 'snapshot' : 'backup', name: f.get('name') || undefined });
+        { vm, type: isSnap ? 'snapshot' : 'backup', name: f.get('name') || undefined, freeze: f.get('freeze') || undefined });
       follow(w, out.action_id, isSnap ? tr('bk.done.snapshot', { vm }) : tr('bk.done.backup', { vm }));
     });
   }
@@ -201,6 +205,48 @@ const Backups = (() => {
     sync();
   }
 
+  // v1.68.0 : modifier une planification (fréquence, copies, échecs), comme
+  // Harvester le permet après création ; la VM et le type restent figés
+  function editSchedule(w, row) {
+    const parts = String(row.cron || '').split(/\s+/);
+    const simple = parts.length === 5 && /^\d+$/.test(parts[0]) && parts[2] === '*' && parts[3] === '*';
+    const freq = !simple ? 'custom' : parts[1] === '*' ? 'hourly' : parts[4] === '*' ? 'daily' : /^\d$/.test(parts[4]) ? 'weekly' : 'custom';
+    const pad = (n) => String(n).padStart(2, '0');
+    const time = simple && parts[1] !== '*' ? `${pad(parts[1])}:${pad(parts[0])}` : `02:${pad(simple ? parts[0] : 0)}`;
+    const days = [0, 1, 2, 3, 4, 5, 6].map(d => `<option value="${d}" ${String(d) === parts[4] ? 'selected' : ''}>${esc(new Date(2026, 8, 27 + d).toLocaleDateString(undefined, { weekday: 'long' }))}</option>`).join('');
+    showForm(w, `
+      <h5>${esc(tr('bk.edit.title', { name: row.name }))}</h5>
+      <p class="form-hint">${esc(tr('bk.edit.hint', { vm: row.vm }))}</p>
+      <div class="bk-grid">
+        <label class="bk-field"><span>${esc(tr('bk.f.freq'))}</span>
+          <select name="freq" class="tip" data-tip="${esc(tr('bk.f.freqTip'))}">
+            ${['hourly', 'daily', 'weekly', 'custom'].map(k => `<option value="${k}" ${k === freq ? 'selected' : ''}>${esc(FREQ[k]())}</option>`).join('')}
+          </select></label>
+        <label class="bk-field" data-when="daily weekly hourly"><span>${esc(tr('bk.f.time'))}</span>
+          <input type="time" name="time" value="${esc(time)}" class="tip" data-tip="${esc(tr('bk.f.timeTip'))}"></label>
+        <label class="bk-field" data-when="weekly" hidden><span>${esc(tr('bk.f.weekday'))}</span>
+          <select name="weekday">${days}</select></label>
+        <label class="bk-field" data-when="custom" hidden><span>${esc(tr('bk.f.cron'))}</span>
+          <input name="cron" value="${esc(row.cron || '')}" class="tip" data-tip="${esc(tr('bk.f.cronTip'))}"></label>
+        <label class="bk-field"><span>${esc(tr('bk.f.retain'))}</span>
+          <input type="number" name="retain" min="3" max="250" value="${esc(row.retain)}" class="tip" data-tip="${esc(tr('bk.f.retainTip'))}"></label>
+        <label class="bk-field"><span>${esc(tr('bk.f.maxFailure'))}</span>
+          <input type="number" name="max_failure" min="2" max="249" value="${esc(row.max_failure)}" class="tip" data-tip="${esc(tr('bk.f.maxFailureTip'))}"></label>
+      </div>`,
+    async (f) => {
+      const out = await call('POST', `/api/schedules/${enc(w.cluster)}/${enc(row.namespace)}/${enc(row.name)}/update`, {
+        cron: cronOf(f), retain: Number(f.get('retain')), max_failure: Number(f.get('max_failure')) });
+      follow(w, out.action_id, tr('bk.done.update', { name: row.name }));
+    });
+    const form = w.root.querySelector('.bk-form');
+    const sync = () => {
+      const v = form.querySelector('[name="freq"]').value;
+      form.querySelectorAll('[data-when]').forEach(el => { el.hidden = !el.dataset.when.split(' ').includes(v); });
+    };
+    form.querySelector('[name="freq"]').addEventListener('change', sync);
+    sync();
+  }
+
   function restoreForm(w, row) {
     showForm(w, `
       <h5>${esc(tr('bk.restore.title', { name: row.name }))}</h5>
@@ -214,12 +260,19 @@ const Backups = (() => {
       <label class="bk-radio"><input type="radio" name="mode" value="replace">
         <span>${esc(tr('bk.restore.replace', { vm: row.vm }))}</span></label>
       <p class="form-hint" data-when="replace" hidden>${esc(tr('bk.restore.replaceHint'))}</p>
+      ${w.tab === 'vmbackups' ? `<label class="bk-field" data-when="replace" hidden><span>${esc(tr('bk.restore.previous'))}</span>
+        <select name="delete_policy" class="tip" data-tip="${esc(tr('bk.restore.previousTip'))}">
+          <option value="retain">${esc(tr('bk.restore.retain'))}</option>
+          <option value="delete">${esc(tr('bk.restore.delete'))}</option></select></label>` : ''}
       <label class="bk-check tip" data-tip="${esc(tr('bk.restore.haltTip'))}"><input type="checkbox" name="halt"> <span>${esc(tr('bk.restore.halt'))}</span></label>`,
     async (f) => {
       const replace = f.get('mode') === 'replace';
-      if (replace && !confirm(tr('bk.restore.replaceConfirm', { vm: row.vm }))) throw new Error(tr('bk.cancelled'));
+      const drop = replace && f.get('delete_policy') === 'delete';
+      if (replace && !confirm(drop ? tr('bk.restore.replaceDeleteConfirm', { vm: row.vm })
+        : tr('bk.restore.replaceConfirm', { vm: row.vm }))) throw new Error(tr('bk.cancelled'));
       const out = await call('POST', `/api/backups/${enc(w.cluster)}/${enc(row.namespace)}/${enc(row.name)}/restore`, {
-        replace, new_vm: replace ? undefined : f.get('new_vm'), keep_mac: !!f.get('keep_mac'), halt: !!f.get('halt') });
+        replace, new_vm: replace ? undefined : f.get('new_vm'), keep_mac: !!f.get('keep_mac'), halt: !!f.get('halt'),
+        delete_policy: replace ? (f.get('delete_policy') || 'retain') : undefined });
       follow(w, out.action_id, tr('bk.done.restore', { vm: replace ? row.vm : f.get('new_vm') }));
     });
     const form = w.root.querySelector('.bk-form');
@@ -247,6 +300,7 @@ const Backups = (() => {
   async function onAction(w, act, row) {
     try {
       if (act === 'restore') return w.tab === 'volsnaps' ? volRestoreForm(w, row) : restoreForm(w, row);
+      if (act === 'sched-edit') return editSchedule(w, row);
       if (act === 'delete') {
         const msg = w.tab === 'schedules' ? tr('bk.confirm.deleteSchedule', { name: row.name })
           : w.tab === 'volsnaps' ? tr('bk.confirm.deleteVolsnap', { name: row.name })

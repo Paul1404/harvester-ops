@@ -1,8 +1,8 @@
 # Parity with the Harvester UI
 
-Status on 2026-09-27, console **v1.67.0**, compared with the **Harvester v1.9** UI (menus taken from the harvester-ui-extension v1.9.0 source and the v1.9 documentation).
+Status on 2026-09-27, console **v1.68.0**, compared with the **Harvester v1.9** UI (menus taken from the harvester-ui-extension v1.9.0 source and the v1.9 documentation).
 
-Of 135 functions of the Harvester UI: **115 done**, **7 partial**, **13 missing**; 2 out of scope. A missing function shows the version it is planned for.
+Of 135 functions of the Harvester UI: **121 done**, **5 partial**, **9 missing**; 2 out of scope. A missing function shows the version it is planned for.
 
 Statuses: Done, Partial (what is missing is said), Missing (planned version), Console only (what Harvester does not have), Out of scope.
 
@@ -89,7 +89,7 @@ Harvester menu: *Create / Edit VM*
 | Node scheduling (selector, rules) | Done | 1.13 |  |
 | VM affinity / anti-affinity | Done | 1.13 |  |
 | PCI devices | Done | 1.15 |  |
-| USB devices | Missing | planned 1.68 |  |
+| USB devices | Done | 1.68 | a QEMU tablet passed to a VM on the bench |
 | Access credentials (password, keys through the agent) | Done | 1.61 | applied at the next restart |
 | Filesystem volume (virtiofs, v1.9) | Done | 1.62 | at creation; the guest kernel needs virtiofs |
 | Labels, instance labels, annotations | Done | 1.62 |  |
@@ -183,9 +183,9 @@ Harvester menu: *Backup & Snapshots*
 
 | Function | Status | Version | Note |
 |---|---|---|---|
-| Schedules (create, suspend, resume, delete) | Partial | 1.58 | no edit yet |
+| Schedules (create, edit, suspend, resume, delete) | Done | 1.68 |  |
 | Backups: restore new or replace existing | Done | 1.58 |  |
-| Replace deleting previous volumes; file system freeze deadline | Missing | planned 1.68 |  |
+| Replace deleting previous volumes; file system freeze deadline | Done | 1.68 | freeze offered without "0s" (no limit: Harvester never calls the thaw); ignored before Harvester 1.9 |
 | VM snapshots: restore, delete | Done | 1.58 |  |
 | Volume snapshots: restore, delete | Done | 1.58 |  |
 | Backup target (NFS, S3) | Done | 1.67 | NFS or S3 form, connection test, removal |
@@ -211,10 +211,10 @@ Harvester menu: *Advanced*
 | SSH keys (create, read from file, edit, delete) | Done | 1.64 |  |
 | Cloud configuration templates (user / network data) | Done | 1.64 |  |
 | Storage classes (Longhorn v1, encryption, topologies, default, delete) | Partial | 1.64 | LVM and Longhorn v2 offered but not verified for real (absent from the benches) |
-| PCI devices | Partial | 1.15 | list and attach to VMs; enable passthrough in 1.68 |
-| SR-IOV network devices (VF count) | Missing | planned 1.68 |  |
-| SR-IOV GPU, vGPU, MIG configurations | Missing | planned 1.68 | to be documented as unverified: no compatible GPU under Harvester |
-| USB devices (passthrough) | Missing | planned 1.68 |  |
+| PCI devices | Done | 1.68 | enable or disable passthrough, by selection; IOMMU group and the VMs using them said |
+| SR-IOV network devices (VF count) | Done | 1.68 | emulated igb card on the bench |
+| SR-IOV GPU, vGPU, MIG configurations | Missing |  | not shipped: no compatible GPU under Harvester on the benches, nothing can be tried for real |
+| USB devices (passthrough) | Done | 1.68 |  |
 | Add-ons: enable, disable, configure | Done | 1.57 |  |
 | Secrets (Opaque, TLS, Basic, Registry, SSH, encryption: create, new values, delete) | Done | 1.64 |  |
 | Harvester settings (all 40: NTP, proxy, CA, TLS, overcommit…) | Done | 1.67 | typed forms, checked beforehand as the webhook would, applied state, masked secrets, warning on settings that can cut an access |

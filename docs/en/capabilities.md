@@ -322,6 +322,25 @@ on harv1: a snapshot of a stopped VM (12 s), restored into a new stopped VM
 the NAS (NFS), a weekly schedule created, suspended, resumed and deleted,
 and everything deleted again.
 
+Added in 1.68.0, what the window still lacked against Harvester:
+
+- **Edit** a schedule: its frequency, the copies kept and the failures
+  tolerated (the VM and the type stay, as in Harvester). The window starts
+  from the current values; Harvester's own trigger follows the new rhythm.
+- **File system freeze** when taking a backup or a snapshot: with the guest
+  agent, Harvester freezes the VM's file systems during the copy, at most
+  this long (5 s to 5 min; Harvester's default is 1 s). "0 s", no limit, is
+  not offered: Harvester never calls the thaw itself, the deadline does.
+  Harvester 1.9 and later; older versions ignore it, which the dock says.
+- **Previous volumes** when replacing a VM from a backup: keep them, or
+  delete them (confirmed separately: they cannot be recovered). A snapshot
+  restore always keeps them, as Harvester requires.
+
+Verified: on harv1 a snapshot with a 5 s freeze of a VM whose agent is
+connected (Harvester froze its file systems, the VM did not stay frozen),
+and a weekly schedule edited then deleted; on the three-node bench a VM
+replaced from an NFS backup with its previous volumes deleted.
+
 ### Moving a VM to another cluster, exporting, importing (1.45.0)
 
 The Migrate window of a VM (its migrate button, or `harvester-vm-transfer`
@@ -465,8 +484,9 @@ for whichever cluster is selected:
   for itself are hidden until asked for) and SSH Keys (fingerprint,
   validation, the VMs that received them).
 - **Advanced** (1.67.0, see below): Settings (every Harvester setting,
-  the backup target included) and Support (Harvester's support bundles and
-  kubeconfigs limited to a role).
+  the backup target included), PCI Devices, USB Devices and SR-IOV Networks
+  (1.68.0) and Support (Harvester's support bundles and kubeconfigs limited
+  to a role).
 
 Every list filters by words, sorts by any column (click the header, again to
 reverse; the order is remembered), opens a row's details, and opens a VM
@@ -978,6 +998,50 @@ and deleted; a kubeconfig with `view` on `default` that listed the VMs, was
 refused elsewhere, and stopped working as soon as it was revoked. On the
 three-node bench: an NFS backup target set, reached by Longhorn, tested and
 removed.
+
+### PCI, USB and SR-IOV devices (1.68.0)
+
+Three more tabs in **Advanced**, as in Harvester (they need the
+`pcidevices-controller` add-on; without it the tabs say so and open
+Add-ons):
+
+- **PCI Devices**: every PCI device of every host, filtered by words, host
+  or the ones in passthrough: address, description, vendor and device IDs,
+  the driver in use (and the host driver it had), its **IOMMU group** (the
+  whole group goes with it, said before enabling), the VMs using it.
+  **Enable passthrough** detaches it from the host for VMs, **Disable**
+  gives it back; one at a time or by selection. A device without an IOMMU
+  group cannot be passed; one a VM uses cannot be given back.
+- **USB Devices**: the same for USB devices (vendor, product, path).
+- **SR-IOV Networks**: the SR-IOV network cards not taken by a cluster
+  network, with the number of **virtual functions** they expose: enable
+  with N, disable (refused while a virtual function is in passthrough); to
+  change N, disable first. Each virtual function becomes a PCI device,
+  marked as such, to pass like any other.
+
+The VM editor offers PCI and USB devices in the same list, with their
+passthrough state. A USB device takes the name of its USBDevice, which is
+how Harvester knows a VM uses it.
+
+A trap of Harvester 1.8, met on the bench: a device removed from a stopped
+VM stays listed in the VM's allocation annotation, and Harvester then
+refuses to give it back ("already in use with vm"). Harvester 1.9 rebuilds
+that annotation from the VM; the console does the same before disabling,
+and says so in the dock. A running VM's allocation always counts.
+
+GPU pages (vGPU, SR-IOV GPU, MIG) are not shipped: no GPU Harvester
+supports is on the benches, so nothing could be tried for real.
+
+On the command line: `harvester-resources device pci-enable|pci-disable|
+usb-enable|usb-disable --name <device> [--name ...]` and
+`harvester-resources device sriov --name <card> --vfs N`.
+
+Tried for real on the three-node bench (emulated devices: an e1000e card,
+an igb card with SR-IOV, a QEMU tablet): the e1000e passed to a VM on its
+host (the device is in the VM's libvirt domain), refused back while used,
+given back to its driver after; two virtual functions created on the igb,
+one passed then given back, SR-IOV refused off while it was taken, then
+disabled; the tablet passed to a VM on another host and given back.
 
 ## 4. Cluster API: downstream RKE2 clusters (console + CLI)
 

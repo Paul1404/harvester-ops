@@ -46,22 +46,50 @@ def check_cron(cron):
     return c
 
 
-def backup_manifest(namespace, vm, name, kind="backup"):
+# v1.68.0 : délai de gel du système de fichiers (Harvester 1.9) : avec l'agent
+# invité, Harvester gèle les systèmes de fichiers de la VM le temps de la
+# copie, au plus ce délai. Les choix de l'interface de Harvester, sans « 0s »
+# (gel sans limite) : Harvester n'appelle jamais le dégel, qui ne tient qu'à
+# ce délai.
+FREEZE = ("1s", "5s", "10s", "30s", "1m", "3m", "5m")
+
+
+def crd_has_spec_field(crd, field):
+    """La CRD connaît-elle ce champ de spec ? La 1.8 refuse un champ inconnu
+    en décodage strict (fsFreezeDeadline, haltAfterRestore)."""
+    for ver in ((crd or {}).get("spec") or {}).get("versions") or []:
+        props = ((((ver.get("schema") or {}).get("openAPIV3Schema") or {})
+                  .get("properties") or {}).get("spec") or {}).get("properties") or {}
+        if field in props:
+            return True
+    return False
+
+
+def backup_manifest(namespace, vm, name, kind="backup", freeze=None, supports_freeze=False):
     if kind not in ("backup", "snapshot"):
         raise ValueError("type must be backup or snapshot")
+    spec = {"type": kind, "source": {"apiGroup": "kubevirt.io", "kind": "VirtualMachine",
+                                     "name": check_name(vm, "vm")}}
+    if freeze:
+        if freeze not in FREEZE:
+            raise ValueError("file system freeze deadline: " + ", ".join(FREEZE))
+        if supports_freeze:
+            spec["fsFreezeDeadline"] = freeze
     return {"apiVersion": "harvesterhci.io/v1beta1", "kind": "VirtualMachineBackup",
-            "metadata": {"name": check_name(name), "namespace": namespace},
-            "spec": {"type": kind, "source": {"apiGroup": "kubevirt.io", "kind": "VirtualMachine",
-                                              "name": check_name(vm, "vm")}}}
+            "metadata": {"name": check_name(name), "namespace": namespace}, "spec": spec}
 
 
 def restore_manifest(namespace, backup, target, new_vm, keep_mac=False, halt=False,
-                     delete_policy="retain", name=None, supports_halt=True):
+                     delete_policy="retain", name=None, supports_halt=True, from_snapshot=False):
     """Restaurer une sauvegarde ou un instantané : dans une NOUVELLE VM, ou en
-    REMPLACEMENT de la VM d'origine (arrêtée). `retain` garde la VM restaurée
-    si l'objet de restauration est supprimé ; `delete` la supprime avec lui."""
+    REMPLACEMENT de la VM d'origine (arrêtée). En remplacement, `delete`
+    supprime les anciens volumes de la VM (« Delete Previous Volumes » de
+    Harvester), `retain` les garde ; un instantané les garde toujours (le
+    webhook refuse delete)."""
     if delete_policy not in ("retain", "delete"):
         raise ValueError("deletion policy must be retain or delete")
+    if from_snapshot and delete_policy == "delete":
+        raise ValueError("a snapshot restore keeps the previous volumes (Harvester refuses delete)")
     spec = {"newVM": bool(new_vm), "deletionPolicy": delete_policy,
             "target": {"apiGroup": "kubevirt.io", "kind": "VirtualMachine", "name": check_name(target, "vm")},
             "virtualMachineBackupNamespace": namespace, "virtualMachineBackupName": check_name(backup, "backup")}
@@ -74,9 +102,7 @@ def restore_manifest(namespace, backup, target, new_vm, keep_mac=False, halt=Fal
             "spec": spec}
 
 
-def schedule_manifest(namespace, name, vm, cron, retain, max_failure, kind="backup"):
-    if kind not in ("backup", "snapshot"):
-        raise ValueError("type must be backup or snapshot")
+def _counts(retain, max_failure):
     try:
         retain, max_failure = int(retain), int(max_failure)
     except (TypeError, ValueError):
@@ -89,6 +115,21 @@ def schedule_manifest(namespace, name, vm, cron, retain, max_failure, kind="back
         raise ValueError("keep between 3 and 250 copies")
     if not 2 <= max_failure < retain:
         raise ValueError("stop after 2 failures or more, and fewer than the copies kept")
+    return retain, max_failure
+
+
+def schedule_patch(cron, retain, max_failure):
+    """v1.68.0 : modifier une planification, comme Harvester le permet après
+    création : fréquence, copies gardées, échecs tolérés (VM et type sont
+    figés)."""
+    retain, max_failure = _counts(retain, max_failure)
+    return {"spec": {"cron": check_cron(cron), "retain": retain, "maxFailure": max_failure}}
+
+
+def schedule_manifest(namespace, name, vm, cron, retain, max_failure, kind="backup"):
+    if kind not in ("backup", "snapshot"):
+        raise ValueError("type must be backup or snapshot")
+    retain, max_failure = _counts(retain, max_failure)
     return {"apiVersion": "harvesterhci.io/v1beta1", "kind": "ScheduleVMBackup",
             "metadata": {"name": check_name(name), "namespace": namespace},
             "spec": {"cron": check_cron(cron), "retain": retain, "maxFailure": max_failure,

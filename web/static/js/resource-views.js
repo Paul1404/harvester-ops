@@ -100,12 +100,14 @@ const ResourceViews = (() => {
     suspend: () => tr('bk.act.suspend'), resume: () => tr('bk.act.resume'),
     default: () => tr('of.act.default'), configure: () => tr('of.act.configure'),
     yaml: () => tr('yw.act.yaml'), more: () => tr('sta.act.more'), edit: () => tr('sta.img.edit'),
+    'sched-edit': () => tr('sta.img.edit'),
   };
   const ACT_TIP = {
     restore: () => tr('bk.act.restoreTip'), delete: () => tr('bk.act.deleteTip'),
     suspend: () => tr('bk.act.suspendTip'), resume: () => tr('bk.act.resumeTip'),
     default: () => tr('of.act.defaultTip'), configure: () => tr('of.act.configureTip'),
     yaml: () => tr('yw.act.yamlTip'), more: () => tr('sta.act.moreTip'), edit: () => tr('sec.t.edit'),
+    'sched-edit': () => tr('bk.act.editTip'),
   };
   const act = (a, disabled, why, admin) => `<button type="button" class="btn btn-sm ${a === 'delete' ? 'btn-danger' : 'btn-secondary'} res-act tip${admin ? ' needs-admin' : ''}"
       data-act="${a}" data-tip="${esc(disabled && why ? why : ACT_TIP[a]())}" ${disabled ? 'disabled' : ''}>${esc(ACT_LABEL[a]())}</button>`;
@@ -293,7 +295,7 @@ const ResourceViews = (() => {
         r.suspended ? badge('dim', tr('bk.st.suspended'))
           : (r.failures ? badge('warn', tr('bk.st.failures', { n: r.failures }), tr('bk.st.failuresTip', { max: r.max_failure }))
             : badge('ok', tr('bk.st.active'))),
-        act(r.suspended ? 'resume' : 'suspend') + act('delete') + yamlAct('schedules')],
+        act('sched-edit') + act(r.suspended ? 'resume' : 'suspend') + act('delete') + yamlAct('schedules')],
       details: null,
       text: (r) => `${r.namespace}/${r.name} ${r.vm} ${r.cron}`,
       sort: [(r) => r.name, (r) => r.vm, (r) => r.type, (r) => r.cron, (r) => r.kept, (r) => r.last,

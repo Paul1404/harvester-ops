@@ -670,6 +670,7 @@ ADMIN_ONLY_PREFIXES = (
     "/api/net-admin/",          # v1.65.0 : réseaux de cluster, liens, équilibreurs, réglages réseau
     "/api/hv-settings/",        # v1.67.0 : réglages de Harvester (certains coupent l'accès)
     "/api/hv-support/",         # v1.67.0 : paquet de support, kubeconfigs délivrés
+    "/api/devices/",            # v1.68.0 : passthrough PCI et USB, SR-IOV (détache un périphérique de l'hôte)
     "/api/users",               # gestion des comptes de la console
     "/api/harvester-users",     # comptes du cluster Harvester
     "/api/kubeovn/",            # réseaux kube-ovn : un changement peut couper des VMs
@@ -10836,6 +10837,7 @@ import cluster_objects as _co  # noqa: E402
 import hv_backups as _hb  # noqa: E402
 import hv_net as _hnet  # noqa: E402
 import hv_settings as _hset  # noqa: E402
+import hv_devices as _hdev  # noqa: E402
 import hv_objects as _ho  # noqa: E402
 
 # v1.58.0 : les listes de la fenêtre Backups, servies par la même route
@@ -11032,6 +11034,11 @@ def api_backup_create(cluster, namespace):
     args = ["backup", "create", "--namespace", namespace, "--vm", vm, "--type", kind]
     if name:
         args += ["--name", name]
+    # v1.68.0 : délai de gel du système de fichiers (Harvester 1.9)
+    if body.get("freeze"):
+        if body["freeze"] not in _hb.FREEZE:
+            return jsonify({"error": "freeze: " + ", ".join(_hb.FREEZE)}), 400
+        args += ["--freeze", body["freeze"]]
     run, err = _res_action(cluster, f"{kind}:create:{namespace}/{vm}", args)
     return _res_reply(run, err, vm=vm, type=kind)
 
@@ -11091,10 +11098,19 @@ def api_schedule_create(cluster, namespace):
 @requires_auth
 @_rate_limit("20/minute")
 def api_schedule_toggle(cluster, namespace, name, verb):
-    if verb not in ("suspend", "resume"):
-        return jsonify({"error": "suspend or resume"}), 400
-    run, err = _res_action(cluster, f"schedule:{verb}:{namespace}/{name}",
-                           ["schedule", verb, "--namespace", namespace, "--name", name])
+    if verb not in ("suspend", "resume", "update"):
+        return jsonify({"error": "suspend, resume or update"}), 400
+    args = ["schedule", verb, "--namespace", namespace, "--name", name]
+    if verb == "update":
+        # v1.68.0 : fréquence, copies gardées, échecs tolérés (comme Harvester)
+        body = request.get_json(silent=True) or {}
+        try:
+            patch = _hb.schedule_patch(body.get("cron"), body.get("retain"), body.get("max_failure"))
+        except ValueError as e:
+            return jsonify({"error": str(e)}), 400
+        args += ["--cron", patch["spec"]["cron"], "--retain", str(patch["spec"]["retain"]),
+                 "--max-failure", str(patch["spec"]["maxFailure"])]
+    run, err = _res_action(cluster, f"schedule:{verb}:{namespace}/{name}", args)
     return _res_reply(run, err, schedule=name)
 
 
@@ -12748,6 +12764,97 @@ def api_hv_support_bundle_download(cluster, name):
     fname = re.sub(r"[^A-Za-z0-9._-]+", "_", (obj.get("status") or {}).get("filename") or f"{name}.zip")[:160]
     return Response(stream_with_context(stream), mimetype="application/zip",
                     headers={"Content-Disposition": f'attachment; filename="{fname}"'})
+
+
+# ---------------------------------------------------------------------------
+# v1.68.0 : Advanced > PCI Devices, USB Devices, SR-IOV Network Devices.
+# Écritures par bin/harvester-resources.py device.
+# ---------------------------------------------------------------------------
+
+_DEVICE_DO = ("pci-enable", "pci-disable", "usb-enable", "usb-disable", "sriov")
+
+
+@app.route("/api/devices/<cluster>")
+@requires_auth
+def api_devices(cluster):
+    """Les périphériques de Harvester, leur état de passthrough et les VMs
+    qui s'en servent, en une lecture."""
+    kc = _kubectl_for_cluster(cluster)
+    if not kc:
+        return jsonify({"error": f"unknown cluster: {cluster}"}), 404
+    if _cluster_reachable(kc) is False:
+        return jsonify(_unreachable_payload(cluster, kc)), 200
+    from concurrent.futures import ThreadPoolExecutor
+    kinds = {"addon": ("get", "addons.harvesterhci.io", "-n", _hdev.ADDON[0]),
+             "pci": ("get", _hdev.K_PCI), "pciclaims": ("get", _hdev.K_PCICLAIM),
+             "usb": ("get", _hdev.K_USB), "usbclaims": ("get", _hdev.K_USBCLAIM),
+             "sriov": ("get", _hdev.K_SRIOV), "vms": ("get", "virtualmachines.kubevirt.io", "-A"),
+             "vmis": ("get", "virtualmachineinstances.kubevirt.io", "-A")}
+    with ThreadPoolExecutor(max_workers=len(kinds)) as pool:
+        futs = {k: pool.submit(_kubectl_json, kc, *a, timeout=30, cluster=cluster) for k, a in kinds.items()}
+        got = {k: ((f.result() or {}).get("items") or []) for k, f in futs.items()}
+    enabled = _hdev.addon_enabled(got["addon"])
+    running = _hdev.running_set(got["vmis"])
+    return jsonify({"cluster": cluster, "addon": enabled,
+                    "pci": _hdev.pci_rows(got["pci"], got["pciclaims"], got["vms"], got["sriov"], running),
+                    "usb": _hdev.usb_rows(got["usb"], got["usbclaims"], got["vms"], running),
+                    "sriov": _hdev.sriov_rows(got["sriov"], got["pciclaims"])})
+
+
+@app.route("/api/devices/<cluster>/do/<action>", methods=["POST"])
+@requires_auth
+@_rate_limit("20/minute")
+def api_devices_do(cluster, action):
+    if action not in _DEVICE_DO:
+        return jsonify({"error": "action: " + ", ".join(_DEVICE_DO)}), 400
+    kc = _kubectl_for_cluster(cluster)
+    if not kc:
+        return jsonify({"error": f"unknown cluster: {cluster}"}), 404
+    b = request.get_json(silent=True) or {}
+    names = b.get("names") if isinstance(b.get("names"), list) else [b.get("name")]
+    try:
+        names = [_hdev.check_name(n) for n in names if n]
+        if not names or len(names) > 64:
+            raise ValueError("names: 1 to 64 devices")
+        args = ["device", action]
+        for n in names:
+            args += ["--name", n]
+        if action == "sriov":
+            if len(names) != 1:
+                raise ValueError("sriov: one network device at a time")
+            vfs = int(b.get("vfs", 0))
+            if vfs < 0 or vfs > _hdev.MAX_VFS:
+                raise ValueError(f"number of virtual functions: 0 to {_hdev.MAX_VFS}")
+            args += ["--vfs", str(vfs)]
+        else:
+            user = re.sub(r"[^A-Za-z0-9@._-]", "", str(current_user() or "admin"))[:63] or "admin"
+            args += ["--user", user]
+    except (ValueError, TypeError) as e:
+        return jsonify({"error": str(e)}), 400
+    label = f"device:{action}:{names[0]}" + (f"+{len(names) - 1}" if len(names) > 1 else "")
+    run, err = _res_cli(cluster, kc, label, args)
+    return _res_reply(run, err, action=action, names=names)
+
+
+@app.route("/api/hostdevices/<cluster>")
+@requires_auth
+def api_hostdevices(cluster):
+    """v1.68.0 : ce qu'une VM peut recevoir (sélecteur de l'éditeur) : les
+    périphériques PCI et, désormais, USB, avec leur état de passthrough."""
+    pci, err = _list_k8s_resources(cluster, "pcidevices.devices.harvesterhci.io",
+                                   reducer=_reduce_pcidevice, cache_key="pcidevices")
+    if err:
+        return jsonify({"error": err}), 502
+    usb, _ = _list_k8s_resources(cluster, _hdev.K_USB, cache_key="usbdevices", reducer=lambda it: it)
+    rows = [dict(r, bus="pci") for r in pci]
+    for u in usb or []:
+        st = u.get("status") or {}
+        name = (u.get("metadata") or {}).get("name")
+        rows.append({"name": name, "bus": "usb", "device_name": st.get("resourceName") or "",
+                     "node": st.get("nodeName"), "claimed": bool(st.get("enabled")),
+                     "display_name": f"USB · {(st.get('description') or name)[:60]} ({st.get('nodeName')} · "
+                                     f"{'passthrough' if st.get('enabled') else 'host'})"})
+    return jsonify(rows)
 
 
 @app.route("/api/storage-options/<cluster>")

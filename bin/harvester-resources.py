@@ -8,10 +8,11 @@ il s'utilise aussi seul.
   harvester-resources addon --cluster harv1 --namespace kube-system --name descheduler --enable
   harvester-resources addon --cluster harv1 --namespace kube-system --name descheduler --disable
 
-  harvester-resources backup create  --cluster harv1 --namespace default --vm web [--type snapshot] [--name N]
-  harvester-resources backup restore --cluster harv1 --namespace default --name B (--new-vm NAME [--keep-mac] | --replace) [--halt]
+  harvester-resources backup create  --cluster harv1 --namespace default --vm web [--type snapshot] [--name N] [--freeze 5s]
+  harvester-resources backup restore --cluster harv1 --namespace default --name B (--new-vm NAME [--keep-mac] | --replace [--delete-policy delete]) [--halt]
   harvester-resources backup delete  --cluster harv1 --namespace default --name B
   harvester-resources schedule create --cluster harv1 --namespace default --name S --vm web --cron "0 2 * * *" --retain 7 --max-failure 3 [--type snapshot]
+  harvester-resources schedule update --cluster harv1 --namespace default --name S [--cron "0 3 * * *"] --retain 10 --max-failure 4
   harvester-resources schedule suspend|resume|delete --cluster harv1 --namespace default --name S
   harvester-resources volsnap restore --cluster harv1 --namespace default --name SNAP --new-volume NAME
   harvester-resources volsnap delete  --cluster harv1 --namespace default --name SNAP
@@ -99,6 +100,9 @@ il s'utilise aussi seul.
   harvester-resources setting test-backup-target --cluster harv1
   harvester-resources supportbundle create --cluster harv1 --spec b.json ; supportbundle delete --name bundle-x
   harvester-resources kubeconfig create --cluster harv1 --name ci --role view [--namespace default] --duration 24h --out ci.yaml
+  harvester-resources device pci-enable|pci-disable --cluster harvlab --name harvlab-n3-000005000 [--name ...]
+  harvester-resources device usb-enable|usb-disable --cluster harvlab --name harvlab-n1-0627-0001-002002
+  harvester-resources device sriov --cluster harvlab --name harvlab-n3-enp5s0 --vfs 2     (0 désactive)
   harvester-resources kubeconfig revoke --cluster harv1 --name ci
 
 Sorties : 0 fait, 1 échec, 2 refusé par le contrôle, 3 annulé. Les étapes
@@ -126,6 +130,7 @@ import hv_storage as hs  # noqa: E402
 import hv_advanced as hadv  # noqa: E402
 import hv_net as hnet  # noqa: E402
 import hv_settings as hset  # noqa: E402
+import hv_devices as hdev  # noqa: E402
 
 EXIT_OK, EXIT_FAIL, EXIT_BLOCKED, EXIT_CANCELLED = 0, 1, 2, 3
 K_ADDON = "addons.harvesterhci.io"
@@ -286,8 +291,12 @@ def cmd_backup(args):
             target = kube.get("settings.harvesterhci.io", None, "backup-target")
             if not (target or {}).get("value") or '"endpoint":""' in (target or {}).get("value", "").replace(" ", ""):
                 raise ValueError("no backup target is set on this cluster (Harvester setting backup-target)")
+        supports = hb.crd_has_spec_field(kube.get("customresourcedefinitions.apiextensions.k8s.io", None, hb.K_BACKUP),
+                                         "fsFreezeDeadline")
+        if args.freeze and not supports:
+            step("create", "running", "this Harvester has no freeze deadline (1.9 and later): its default applies")
         step("create", "running", f"{args.type} of {ns}/{args.vm}: {name}")
-        kube.create(hb.backup_manifest(ns, args.vm, name, args.type))
+        kube.create(hb.backup_manifest(ns, args.vm, name, args.type, freeze=args.freeze, supports_freeze=supports))
         step("create", "done", name)
         return _wait(kube, hb.K_BACKUP, ns, name, _backup_done, args.timeout)
     if args.action == "delete":
@@ -320,7 +329,8 @@ def cmd_backup(args):
     man = hb.restore_manifest(ns, args.name, target, new_vm, keep_mac=args.keep_mac, halt=args.halt,
                               delete_policy=args.delete_policy,
                               name=f"restore-{target}-{time.strftime('%Y%m%d%H%M%S')}"[:63],
-                              supports_halt=vt.restore_supports_halt(crd))
+                              supports_halt=vt.restore_supports_halt(crd),
+                              from_snapshot=((b.get("spec") or {}).get("type") == "snapshot"))
     step("restore", "running", f"{args.name} into {'new VM ' if new_vm else ''}{ns}/{target}")
     kube.create(man)
     rname = man["metadata"]["name"]
@@ -343,15 +353,34 @@ def cmd_schedule(args):
     kube = kube_from(args)
     ns, name = args.namespace, hb.check_name(args.name)
     if args.action == "create":
-        man = hb.schedule_manifest(ns, name, args.vm, args.cron, args.retain, args.max_failure, args.type)
+        retain = args.retain if args.retain is not None else 7
+        man = hb.schedule_manifest(ns, name, args.vm, args.cron, retain,
+                                   args.max_failure if args.max_failure is not None else 3, args.type)
         if args.type == "backup":
             target = kube.get("settings.harvesterhci.io", None, "backup-target")
             if not (target or {}).get("value"):
                 raise ValueError("no backup target is set on this cluster: schedule snapshots, or set one")
-        step("create", "running", f"{args.type} of {ns}/{args.vm}, {man['spec']['cron']}, keep {args.retain}")
+        step("create", "running", f"{args.type} of {ns}/{args.vm}, {man['spec']['cron']}, keep {retain}")
         kube.create(man)
         step("create", "done", name)
         return EXIT_OK
+    if args.action == "update":
+        cur = kube.get(hb.K_SCHEDULE, ns, name)
+        if cur is None:
+            raise ValueError(f"no schedule {ns}/{name}")
+        sp = cur.get("spec") or {}
+        patch = hb.schedule_patch(args.cron or sp.get("cron"),
+                                  args.retain if args.retain is not None else sp.get("retain"),
+                                  args.max_failure if args.max_failure is not None else sp.get("maxFailure"))
+        kube.patch(hb.K_SCHEDULE, ns, name, patch)
+        cron = patch["spec"]["cron"]
+        step("update", "running", f"{ns}/{name}: {cron}, keep {patch['spec']['retain']}, "
+                                  f"stop after {patch['spec']['maxFailure']} failures")
+        # Harvester recopie le cron dans le CronJob déclencheur svmb-<uid>
+        job = f"svmb-{(cur.get('metadata') or {}).get('uid')}"
+        return _wait(kube, "cronjobs.batch", "harvester-system", job,
+                     lambda o: (True, "schedule updated") if ((o or {}).get("spec") or {}).get("schedule") == cron
+                     else (None, "waiting for Harvester to reschedule"), 120, label="update")
     if args.action in ("suspend", "resume"):
         want = args.action == "suspend"
         step(args.action, "running", f"{ns}/{name}")
@@ -2456,6 +2485,77 @@ def cmd_kubeconfig(args):
     return EXIT_OK
 
 
+def cmd_device(args):
+    """v1.68.0 : passthrough PCI et USB, fonctions virtuelles SR-IOV."""
+    kube = kube_from(args)
+    names = list(dict.fromkeys(args.name or []))
+    if not names:
+        raise ValueError("--name: at least one device")
+    for n in names:
+        hdev.check_name(n)
+    addons = [a for a in [kube.get("addons.harvesterhci.io", hdev.ADDON[0], hdev.ADDON[1])] if a]
+    if not hdev.addon_enabled(addons):
+        raise ValueError("the pcidevices-controller add-on is disabled: enable it in Add-ons first")
+    act = args.action
+    if act == "sriov":
+        if len(names) != 1:
+            raise ValueError("sriov: one network device at a time")
+        name = names[0]
+        dev = kube.get(hdev.K_SRIOV, None, name)
+        if dev is None:
+            raise ValueError(f"no SR-IOV network device {name}")
+        patch = hdev.sriov_patch(dev, args.vfs, kube.list(hdev.K_PCICLAIM, None))
+        n = patch["spec"]["numVFs"]
+        kube.patch(hdev.K_SRIOV, None, name, patch)
+        step("device", "running", f"{name}: " + (f"{n} virtual functions requested" if n else "SR-IOV disabled"))
+        return _wait(kube, hdev.K_SRIOV, None, name, lambda o: hdev.sriov_settled(o, n), args.timeout, label="device")
+    pci = act.startswith("pci-")
+    enable = act.endswith("-enable")
+    kind, ckind = (hdev.K_PCI, hdev.K_PCICLAIM) if pci else (hdev.K_USB, hdev.K_USBCLAIM)
+    vms = kube.list("virtualmachines.kubevirt.io", None)
+    running = hdev.running_set(kube.list("virtualmachineinstances.kubevirt.io", None))
+    devs = {}
+    for n in names:                                # tout vérifier avant le premier geste
+        d = kube.get(kind, None, n)
+        if d is None:
+            raise ValueError(f"no {'PCI' if pci else 'USB'} device {n}")
+        claim = kube.get(ckind, None, n)
+        if enable and claim is not None:
+            raise ValueError(f"{n}: passthrough is already enabled")
+        if not enable and claim is None:
+            raise ValueError(f"{n}: passthrough is not enabled")
+        if enable and pci:
+            hdev.pci_claim(d, args.user)            # refus sans groupe IOMMU
+        if not enable:
+            hdev.pci_disable_check(n, vms, running) if pci else hdev.usb_disable_check(d, vms, running)
+        devs[n] = d
+    rc = EXIT_OK
+    for n, d in devs.items():
+        if enable:
+            kube.create(hdev.pci_claim(d, args.user) if pci else hdev.usb_claim(d, args.user))
+            step("device", "running", f"{n}: passthrough requested")
+        else:
+            # Harvester 1.8 laisse l'allocation d'une carte retirée d'une VM
+            # arrêtée et refuse alors de la rendre ; la 1.9 la recalcule :
+            # on fait de même (vu sur harvlab, pcidevices v1.8.2)
+            for vns, vname, patch in (hdev.stale_allocations(n, vms, running) if pci else []):
+                kube.patch("virtualmachines.kubevirt.io", vns, vname, patch)
+                step("device", "running", f"{vns}/{vname} is stopped and no longer lists {n}: "
+                                          "its stale allocation is cleared, as Harvester 1.9 does")
+            kube.delete(ckind, None, n)
+            step("device", "running", f"{n}: passthrough being disabled")
+    for n in devs:
+        if pci:
+            done = (lambda o, e=enable: hdev.pci_settled(o, e))
+            r = _wait(kube, ckind, None, n, done, args.timeout, label="device")
+        else:
+            def done(o, n=n, e=enable):
+                return hdev.usb_settled(o, kube.get(ckind, None, n), e)
+            r = _wait(kube, kind, None, n, done, args.timeout, label="device")
+        rc = rc if r == EXIT_OK else r
+    return rc
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(prog="harvester-resources", description=__doc__.split("\n\n")[0])
     sub = ap.add_subparsers(dest="cmd", required=True)
@@ -2487,17 +2587,19 @@ def main(argv=None):
     sp.add_argument("--replace", action="store_true", help="restore over the original VM (stopped)")
     sp.add_argument("--keep-mac", action="store_true")
     sp.add_argument("--halt", action="store_true", help="leave the restored VM stopped")
-    sp.add_argument("--delete-policy", choices=("retain", "delete"), default="retain")
+    sp.add_argument("--delete-policy", choices=("retain", "delete"), default="retain",
+                    help="restore --replace: delete or keep the previous volumes")
+    sp.add_argument("--freeze", choices=hb.FREEZE, help="create: file system freeze deadline (Harvester 1.9)")
 
     sp = sub.add_parser("schedule", help="scheduled VM backups or snapshots")
     sp.set_defaults(fn=cmd_schedule)
-    sp.add_argument("action", choices=("create", "suspend", "resume", "delete"))
+    sp.add_argument("action", choices=("create", "update", "suspend", "resume", "delete"))
     common(sp)
     sp.add_argument("--name", required=True)
     sp.add_argument("--vm")
     sp.add_argument("--cron")
-    sp.add_argument("--retain", default=7)
-    sp.add_argument("--max-failure", default=3)
+    sp.add_argument("--retain", help="copies kept (create: 7 by default; update: unchanged when omitted)")
+    sp.add_argument("--max-failure", help="failures before suspension (create: 3; update: unchanged when omitted)")
     sp.add_argument("--type", choices=("backup", "snapshot"), default="backup")
 
     sp = sub.add_parser("volsnap", help="volume snapshots: restore into a new volume, delete")
@@ -2824,6 +2926,15 @@ def main(argv=None):
     sp.add_argument("--description")
     sp.add_argument("--out", help="create: where to write the file (mode 0600)")
     sp.add_argument("--cluster-name", help="create: the cluster name written in the file")
+    sp = sub.add_parser("device", help="PCI and USB passthrough, SR-IOV virtual functions")
+    sp.set_defaults(fn=cmd_device)
+    sp.add_argument("action", choices=("pci-enable", "pci-disable", "usb-enable", "usb-disable", "sriov"))
+    sp.add_argument("--cluster")
+    sp.add_argument("--kubeconfig")
+    sp.add_argument("--name", action="append", help="device name (PCIDevice, USBDevice or SriovNetworkDevice), repeatable")
+    sp.add_argument("--vfs", type=int, default=0, help="sriov: number of virtual functions, 0 to disable")
+    sp.add_argument("--user", default="admin", help="enable: the userName written in the claim")
+    sp.add_argument("--timeout", type=int, default=600)
     args = ap.parse_args(argv)
     signal.signal(signal.SIGTERM, _on_signal)
     try:

@@ -350,6 +350,30 @@ nouvelle VM arrêtée (9 s), son instantané de volume restauré dans un nouveau
 volume (lié), une sauvegarde vers le NAS (NFS), une planification
 hebdomadaire créée, suspendue, reprise et supprimée, puis tout supprimé.
 
+Ajouté en 1.68.0, ce qui manquait encore à la fenêtre face à Harvester :
+
+- **Modifier** une planification : sa fréquence, les copies gardées et les
+  échecs tolérés (la VM et le type restent, comme dans Harvester). La
+  fenêtre part des valeurs actuelles ; le déclencheur de Harvester suit le
+  nouveau rythme.
+- **Gel du système de fichiers** à la prise d'une sauvegarde ou d'un
+  instantané : avec l'agent invité, Harvester gèle les systèmes de fichiers
+  de la VM pendant la copie, au plus ce délai (5 s à 5 min ; le défaut de
+  Harvester est 1 s). « 0 s », sans limite, n'est pas proposé : Harvester
+  n'appelle jamais le dégel lui-même, c'est le délai qui l'assure. À partir
+  de Harvester 1.9 ; les versions plus anciennes l'ignorent, ce que dit le
+  dock.
+- **Anciens volumes** au remplacement d'une VM depuis une sauvegarde : les
+  garder, ou les supprimer (confirmé à part : ils ne se récupèrent pas).
+  Une restauration depuis un instantané les garde toujours, comme l'exige
+  Harvester.
+
+Vérifié : sur harv1, un instantané avec gel de 5 s d'une VM dont l'agent est
+connecté (Harvester a gelé ses systèmes de fichiers, la VM n'est pas restée
+gelée) et une planification hebdomadaire modifiée puis supprimée ; sur le
+banc à trois nœuds, une VM remplacée depuis une sauvegarde NFS avec
+suppression de ses anciens volumes.
+
 ### Déplacer une VM vers un autre cluster, l'exporter, l'importer (1.45.0)
 
 La fenêtre « Migrer » d'une VM (son bouton de migration, ou
@@ -535,7 +559,8 @@ connaissent de Harvester, pour le cluster choisi :
   cluster utilise pour lui-même restent cachés tant qu'on ne les demande
   pas) et Clés SSH (empreinte, validation, VMs qui les ont reçues).
 - **Avancé** (1.67.0, voir plus bas) : Réglages (tous les réglages de
-  Harvester, cible de sauvegarde comprise) et Support (paquets de support de
+  Harvester, cible de sauvegarde comprise), Périphériques PCI, Périphériques
+  USB et Réseaux SR-IOV (1.68.0) et Support (paquets de support de
   Harvester et kubeconfigs limités à un rôle).
 
 Chaque liste se filtre par mots, se trie par n'importe quelle colonne (clic
@@ -1097,6 +1122,55 @@ de six minutes, téléchargé et supprimé ; un kubeconfig `view` sur `default`
 qui a listé les VMs, a été refusé ailleurs et a cessé de fonctionner dès sa
 révocation. Sur le banc à trois nœuds : une cible de sauvegarde NFS posée,
 jointe par Longhorn, testée et retirée.
+
+### Périphériques PCI, USB et SR-IOV (1.68.0)
+
+Trois onglets de plus dans **Avancé**, comme dans Harvester (ils demandent
+l'add-on `pcidevices-controller` ; sans lui les onglets le disent et ouvrent
+les Add-ons) :
+
+- **Périphériques PCI** : chaque périphérique PCI de chaque hôte, filtrable
+  par mots, par hôte ou aux seuls passés : adresse, description,
+  identifiants fabricant et produit, pilote en service (et celui qu'avait
+  l'hôte), **groupe IOMMU** (tout le groupe part avec lui, ce qui est dit
+  avant d'activer), VMs qui s'en servent. **Activer le passthrough** le
+  détache de l'hôte pour les VMs, **Désactiver** le rend ; à l'unité ou par
+  sélection. Un périphérique sans groupe IOMMU ne peut pas être passé ; un
+  périphérique dont une VM se sert ne peut pas être rendu.
+- **Périphériques USB** : de même pour l'USB (fabricant, produit, chemin).
+- **Réseaux SR-IOV** : les cartes réseau SR-IOV non prises par un réseau de
+  cluster, avec le nombre de **fonctions virtuelles** qu'elles exposent :
+  activer avec N, désactiver (refusé tant qu'une fonction virtuelle est en
+  passthrough) ; pour changer N, désactiver d'abord. Chaque fonction
+  virtuelle devient un périphérique PCI, signalé comme tel, à passer comme
+  les autres.
+
+L'éditeur de VM propose les périphériques PCI et USB dans la même liste,
+avec leur état de passthrough. Un périphérique USB prend le nom de son
+USBDevice, c'est par là que Harvester sait qu'une VM s'en sert.
+
+Un piège de Harvester 1.8, rencontré sur le banc : un périphérique retiré
+d'une VM arrêtée reste inscrit dans l'annotation d'allocation de la VM, et
+Harvester refuse alors de le rendre (« already in use with vm »). Harvester
+1.9 refait cette annotation depuis la VM ; la console fait de même avant de
+désactiver, et le dit dans le dock. L'allocation d'une VM en marche compte
+toujours.
+
+Les pages GPU (vGPU, SR-IOV GPU, MIG) ne sont pas livrées : aucun GPU que
+Harvester sait gérer n'est sur les bancs, rien n'a donc pu être essayé en
+réel.
+
+En ligne de commande : `harvester-resources device pci-enable|pci-disable|
+usb-enable|usb-disable --name <périphérique> [--name ...]` et
+`harvester-resources device sriov --name <carte> --vfs N`.
+
+Essayé pour de vrai sur le banc à trois nœuds (périphériques émulés : une
+carte e1000e, une carte igb SR-IOV, une tablette QEMU) : l'e1000e passée à
+une VM sur son hôte (le périphérique est dans le domaine libvirt de la VM),
+refusée au retour tant qu'elle servait, rendue à son pilote ensuite ; deux
+fonctions virtuelles créées sur l'igb, l'une passée puis rendue, le SR-IOV
+refusé à l'arrêt tant qu'elle était prise, puis désactivé ; la tablette
+passée à une VM d'un autre hôte puis rendue.
 
 ## 4. Cluster API : clusters RKE2 en aval (console + CLI)
 

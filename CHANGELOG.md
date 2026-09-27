@@ -4,6 +4,57 @@ All notable changes to this project will be documented here.
 Format inspired by [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 This file summarises each minor release; per-patch detail lives in `git log`.
 
+## [1.68.0] - 2026-09-27 - PCI, USB and SR-IOV devices; backup gaps closed
+
+### Added
+- **PCI Devices**, **USB Devices** and **SR-IOV Networks** tabs in Advanced,
+  as in Harvester: state of the passthrough, driver, IOMMU group (the whole
+  group goes with a device, said before enabling), the VMs using a device;
+  enable or disable passthrough one at a time or by selection; virtual
+  functions of an SR-IOV card enabled with N or disabled, each becoming a
+  PCI device to pass. Without the pcidevices-controller add-on the tabs say
+  so and open Add-ons.
+- The VM editor offers PCI and USB devices in one list; a USB device takes
+  the name of its USBDevice, as Harvester expects.
+- Backups: **edit a schedule** (frequency, copies kept, failures tolerated),
+  a **file system freeze** deadline for a backup or snapshot (Harvester 1.9;
+  "0 s", no limit, is not offered since Harvester never thaws itself), and
+  the choice to **delete the previous volumes** when replacing a VM from a
+  backup (a snapshot restore always keeps them).
+- `harvester-resources device pci-enable|pci-disable|usb-enable|usb-disable|sriov`,
+  `harvester-resources schedule update`, `backup create --freeze`.
+
+### Fixed (found by the real tests)
+- Harvester 1.8's CRD refuses `disableResourcePooling` (a 1.9 field): the
+  claim no longer writes it, false being its default anyway.
+- Harvester 1.8 keeps a removed device in a stopped VM's allocation
+  annotation and then refuses to give the device back. Harvester 1.9
+  rebuilds it from the VM; the console does the same before disabling, says
+  so in the dock, and only counts the allocation of a running VM.
+
+### Not shipped
+- GPU pages (vGPU, SR-IOV GPU, MIG): no GPU Harvester supports is on the
+  benches, nothing could be tried for real.
+
+### Tests
+- Library, command line and routes: rows, claims with their owner, IOMMU
+  refusal, usage by spec and allocation, the stale allocation repair,
+  virtual functions through zero, admin-only changes; freeze choices and
+  support, schedule edit rules, snapshot restores keeping their volumes.
+- In Chromium: the device tabs, selection, refusals, virtual functions,
+  missing add-on; freeze, previous volumes and schedule edit in Backups.
+- Real, on the three-node bench (Harvester 1.8.2, emulated devices): an
+  e1000e card passed to a VM on its host and seen in the VM's libvirt
+  domain, refused back while used, given back to its driver; two virtual
+  functions created on an igb card, one passed then given back, SR-IOV
+  refused off meanwhile, then disabled; a QEMU tablet passed to a VM on
+  another host (USB host device in its domain) and given back; a VM
+  replaced from an NFS backup with its previous volumes deleted.
+- Real, on harv1 (Harvester 1.9.0): a snapshot with a 5 s freeze of a VM
+  whose guest agent is connected (file systems frozen, the VM not left
+  frozen), a weekly schedule created, edited (Harvester's trigger followed)
+  and deleted.
+
 ## [1.67.0] - 2026-09-27 - Harvester settings, support bundles and kubeconfigs
 
 ### Added

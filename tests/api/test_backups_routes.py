@@ -119,6 +119,23 @@ def test_a_volume_snapshot_restores_into_a_named_volume(cluster):
     assert cmd[cmd.index("--new-volume") + 1] == "web-root-copy"
 
 
+def test_the_freeze_deadline_and_a_schedule_change_reach_the_cli(cluster):
+    """v1.68.0 : délai de gel choisi dans la liste de Harvester (sans 0s),
+    planification modifiée après contrôle."""
+    with wapp.app.test_client() as c:
+        assert c.post("/api/backups/harv1/default", json={"vm": "web", "freeze": "0s"}).status_code == 400
+        assert c.post("/api/backups/harv1/default", json={"vm": "web", "type": "snapshot", "freeze": "10s"}).status_code == 202
+        r = c.post("/api/schedules/harv1/default/nightly/update", json={"cron": "*/10 * * * *", "retain": 7, "max_failure": 3})
+        assert r.status_code == 400 and "once an hour" in r.get_json()["error"]
+        assert c.post("/api/schedules/harv1/default/nightly/update",
+                      json={"cron": "15 4 * * *", "retain": 10, "max_failure": 4}).status_code == 202
+        assert c.post("/api/schedules/harv1/default/nightly/explode").status_code == 400
+    (_, create), (label, update) = cluster["actions"]
+    assert create[-2:] == ["--freeze", "10s"]
+    assert label == "schedule:update:default/nightly"
+    assert update[-6:] == ["--cron", "15 4 * * *", "--retain", "10", "--max-failure", "4"]
+
+
 def test_backup_writes_need_an_operator():
     for path in ("/api/backups/harv1/default", "/api/schedules/harv1/default/s/suspend",
                  "/api/volsnaps/harv1/default/v/restore"):

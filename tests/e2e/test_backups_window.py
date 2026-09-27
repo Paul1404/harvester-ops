@@ -154,3 +154,58 @@ def test_the_window_comes_back_after_a_reload(win):
     page.wait_for_function("window.Backups && window.FloatingPanels")
     w2 = page.locator(".floating-panel", has=page.locator(".bk-win"))
     expect(w2).to_be_visible(timeout=8000)
+
+
+# -- v1.68.0 : gel, anciens volumes, modification d'une planification ------------------
+
+def test_a_backup_can_carry_a_freeze_deadline(win):
+    page, w, posted = win
+    w.locator('[data-bk-tab="vmbackups"]').click()
+    w.locator('[data-bk="new"]').click()
+    f = w.locator(".bk-form")
+    assert f.locator('[name="freeze"] option').evaluate_all("els => els.map(e => e.value)") \
+        == ["", "5s", "10s", "30s", "1m", "3m", "5m"]                     # pas de gel sans fin
+    f.locator('[name="freeze"]').select_option("10s")
+    f.locator('button[type="submit"]').click()
+    expect(w.locator('[data-bk="feedback"]')).not_to_be_empty(timeout=5000)
+    assert posted[-1][2] == {"vm": "web", "type": "backup", "freeze": "10s"}
+
+
+def test_replacing_from_a_backup_says_what_becomes_of_the_old_volumes(win):
+    page, w, posted = win
+    dialogs = []
+    page.on("dialog", lambda d: (dialogs.append(d.message), d.accept()))
+    w.locator('[data-bk-tab="vmbackups"]').click()
+    w.locator("tr", has_text="web-b1").locator('[data-act="restore"]').click()
+    f = w.locator(".bk-form")
+    expect(f.locator('[name="delete_policy"]')).to_be_hidden()           # nouvelle VM : sans objet
+    f.locator('[name="mode"][value="replace"]').check()
+    f.locator('[name="delete_policy"]').select_option("delete")
+    f.locator('button[type="submit"]').click()
+    expect(w.locator('[data-bk="feedback"]')).not_to_be_empty(timeout=5000)
+    assert posted[-1][2] == {"replace": True, "keep_mac": False, "halt": False, "delete_policy": "delete"}
+    assert "web" in dialogs[-1] and dialogs[-1] != ""                    # la suppression est dite
+
+
+def test_a_snapshot_restore_offers_no_volume_deletion(win):
+    page, w, _ = win
+    w.locator('[data-bk-tab="vmsnapshots"]').click()
+    w.locator("tr", has_text="web-s1").locator('[data-act="restore"]').click()
+    expect(w.locator('.bk-form [name="delete_policy"]')).to_have_count(0)
+
+
+def test_a_schedule_is_edited_in_place(win):
+    page, w, posted = win
+    w.locator('[data-bk-tab="schedules"]').click()
+    w.locator("tr", has_text="nightly").locator('[data-act="sched-edit"]').click()
+    f = w.locator(".bk-form")
+    expect(f.locator('[name="freq"]')).to_have_value("daily")
+    expect(f.locator('[name="time"]')).to_have_value("02:00")
+    expect(f.locator('[name="retain"]')).to_have_value("7")
+    f.locator('[name="time"]').fill("04:15")
+    f.locator('[name="retain"]').fill("10")
+    f.locator('[name="max_failure"]').fill("4")
+    f.locator('button[type="submit"]').click()
+    expect(w.locator('[data-bk="feedback"]')).not_to_be_empty(timeout=5000)
+    assert posted[-1] == ("POST", "api/schedules/harv-fake/default/nightly/update",
+                          {"cron": "15 4 * * *", "retain": 10, "max_failure": 4})

@@ -83,7 +83,7 @@
             <span class="tab-icon" data-icon="shield"></span>
             <span class="sidebar-label" data-i18n="tab.security">Security</span>
           </a>
-          <a class="tab tab-child" data-tab="advanced" href="#advanced" data-i18n-title="tab.advancedTip" title="Harvester settings, backup target, support bundles and kubeconfigs">
+          <a class="tab tab-child" data-tab="advanced" href="#advanced" data-i18n-title="tab.advancedTip" title="Harvester settings, devices, backup target, support bundles and kubeconfigs">
             <span class="tab-icon" data-icon="settings"></span>
             <span class="sidebar-label" data-i18n="tab.advanced">Advanced</span>
           </a>
@@ -310,10 +310,17 @@
         </div>
         <div class="sub-tabs sub-tabs-inline" role="tablist">
           <button type="button" class="sub-tab tip" role="tab" data-section-tab="settings" data-i18n-title="section.settingsTip" title="Every Harvester setting: its value, whether Harvester applied it, and a typed form to change or reset it"><span class="tab-icon" data-icon="settings"></span> <span data-i18n="section.settings">Settings</span></button>
+          <!-- v1.68.0 : les périphériques de Harvester -->
+          <button type="button" class="sub-tab tip" role="tab" data-section-tab="pci" data-i18n-title="section.pciTip" title="PCI devices of every host: enable or disable their passthrough to VMs"><span class="tab-icon" data-icon="plug"></span> <span data-i18n="section.pci">PCI Devices</span></button>
+          <button type="button" class="sub-tab tip" role="tab" data-section-tab="usb" data-i18n-title="section.usbTip" title="USB devices of every host: enable or disable their passthrough to VMs"><span class="tab-icon" data-icon="hotplug"></span> <span data-i18n="section.usb">USB Devices</span></button>
+          <button type="button" class="sub-tab tip" role="tab" data-section-tab="sriov" data-i18n-title="section.sriovTip" title="SR-IOV network cards: the number of virtual functions they expose"><span class="tab-icon" data-icon="switch"></span> <span data-i18n="section.sriov">SR-IOV Networks</span></button>
           <button type="button" class="sub-tab tip" role="tab" data-section-tab="support" data-i18n-title="section.supportTip" title="Harvester support bundles and kubeconfigs limited to a role, with a token that expires"><span class="tab-icon" data-icon="bundle"></span> <span data-i18n="section.support">Support</span></button>
         </div>
       </div>
       <div class="section-pane" data-pane="settings" hidden><div class="na-host" data-adv="settings"></div></div>
+      <div class="section-pane" data-pane="pci" hidden><div class="na-host" data-adv="pci"></div></div>
+      <div class="section-pane" data-pane="usb" hidden><div class="na-host" data-adv="usb"></div></div>
+      <div class="section-pane" data-pane="sriov" hidden><div class="na-host" data-adv="sriov"></div></div>
       <div class="section-pane" data-pane="support" hidden><div class="na-host" data-adv="support"></div></div>
     </section>
 
@@ -1038,6 +1045,7 @@
   <script src="/static/js/netadmin.js"></script>
   <script src="/static/js/ovnextra.js"></script>
   <script src="/static/js/advanced.js"></script>
+  <script src="/static/js/devices.js"></script>
 <script src="/static/js/versions.js"></script>
 <script src="/static/js/console-accounts.js"></script>
 <script src="/static/js/user-menu.js"></script>

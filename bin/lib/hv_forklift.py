@@ -274,3 +274,30 @@ def plans_using(ns, name, plans):
             m = pl.get("metadata") or {}
             out.append(f"{m.get('namespace')}/{m.get('name')}")
     return out
+
+
+# --- inventaire (service forklift-inventory) --------------------------------
+
+def inventory_rows(kind, items):
+    """Lignes utiles d'un inventaire vSphere de Forklift (détail=1)."""
+    items = items or []
+    if kind == "vms":
+        out = []
+        for v in items:
+            out.append({
+                "id": v.get("id"), "name": v.get("name"), "path": v.get("path"),
+                "power": v.get("powerState"), "cbt": bool(v.get("changeTrackingEnabled")),
+                "cpus": v.get("cpuCount"), "memory_mib": v.get("memoryMB"),
+                "guest": v.get("guestName") or v.get("guestId"),
+                "disks": [{"datastore": ((d.get("datastore") or {}).get("id")), "capacity": d.get("capacity")}
+                          for d in v.get("disks") or []],
+                "networks": [n.get("id") for n in v.get("networks") or []],
+                "concerns": [{"category": c.get("category"), "label": c.get("label")} for c in v.get("concerns") or []],
+            })
+        return out
+    if kind == "networks":
+        return [{"id": n.get("id"), "name": n.get("name"), "path": n.get("path")} for n in items]
+    if kind == "datastores":
+        return [{"id": d.get("id"), "name": d.get("name"), "path": d.get("path"),
+                 "capacity": d.get("capacity"), "free": d.get("free")} for d in items]
+    raise ValueError(f"inventory kind: vms, networks or datastores ({kind!r})")

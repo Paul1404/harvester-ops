@@ -231,6 +231,30 @@ def cmd_provider_delete(args, kube=None, sleep=time.sleep, now=time.time):
                  else (None, "deleting"), args.timeout, "provider", sleep, now)
 
 
+def fetch_json(url, token):
+    """GET du service d'inventaire par le relais local : son certificat est
+    celui du cluster (cert-manager), le canal est celui de kubectl."""
+    ctx = ssl.create_default_context()
+    ctx.check_hostname, ctx.verify_mode = False, ssl.CERT_NONE
+    req = urllib.request.Request(url, headers={"Authorization": f"Bearer {token}"})
+    with urllib.request.urlopen(req, timeout=60, context=ctx) as r:
+        return json.load(r)
+
+
+def cmd_inventory(args, kube=None, fetch=None):
+    kube = kube or kube_from(args)
+    ns, name = hf.check_name(args.namespace, "namespace"), hf.check_name(args.name, "provider")
+    p = get_opt(kube, hf.K_PROVIDER, ns, name)
+    if p is None:
+        raise ValueError(f"no provider {ns}/{name}")
+    uid = (p.get("metadata") or {}).get("uid")
+    token = kube.run("create", "token", hf.INVENTORY_SA, "-n", hf.NS, "--duration", "10m").strip()
+    with kube.port_forward(hf.NS, f"svc/{hf.INVENTORY_SVC}", hf.INVENTORY_PORT) as port:
+        data = (fetch or fetch_json)(f"https://127.0.0.1:{port}/providers/vsphere/{uid}/{args.kind}?detail=1", token)
+    print(json.dumps(hf.inventory_rows(args.kind, data)))
+    return EXIT_OK
+
+
 def build_parser():
     ap = argparse.ArgumentParser(prog="harvester-forklift",
                                  description="Forklift on a Harvester cluster: install, VDDK "
@@ -268,6 +292,12 @@ def build_parser():
         if name == "provider-delete":
             sp.add_argument("--with-secret", action="store_true", help="also delete the secret the console created")
         sp.set_defaults(fn=fn)
+    sp = sub.add_parser("inventory", help="VMs, networks or datastores of a vCenter provider, as Forklift sees them")
+    cluster_args(sp)
+    sp.add_argument("--namespace", required=True)
+    sp.add_argument("--name", required=True)
+    sp.add_argument("--kind", choices=("vms", "networks", "datastores"), required=True)
+    sp.set_defaults(fn=cmd_inventory)
     return ap, sub
 
 

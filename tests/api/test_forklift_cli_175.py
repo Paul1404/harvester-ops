@@ -325,3 +325,31 @@ def test_stdin_that_is_not_an_object_is_refused(monkeypatch, capsys):
     rc = hfk.main(["provider-apply", "--kubeconfig", "kc", "--namespace", "default", "--name", "vc"])
     assert rc == 2
     assert "a JSON object expected" in capsys.readouterr().err
+
+
+def test_inventory_uses_a_short_token_through_a_port_forward(capsys):
+    k = installed()
+    k.objs[(hf.K_PROVIDER, "default", "vmwlab")] = {"metadata": {"name": "vmwlab", "namespace": "default", "uid": "u-123"}}
+    seen = {}
+
+    class PF:
+        def __init__(self, ns, target, port):
+            seen["pf"] = (ns, target, port)
+
+        def __enter__(self):
+            return 40123
+
+        def __exit__(self, *a):
+            return False
+    k.port_forward = PF
+
+    def fetch(url, token):
+        seen["url"], seen["token"] = url, token
+        return [{"id": "network-12", "name": "VM Network", "path": "/vmwlab-dc/network/VM Network"}]
+    args = argparse.Namespace(cluster=None, kubeconfig="kc", namespace="default", name="vmwlab", kind="networks")
+    assert hfk.cmd_inventory(args, kube=k, fetch=fetch) == hfk.EXIT_OK
+    assert seen["pf"] == ("forklift", "svc/forklift-inventory", 8443)
+    assert seen["url"] == "https://127.0.0.1:40123/providers/vsphere/u-123/networks?detail=1"
+    assert seen["token"] == "tok-123" and ("run", "create", "token") in k.calls
+    assert json.loads(capsys.readouterr().out) == [{"id": "network-12", "name": "VM Network",
+                                                    "path": "/vmwlab-dc/network/VM Network"}]

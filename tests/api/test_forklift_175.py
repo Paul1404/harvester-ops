@@ -13,6 +13,8 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "bin" / "lib"))
 import hv_forklift as hf  # noqa: E402
 
+FIX = Path(__file__).resolve().parent / "fixtures" / "forklift_inventory_vms_175.json"
+
 
 def dep(name, ready=True, replicas=1):
     return {"metadata": {"name": name}, "spec": {"replicas": replicas},
@@ -208,3 +210,23 @@ def test_the_provider_points_at_the_very_secret_that_is_created():
     prov = hf.provider_manifest("  default ", "  vmwlab  ", spec)
     assert prov["spec"]["secret"] == {"name": sec["metadata"]["name"], "namespace": sec["metadata"]["namespace"]}
     assert prov["metadata"]["name"] == "vmwlab" and sec["metadata"]["name"] == "vmwlab-vsphere"
+
+
+def test_the_real_inventory_gives_what_a_wave_needs():
+    rows = {r["name"]: r for r in hf.inventory_rows("vms", json.loads(FIX.read_text()))}
+    assert {"vmwlab-src-1", "vmwlab-src-2", "vmwlab-src-3"} <= set(rows)
+    src1 = rows["vmwlab-src-1"]
+    assert src1["cbt"] is True and src1["id"].startswith("vm-") and src1["power"] == "poweredOn"
+    assert src1["cpus"] == 1 and src1["memory_mib"] == 1024 and src1["disks"] and src1["networks"]
+    assert rows["vmwlab-src-3"]["memory_mib"] == 4096
+
+
+def test_networks_and_datastores_are_named_rows():
+    rows = hf.inventory_rows("datastores", [{"id": "datastore-11", "name": "datastore1", "path": "/vmwlab-dc/datastore/datastore1",
+                                             "capacity": 506806140928, "free": 400000000000, "extra": 1}])
+    assert rows == [{"id": "datastore-11", "name": "datastore1", "path": "/vmwlab-dc/datastore/datastore1",
+                     "capacity": 506806140928, "free": 400000000000}]
+    assert hf.inventory_rows("networks", [{"id": "network-12", "name": "VM Network", "path": "/x"}]) == [
+        {"id": "network-12", "name": "VM Network", "path": "/x"}]
+    with pytest.raises(ValueError, match="kind"):
+        hf.inventory_rows("hosts", [])

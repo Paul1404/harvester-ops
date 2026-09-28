@@ -1,0 +1,400 @@
+[
+ {
+  "id": "vm-16",
+  "name": "vmwlab-src-1",
+  "path": "/vmwlab-dc/vm/vmwlab-src-1",
+  "powerState": "poweredOn",
+  "changeTrackingEnabled": true,
+  "cpuCount": 1,
+  "memoryMB": 1024,
+  "guestId": "",
+  "guestName": "Debian GNU/Linux 11 (64-bit)",
+  "firmware": "bios",
+  "networks": [
+   {
+    "kind": "Network",
+    "id": "network-13"
+   }
+  ],
+  "concerns": [
+   {
+    "category": "Warning",
+    "label": "Empty Host Name",
+    "assessment": "The 'hostname' field is missing or empty. The hostname might be renamed during migration."
+   }
+  ],
+  "disks": [
+   {
+    "key": 2000,
+    "datastore": {
+     "kind": "Datastore",
+     "id": "datastore-12"
+    },
+    "capacity": 10737418240,
+    "shared": false,
+    "bus": "scsi"
+   }
+  ]
+ },
+ {
+  "id": "vm-19",
+  "name": "vmwlab-src-3",
+  "path": "/vmwlab-dc/vm/vmwlab-src-3",
+  "powerState": "poweredOn",
+  "changeTrackingEnabled": true,
+  "cpuCount": 2,
+  "memoryMB": 4096,
+  "guestId": "",
+  "guestName": "Microsoft Windows Server 2019 (64-bit)",
+  "firmware": "bios",
+  "networks": [
+   {
+    "kind": "Network",
+    "id": "network-13"
+   }
+  ],
+  "concerns": [
+   {
+    "category": "Warning",
+    "label": "Empty Host Name",
+    "assessment": "The 'hostname' field is missing or empty. The hostname might be renamed during migration."
+   },
+   {
+    "category": "Information",
+    "label": "Disk serial numbers may be truncated",
+    "assessment": "This VM is configured with at least one SCSI disk and the disk.EnableUUID parameter is set to TRUE. This may indicate a need for consistent SCSI disk serial numbers, but be advised that these serial numbers will be truncated after migration."
+   }
+  ],
+  "disks": [
+   {
+    "key": 2000,
+    "datastore": {
+     "kind": "Datastore",
+     "id": "datastore-12"
+    },
+    "capacity": 42949672960,
+    "shared": false,
+    "bus": "scsi"
+   }
+  ]
+ },
+ {
+  "id": "vm-18",
+  "name": "vmwlab-src-2",
+  "path": "/vmwlab-dc/vm/vmwlab-src-2",
+  "powerState": "poweredOn",
+  "changeTrackingEnabled": true,
+  "cpuCount": 1,
+  "memoryMB": 1024,
+  "guestId": "",
+  "guestName": "Debian GNU/Linux 11 (64-bit)",
+  "firmware": "bios",
+  "networks": [
+   {
+    "kind": "Network",
+    "id": "network-13"
+   }
+  ],
+  "concerns": [
+   {
+    "category": "Warning",
+    "label": "Empty Host Name",
+    "assessment": "The 'hostname' field is missing or empty. The hostname might be renamed during migration."
+   }
+  ],
+  "disks": [
+   {
+    "key": 2000,
+    "datastore": {
+     "kind": "Datastore",
+     "id": "datastore-12"
+    },
+    "capacity": 10737418240,
+    "shared": false,
+    "bus": "scsi"
+   }
+  ]
+ },
+ {
+  "id": "vm-14",
+  "name": "vmwlab-vc",
+  "path": "/vmwlab-dc/vm/Discovered virtual machine/vmwlab-vc",
+  "powerState": "poweredOn",
+  "changeTrackingEnabled": false,
+  "cpuCount": 2,
+  "memoryMB": 14336,
+  "guestId": "vmwarePhoton64Guest",
+  "guestName": "Other 3.x or later Linux (64-bit)",
+  "firmware": "bios",
+  "networks": [
+   {
+    "kind": "Network",
+    "id": "network-13"
+   }
+  ],
+  "concerns": [
+   {
+    "category": "Warning",
+    "label": "Disk - scsi0:0 does not have CBT enabled",
+    "assessment": "Changed Block Tracking (CBT) has not been enabled for this device. This feature is a prerequisite for VM warm migration."
+   },
+   {
+    "category": "Warning",
+    "label": "Disk - scsi0:1 does not have CBT enabled",
+    "assessment": "Changed Block Tracking (CBT) has not been enabled for this device. This feature is a prerequisite for VM warm migration."
+   },
+   {
+    "category": "Warning",
+    "label": "Disk - scsi0:10 does not have CBT enabled",
+    "assessment": "Changed Block Tracking (CBT) has not been enabled for this device. This feature is a prerequisite for VM warm migration."
+   },
+   {
+    "category": "Warning",
+    "label": "Disk - scsi0:11 does not have CBT enabled",
+    "assessment": "Changed Block Tracking (CBT) has not been enabled for this device. This feature is a prerequisite for VM warm migration."
+   },
+   {
+    "category": "Warning",
+    "label": "Disk - scsi0:12 does not have CBT enabled",
+    "assessment": "Changed Block Tracking (CBT) has not been enabled for this device. This feature is a prerequisite for VM warm migration."
+   },
+   {
+    "category": "Warning",
+    "label": "Disk - scsi0:13 does not have CBT enabled",
+    "assessment": "Changed Block Tracking (CBT) has not been enabled for this device. This feature is a prerequisite for VM warm migration."
+   },
+   {
+    "category": "Warning",
+    "label": "Disk - scsi0:14 does not have CBT enabled",
+    "assessment": "Changed Block Tracking (CBT) has not been enabled for this device. This feature is a prerequisite for VM warm migration."
+   },
+   {
+    "category": "Warning",
+    "label": "Disk - scsi0:15 does not have CBT enabled",
+    "assessment": "Changed Block Tracking (CBT) has not been enabled for this device. This feature is a prerequisite for VM warm migration."
+   },
+   {
+    "category": "Warning",
+    "label": "Disk - scsi0:2 does not have CBT enabled",
+    "assessment": "Changed Block Tracking (CBT) has not been enabled for this device. This feature is a prerequisite for VM warm migration."
+   },
+   {
+    "category": "Warning",
+    "label": "Disk - scsi0:3 does not have CBT enabled",
+    "assessment": "Changed Block Tracking (CBT) has not been enabled for this device. This feature is a prerequisite for VM warm migration."
+   },
+   {
+    "category": "Warning",
+    "label": "Disk - scsi0:4 does not have CBT enabled",
+    "assessment": "Changed Block Tracking (CBT) has not been enabled for this device. This feature is a prerequisite for VM warm migration."
+   },
+   {
+    "category": "Warning",
+    "label": "Disk - scsi0:5 does not have CBT enabled",
+    "assessment": "Changed Block Tracking (CBT) has not been enabled for this device. This feature is a prerequisite for VM warm migration."
+   },
+   {
+    "category": "Warning",
+    "label": "Disk - scsi0:6 does not have CBT enabled",
+    "assessment": "Changed Block Tracking (CBT) has not been enabled for this device. This feature is a prerequisite for VM warm migration."
+   },
+   {
+    "category": "Warning",
+    "label": "Disk - scsi0:8 does not have CBT enabled",
+    "assessment": "Changed Block Tracking (CBT) has not been enabled for this device. This feature is a prerequisite for VM warm migration."
+   },
+   {
+    "category": "Warning",
+    "label": "Disk - scsi0:9 does not have CBT enabled",
+    "assessment": "Changed Block Tracking (CBT) has not been enabled for this device. This feature is a prerequisite for VM warm migration."
+   },
+   {
+    "category": "Warning",
+    "label": "Changed Block Tracking (CBT) not enabled",
+    "assessment": "For VM warm migration, Changed Block Tracking (CBT) must be enabled in VMware."
+   },
+   {
+    "category": "Warning",
+    "label": "CPU/Memory hotplug detected",
+    "assessment": "Hot pluggable CPU or memory is not currently supported by Migration Toolkit for Virtualization. You can reconfigure CPU or memory after migration."
+   },
+   {
+    "category": "Warning",
+    "label": "Unsupported operating system detected",
+    "assessment": "The guest operating system is not currently supported by the Migration Toolkit for Virtualization"
+   }
+  ],
+  "disks": [
+   {
+    "key": 2000,
+    "datastore": {
+     "kind": "Datastore",
+     "id": "datastore-12"
+    },
+    "capacity": 52143587328,
+    "shared": false,
+    "bus": "scsi"
+   },
+   {
+    "key": 2001,
+    "datastore": {
+     "kind": "Datastore",
+     "id": "datastore-12"
+    },
+    "capacity": 7416578048,
+    "shared": false,
+    "bus": "scsi"
+   },
+   {
+    "key": 2002,
+    "datastore": {
+     "kind": "Datastore",
+     "id": "datastore-12"
+    },
+    "capacity": 26843545600,
+    "shared": false,
+    "bus": "scsi"
+   },
+   {
+    "key": 2003,
+    "datastore": {
+     "kind": "Datastore",
+     "id": "datastore-12"
+    },
+    "capacity": 26843545600,
+    "shared": false,
+    "bus": "scsi"
+   },
+   {
+    "key": 2004,
+    "datastore": {
+     "kind": "Datastore",
+     "id": "datastore-12"
+    },
+    "capacity": 10737418240,
+    "shared": false,
+    "bus": "scsi"
+   },
+   {
+    "key": 2005,
+    "datastore": {
+     "kind": "Datastore",
+     "id": "datastore-12"
+    },
+    "capacity": 10737418240,
+    "shared": false,
+    "bus": "scsi"
+   },
+   {
+    "key": 2006,
+    "datastore": {
+     "kind": "Datastore",
+     "id": "datastore-12"
+    },
+    "capacity": 16106127360,
+    "shared": false,
+    "bus": "scsi"
+   },
+   {
+    "key": 2008,
+    "datastore": {
+     "kind": "Datastore",
+     "id": "datastore-12"
+    },
+    "capacity": 10737418240,
+    "shared": false,
+    "bus": "scsi"
+   },
+   {
+    "key": 2009,
+    "datastore": {
+     "kind": "Datastore",
+     "id": "datastore-12"
+    },
+    "capacity": 1073741824,
+    "shared": false,
+    "bus": "scsi"
+   },
+   {
+    "key": 2010,
+    "datastore": {
+     "kind": "Datastore",
+     "id": "datastore-12"
+    },
+    "capacity": 10737418240,
+    "shared": false,
+    "bus": "scsi"
+   },
+   {
+    "key": 2011,
+    "datastore": {
+     "kind": "Datastore",
+     "id": "datastore-12"
+    },
+    "capacity": 10737418240,
+    "shared": false,
+    "bus": "scsi"
+   },
+   {
+    "key": 2012,
+    "datastore": {
+     "kind": "Datastore",
+     "id": "datastore-12"
+    },
+    "capacity": 107374182400,
+    "shared": false,
+    "bus": "scsi"
+   },
+   {
+    "key": 2013,
+    "datastore": {
+     "kind": "Datastore",
+     "id": "datastore-12"
+    },
+    "capacity": 53687091200,
+    "shared": false,
+    "bus": "scsi"
+   },
+   {
+    "key": 2014,
+    "datastore": {
+     "kind": "Datastore",
+     "id": "datastore-12"
+    },
+    "capacity": 10737418240,
+    "shared": false,
+    "bus": "scsi"
+   },
+   {
+    "key": 2015,
+    "datastore": {
+     "kind": "Datastore",
+     "id": "datastore-12"
+    },
+    "capacity": 5368709120,
+    "shared": false,
+    "bus": "scsi"
+   },
+   {
+    "key": 2016,
+    "datastore": {
+     "kind": "Datastore",
+     "id": "datastore-12"
+    },
+    "capacity": 107374182400,
+    "shared": false,
+    "bus": "scsi"
+   },
+   {
+    "key": 2017,
+    "datastore": {
+     "kind": "Datastore",
+     "id": "datastore-12"
+    },
+    "capacity": 161061273600,
+    "shared": false,
+    "bus": "scsi"
+   }
+  ]
+ }
+]

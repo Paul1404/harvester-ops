@@ -5,9 +5,13 @@ sur un hôte airgap avec la bibliothèque standard seulement. Une erreur ne
 recopie jamais la ligne de commande : elle porte le chemin du kubeconfig.
 """
 
+import contextlib
 import json
 import os
+import re
+import select
 import subprocess
+import time
 from pathlib import Path
 from urllib.parse import urlparse
 
@@ -108,6 +112,33 @@ class Kube:
                 p.kill()
             p.stdout.close()
             p.stderr.close()
+
+    @contextlib.contextmanager
+    def port_forward(self, ns, target, port, timeout=20):
+        """Un port local vers `target` (svc/nom) : rend le port choisi par
+        kubectl, et coupe le relais en sortie."""
+        p = subprocess.Popen(self._base() + ["port-forward", "-n", ns, target, f":{port}"],
+                             stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        try:
+            deadline = time.time() + timeout
+            local = None
+            while time.time() < deadline and local is None:
+                ready, _, _ = select.select([p.stdout], [], [], 1)
+                if ready:
+                    m = re.search(r"127\.0\.0\.1:(\d+)", p.stdout.readline())
+                    local = int(m.group(1)) if m else None
+                if p.poll() is not None:
+                    break
+            if local is None:
+                raise KubeError("port-forward failed: " + (p.stderr.read() if p.poll() is not None else "no port")[:300])
+            yield local
+        finally:
+            if p.poll() is None:
+                p.terminate()
+                try:
+                    p.wait(5)
+                except subprocess.TimeoutExpired:
+                    p.kill()
 
     def server_host(self):
         try:

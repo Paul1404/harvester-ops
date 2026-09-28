@@ -113,6 +113,7 @@ install_scripts() {
     ln -sf "$PREFIX/harvester-startup.sh"  "$PREFIX/harvester-startup"
     ln -sf "$PREFIX/harvester-status.sh"   "$PREFIX/harvester-status"
     ln -sf "$PREFIX/harvester-vm-transfer.py" "$PREFIX/harvester-vm-transfer"
+    ln -sf "$PREFIX/harvester-forklift.py" "$PREFIX/harvester-forklift"
     ln -sf "$PREFIX/harvester-capi.py" "$PREFIX/harvester-capi"
     ln -sf "$PREFIX/harvester-network.py" "$PREFIX/harvester-network"
     ln -sf "$PREFIX/harvester-resources.py" "$PREFIX/harvester-resources"

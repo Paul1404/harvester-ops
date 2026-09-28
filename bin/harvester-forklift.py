@@ -1,0 +1,208 @@
+#!/usr/bin/env python3
+"""Forklift sur un cluster Harvester : installation, image VDDK, fournisseur vCenter, inventaire.
+
+    harvester-forklift status          --cluster C
+    harvester-forklift install         --cluster C [--chart-version V] [--image-tag T]
+                                       [--cert-manager-manifest FICHIER]
+    harvester-forklift vddk-image      --archive VDDK.tar.gz --image REGISTRE/DEPOT:TAG
+                                       [--base IMAGE] [--plain-http] [--auth-stdin]
+    harvester-forklift provider-apply  --cluster C --namespace NS --name N   (JSON sur stdin)
+    harvester-forklift provider-delete --cluster C --namespace NS --name N [--with-secret]
+    harvester-forklift inventory       --cluster C --namespace NS --name N --kind vms|networks|datastores
+
+Harvester 1.9 ne livre pas Forklift : `install` pose cert-manager (depuis le
+manifeste que la console tire de son paquet Cluster API), l'add-on
+expérimental forklift-operator puis le ForkliftController. Les secrets
+(vCenter, registre) arrivent en JSON sur l'entrée standard, jamais en
+argument. Progression sur stderr au format STEP_EVENT|<étape>|<statut>|<message>.
+Codes : 0 succès, 1 échec, 2 refus. Bibliothèque standard seulement.
+Voir docs/design/2026-09-27-migrations-vmware.md.
+"""
+
+import argparse
+import json
+import ssl
+import sys
+import time
+import urllib.request
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent / "lib"))
+import hv_forklift as hf  # noqa: E402
+import oci_push as op  # noqa: E402
+from kube import Kube, KubeError, cluster_config  # noqa: E402
+
+EXIT_OK, EXIT_FAIL, EXIT_REFUSED = 0, 1, 2
+
+
+def step(sid, status, msg=""):
+    clean = " ".join(str(msg).split())
+    sys.stderr.write(f"STEP_EVENT|{sid}|{status}|{clean}\n")
+    sys.stderr.flush()
+
+
+def kube_from(args):
+    entry = cluster_config(args.cluster) if args.cluster else None
+    kc = args.kubeconfig or (entry or {}).get("kubeconfig")
+    if not kc:
+        raise ValueError("give --cluster (with a kubeconfig in the configuration) or --kubeconfig")
+    return Kube(kc)
+
+
+def get_opt(kube, kind, ns, name):
+    """Un objet d'une CRD qui peut ne pas exister encore (avant l'add-on)."""
+    try:
+        return kube.get(kind, ns, name)
+    except KubeError as e:
+        if "doesn't have a resource type" in str(e):
+            return None
+        raise
+
+
+def read_stdin_json():
+    raw = sys.stdin.read()
+    try:
+        return json.loads(raw) if raw.strip() else {}
+    except json.JSONDecodeError:
+        raise ValueError("stdin: JSON expected") from None
+
+
+def until(fn, timeout, label, sleep=time.sleep, now=time.time, every=5):
+    """Relit `fn()` -> (True|False|None, message) jusqu'à la fin ou le délai."""
+    deadline, last = now() + timeout, None
+    while True:
+        res, msg = fn()
+        if msg != last:
+            step(label, "running" if res is None else ("done" if res else "error"), msg)
+            last = msg
+        if res is not None:
+            return EXIT_OK if res else EXIT_FAIL
+        if now() >= deadline:
+            step(label, "error", f"not done after {timeout} s: {msg}")
+            return EXIT_FAIL
+        sleep(every)
+
+
+def install_state(kube):
+    by_name = lambda items: {(d.get("metadata") or {}).get("name"): d for d in items}  # noqa: E731
+    return hf.install_state(hf.pick_addon(kube.list(hf.K_ADDON, None))[0],
+                            by_name(kube.list(hf.K_DEPLOY, hf.NS)),
+                            get_opt(kube, hf.K_CONTROLLER, hf.NS, hf.CONTROLLER_NAME),
+                            by_name(kube.list(hf.K_DEPLOY, hf.CERT_MANAGER[0])))
+
+
+def cmd_status(args, kube=None):
+    kube = kube or kube_from(args)
+    st = install_state(kube)
+    providers = []
+    if st["controller"]:
+        for p in kube.list(hf.K_PROVIDER, None):
+            m = p.get("metadata") or {}
+            res, msg = hf.provider_state(p)
+            providers.append({"namespace": m.get("namespace"), "name": m.get("name"),
+                              "type": (p.get("spec") or {}).get("type"), "ready": res, "message": msg})
+    print(json.dumps({"install": st, "providers": providers}))
+    return EXIT_OK
+
+
+def cmd_install(args, kube=None, sleep=time.sleep, now=time.time):
+    kube = kube or kube_from(args)
+    want = hf.addon_manifest(args.chart_version, args.image_tag)      # refuse avant d'écrire
+    st = install_state(kube)
+    if st["cert_manager"]:
+        step("cert-manager", "done", "cert-manager is running")
+    else:
+        if not args.cert_manager_manifest:
+            step("cert-manager", "error", "cert-manager is missing: give --cert-manager-manifest "
+                 "(the console takes it from its Cluster API bundle)")
+            return EXIT_REFUSED
+        step("cert-manager", "running", "installing cert-manager")
+        kube.run("apply", "--server-side", "--force-conflicts", "-f", args.cert_manager_manifest, timeout=300)
+
+        def cm():
+            s = install_state(kube)
+            return (True, "cert-manager is running") if s["cert_manager"] else \
+                (None, "waiting for " + ", ".join(s["cert_manager_missing"]))
+        rc = until(cm, args.timeout, "cert-manager", sleep, now)
+        if rc:
+            return rc
+    if kube.get("namespaces", None, hf.NS) is None:
+        kube.create(hf.namespace_manifest())
+    cur, theirs = hf.pick_addon(kube.list(hf.K_ADDON, None))
+    if theirs:
+        # celui de Harvester (1.9.1) : activé tel quel, jamais réécrit
+        m = cur.get("metadata") or {}
+        if not (cur.get("spec") or {}).get("enabled"):
+            kube.patch(hf.K_ADDON, m.get("namespace"), m.get("name"), {"spec": {"enabled": True}})
+            sleep(3)
+        step("addon", "running", f"Harvester's own forklift-operator add-on ({m.get('namespace')}, "
+             f"{(cur.get('spec') or {}).get('version')}): enabled, left as Harvester ships it")
+    elif cur is None:
+        kube.create(want)
+        step("addon", "running", f"forklift-operator {args.chart_version} declared, images {args.image_tag}")
+    elif any((cur.get("spec") or {}).get(k) != v for k, v in want["spec"].items()):
+        kube.patch(hf.K_ADDON, hf.NS, hf.ADDON[1], {"spec": want["spec"]})
+        step("addon", "running", f"forklift-operator set to {args.chart_version}, images {args.image_tag}")
+        sleep(3)          # le contrôleur des add-ons prend la main : l'ancien statut n'est pas la fin
+
+    def addon():
+        s = install_state(kube)
+        if s["addon"] == "failed":
+            return False, s["addon_message"]
+        if s["addon"] == "ready" and s["operator"]:
+            return True, "forklift-operator is running"
+        return None, s["addon_message"] if s["addon"] != "ready" else "waiting for the operator"
+    rc = until(addon, args.timeout, "addon", sleep, now)
+    if rc:
+        return rc
+    if get_opt(kube, hf.K_CONTROLLER, hf.NS, hf.CONTROLLER_NAME) is None:
+        kube.create(hf.controller_manifest())
+        step("controller", "running", "ForkliftController created: the operator deploys Forklift")
+
+    def components():
+        s = install_state(kube)
+        if not s["components_missing"]:
+            return True, "Forklift components are running"
+        probs = hf.pod_problems(kube.list("pods", hf.NS))
+        return None, "waiting for " + ", ".join(s["components_missing"]) + (f" ({'; '.join(probs)})" if probs else "")
+    rc = until(components, args.timeout, "controller", sleep, now)
+    if rc:
+        return rc
+    kube.apply(hf.inventory_rbac())
+    step("install", "done", "Forklift is installed")
+    return EXIT_OK
+
+
+def build_parser():
+    ap = argparse.ArgumentParser(prog="harvester-forklift", description=__doc__.split("\n\n")[0])
+    sub = ap.add_subparsers(dest="cmd", required=True)
+
+    def cluster_args(sp):
+        sp.add_argument("--cluster")
+        sp.add_argument("--kubeconfig")
+
+    sp = sub.add_parser("status", help="Forklift on the cluster and its providers, as JSON")
+    cluster_args(sp)
+    sp.set_defaults(fn=cmd_status)
+    sp = sub.add_parser("install", help="cert-manager, the forklift-operator add-on and the ForkliftController")
+    cluster_args(sp)
+    sp.add_argument("--chart-version", default=hf.CHART_VERSION)
+    sp.add_argument("--image-tag", default=hf.IMAGE_TAG, help="tag of the harvester-forklift-* images")
+    sp.add_argument("--cert-manager-manifest", help="cert-manager YAML, applied if cert-manager is missing")
+    sp.add_argument("--timeout", type=int, default=900)
+    sp.set_defaults(fn=cmd_install)
+    return ap, sub
+
+
+def main(argv=None):
+    ap, _ = build_parser()
+    args = ap.parse_args(argv)
+    try:
+        return args.fn(args)
+    except (ValueError, KubeError, op.RegistryError) as e:
+        step(args.cmd, "error", str(e))
+        return EXIT_REFUSED if isinstance(e, ValueError) else EXIT_FAIL
+
+
+if __name__ == "__main__":
+    sys.exit(main())

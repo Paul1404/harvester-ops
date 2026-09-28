@@ -200,3 +200,11 @@ def test_plans_that_use_a_provider_are_found():
               "spec": {"provider": {"source": {"name": "vc2", "namespace": "default"}}}}]
     assert hf.plans_using("default", "vmwlab", plans) == ["mig/wave-1"]
     assert hf.plans_using("default", "nobody", plans) == []
+
+
+def test_the_provider_points_at_the_very_secret_that_is_created():
+    spec = {"url": "vc.lan", "user": "u", "password": "p", "insecure": True}
+    sec = hf.provider_secret("  default ", "  vmwlab  ", spec)
+    prov = hf.provider_manifest("  default ", "  vmwlab  ", spec)
+    assert prov["spec"]["secret"] == {"name": sec["metadata"]["name"], "namespace": sec["metadata"]["namespace"]}
+    assert prov["metadata"]["name"] == "vmwlab" and sec["metadata"]["name"] == "vmwlab-vsphere"

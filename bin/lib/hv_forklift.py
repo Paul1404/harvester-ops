@@ -214,7 +214,9 @@ def secret_name(provider):
 
 def provider_secret(ns, name, spec):
     """Le secret d'un fournisseur vSphere, étiqueté comme Forklift le lit. Les
-    messages d'erreur ne citent jamais une valeur."""
+    messages d'erreur ne citent jamais une credential (user ou password)."""
+    name = check_name(name, "provider")
+    ns = check_name(ns, "namespace")
     user = str(spec.get("user") or "").strip()
     password = str(spec.get("password") or "")
     if not user or not password:
@@ -227,18 +229,20 @@ def provider_secret(ns, name, spec):
             raise ValueError("cacert: a PEM certificate")
         data["cacert"] = ca + "\n"
     return {"apiVersion": "v1", "kind": "Secret", "type": "Opaque",
-            "metadata": {"name": secret_name(check_name(name, "provider")), "namespace": check_name(ns, "namespace"),
+            "metadata": {"name": secret_name(name), "namespace": ns,
                          "labels": {"createdForProviderType": "vsphere", "createdForResourceType": "providers",
                                     L_MANAGED: "true"}},
             "stringData": data}
 
 
 def provider_manifest(ns, name, spec):
+    name = check_name(name, "provider")
+    ns = check_name(ns, "namespace")
     settings = {"sdkEndpoint": "vcenter"}
     if spec.get("vddk_image"):
         settings["vddkInitImage"] = check_image(spec["vddk_image"], "VDDK image")
     return {"apiVersion": API, "kind": "Provider",
-            "metadata": {"name": check_name(name, "provider"), "namespace": check_name(ns, "namespace"),
+            "metadata": {"name": name, "namespace": ns,
                          "labels": {L_MANAGED: "true"}},
             "spec": {"type": "vsphere", "url": check_url(spec.get("url")),
                      "secret": {"name": secret_name(name), "namespace": ns},

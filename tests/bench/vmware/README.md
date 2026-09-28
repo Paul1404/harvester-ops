@@ -9,7 +9,8 @@ en réel les migrations VMware vers Harvester par Forklift, à chaud
 |---|---|---|
 | ESXi (VM KVM `vmwlab-esx1` sur node2) | 172.16.2.80 | `vmwlab-esx1.home.lo` |
 | vCenter (VM `vmwlab-vc` dans l'ESXi) | 172.16.2.81 | `vmwlab-vc.home.lo` |
-| VMs sources `vmwlab-src-1`, `-2` (dans l'ESXi) | 172.16.2.82, .83 | (.84, .85 réservées) |
+| VMs sources Linux `vmwlab-src-1`, `-2` (dans l'ESXi) | 172.16.2.82, .83 | |
+| VM source Windows `vmwlab-src-3` (dans l'ESXi) | 172.16.2.84 | (.85 réservée) |
 
 Enregistrés dans NetBox (`infra-dotfiles/netbox/seed.py`, `seed_vms.py`) et
 Pi-hole (`dns.hosts`). Tout est en **mode évaluation** (60 jours) : aucune
@@ -31,9 +32,15 @@ tests/bench/vmware/vmwlab.sh inventory   # datacenter, hôte, VMs sources
 ```
 
 Durées mesurées : installation d'ESXi ~10 min, envoi de l'OVA ~6 min,
-configuration du vCenter ~18 min, une VM source ~3 min.
+configuration du vCenter ~18 min, une VM source Linux ~3 min, la VM Windows
+~20 min (envoi de l'ISO compris).
 
-Puis `status`, `stop` (vCenter puis ESXi, proprement), `start`, `destroy`.
+Puis `status`, `stop`, `start`, `destroy`. `stop` éteint proprement les
+VMs sources par SSH (elles n'ont pas les VMware Tools), le vCenter par son
+invité, puis l'ESXi (28 s mesurées). `start` démarre l'ESXi, qui relance
+seul le vCenter et les VMs sources (démarrage automatique réglé sur l'hôte) :
+ESXi en 1 min, VMs Linux en 8 à 9 min, Windows en 10 min, vCenter prêt peu
+après ; les écritures continues reprennent leur compteur.
 Tests de l'outil : `bash tests/bench/vmware/test_vmwlab.sh`.
 
 ## Médias
@@ -77,6 +84,19 @@ le banc, qui ne s'en sert pas.
   `sudo systemctl stop churn` pour des incrémentales presque vides.
 - Console série de chaque VM dans `[datastore1] <vm>/serial.log`
   (`govc datastore.download`) : l'image Debian écrit sur ttyS0.
+- VM source **Windows** : Windows Server 2025 Standard Evaluation (Core),
+  ISO d'évaluation de Microsoft (`VMWLAB_WIN_ISO`, par défaut
+  `~/ISO/vmware-lab/windows_server_2025_eval_x64fre_en-us.iso` ; celle du
+  banc vient de l'image du même nom sur harv1). Installée sans intervention
+  par un `autounattend.xml` sur un second CD, avec un matériel dont Windows a
+  les pilotes (LSI Logic SAS, e1000e ; PVSCSI et vmxnet3 exigent les VMware
+  Tools), en BIOS (pas d'invite « press any key » sur un disque vierge),
+  2 vCPU, 4 Gio, 40 Go, CBT actif. Premier démarrage : IP fixe, OpenSSH
+  (livré avec Windows Server 2025) avec la clé de node1 pour
+  `Administrator`, tâche planifiée `churn` (mêmes écritures qu'en Linux,
+  `C:\churn`). Le mot de passe administrateur (Vault,
+  `windows_admin_password`) n'est que sur ce second CD, retiré de la VM et du
+  datastore dès l'installation finie.
 
 ## Filtre réseau
 
@@ -123,6 +143,17 @@ la VM sans le filtre.
   muette 6 min.
 - L'**API REST** du vCenter répond 503 plusieurs minutes après son API SOAP :
   `vcenter` attend les deux.
+- **Un lecteur CD IDE ne se retire ni ne s'éjecte VM allumée** sur cet ESXi
+  imbriqué (« Connection control operation failed for disk ide0:1 ») ; pire,
+  l'éjection refusée détache quand même l'ISO du lecteur. Le CD du fichier
+  de réponses Windows est donc retiré VM éteinte (arrêt de Windows par SSH),
+  et la reprise regarde aussi le fichier resté au datastore.
+- `ssh ... true` échoue sur Windows (PowerShell n'a pas de `true`) : les
+  sondes SSH envoient `exit 0`, valable partout. Et `ssh -n` dans toute
+  boucle `while read`.
+- `govc ... | grep -q` sous `set -o pipefail` : `grep -q` sort au premier
+  résultat, govc reçoit SIGPIPE et le tube rend 141, donc « faux ». Le script
+  lit toute la sortie (`grep ... >/dev/null`).
 - **`ignore_msrs`** sur node2 (`/etc/modprobe.d/vmwlab-kvm.conf`, posé aussi
   à chaud) : ESXi lit des MSR que KVM n'émule pas.
 - Carte **vmxnet3** (ESXi 7 ne reconnaît plus e1000 ni rtl8139), vidéo

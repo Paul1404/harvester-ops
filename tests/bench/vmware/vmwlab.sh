@@ -353,10 +353,17 @@ print(json.dumps({
 PY
 }
 
+# Démarrage automatique des VMs avec l'ESXi (réglé sur l'hôte, par son API
+# propre : il vaut que le vCenter tourne ou non). Le vCenter d'abord.
+autostart() {  # VM...
+    govc_esx host.autostart.configure -enabled=true >/dev/null
+    govc_esx host.autostart.add "$@" >/dev/null
+}
+
 cmd_vcenter() {
     filter_active || { say "filtre absent : lancer « filter » d'abord"; exit 1; }
     govc_esx about >/dev/null 2>&1 || { say "ESXi injoignable : lancer « install » d'abord"; exit 1; }
-    if govc_esx vm.info "$VC" 2>/dev/null | grep -q "^Name:"; then
+    if govc_esx vm.info "$VC" 2>/dev/null | grep "^Name:" >/dev/null; then
         say "$VC déjà déployé"
     else
         say "déploiement de l'OVA du vCenter dans l'ESXi (8 Go à envoyer)"
@@ -370,6 +377,7 @@ cmd_vcenter() {
     for i in $(seq 1 180); do
         # L'API SOAP (govc) répond avant l'API REST : on attend les deux.
         if govc_vc about >/dev/null 2>&1 && vc_rest ping >/dev/null 2>&1; then
+            autostart "$VC"
             say "vCenter prêt : $(govc_vc about | sed -n 's/^FullName: *//p')"
             return
         fi
@@ -502,7 +510,7 @@ SRC_IMAGE="$MEDIA/vmware-lab/debian-12-generic-amd64.qcow2"
 # SHA512SUMS au téléchargement), disque sur PVSCSI, carte vmxnet3, CBT actif.
 make_source() {  # $1 numéro (1..4)
     local n="$1" name="vmwlab-src-$1" ip="172.16.2.8$(( $1 + 1 ))" tmp
-    if govc_vc vm.info "$name" 2>/dev/null | grep -q "^Name:"; then
+    if govc_vc vm.info "$name" 2>/dev/null | grep "^Name:" >/dev/null; then
         say "$name existe déjà"; return
     fi
     tmp="$(mktemp -d)"
@@ -538,11 +546,180 @@ make_source() {  # $1 numéro (1..4)
 wait_ssh() {  # $1 compte@hôte, $2 délai en secondes
     local end=$((SECONDS + $2))
     while (( SECONDS < end )); do
+        # « exit 0 » : vaut en bash comme dans le PowerShell de Windows
+        # (« true » n'y existe pas et la boucle attendait pour rien).
         ssh -o BatchMode=yes -o ConnectTimeout=5 -o StrictHostKeyChecking=accept-new \
-            -o LogLevel=ERROR "$1" true 2>/dev/null && return 0
+            -o LogLevel=ERROR "$1" "exit 0" 2>/dev/null && return 0
         sleep 10
     done
     return 1
+}
+
+# VM source Windows : Windows Server 2025 Standard Evaluation (Core), ISO
+# d'évaluation de Microsoft, installée sans intervention par un
+# autounattend.xml sur un second CD. Matériel aux pilotes intégrés à
+# Windows (LSI Logic SAS, e1000e : vmxnet3 et PVSCSI exigent les VMware
+# Tools), BIOS (pas d'invite « press any key » sur un disque vierge), CBT.
+WIN_ISO="${VMWLAB_WIN_ISO:-$MEDIA/vmware-lab/windows_server_2025_eval_x64fre_en-us.iso}"
+
+render_windows_cd() {  # $1 nom, $2 IP, $3 répertoire du CD
+    local name="$1" ip="$2" cd="$3" pw
+    vault_env
+    pw="$(vault_field windows_admin_password)"
+    install -d -m 700 "$cd"
+    cat "$HOME/.ssh/id_ed25519.pub" > "$cd/authorized_keys"
+    cat > "$cd/churn.ps1" <<'EOF'
+# Écritures continues : 4 Mio toutes les 5 s sur un jeu tournant de 64
+# fichiers, plus un compteur et l'heure du dernier passage (ms UTC).
+$d = 'C:\churn'; $i = 0
+if (Test-Path "$d\counter") { $i = [int](Get-Content "$d\counter") }
+$buf = New-Object byte[] (4MB)
+$rng = [System.Security.Cryptography.RandomNumberGenerator]::Create()
+while ($true) {
+    $i++
+    $rng.GetBytes($buf)
+    [IO.File]::WriteAllBytes("$d\blk-$($i % 64)", $buf)
+    Set-Content "$d\counter" $i
+    Set-Content "$d\last" ([DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds())
+    Start-Sleep 5
+}
+EOF
+    cat > "$cd/vmwlab-setup.ps1" <<EOF
+# Premier démarrage : IP fixe, SSH par clé (OpenSSH est livré avec Windows
+# Server 2025, pas d'accès réseau requis), service d'écritures continues.
+\$nic = Get-NetAdapter | Where-Object Status -eq 'Up' | Select-Object -First 1
+New-NetIPAddress -InterfaceIndex \$nic.ifIndex -IPAddress $ip -PrefixLength 16 -DefaultGateway 172.16.0.1
+Set-DnsClientServerAddress -InterfaceIndex \$nic.ifIndex -ServerAddresses 172.16.3.6
+Copy-Item "\$PSScriptRoot\authorized_keys" C:\ProgramData\ssh\administrators_authorized_keys -Force
+icacls C:\ProgramData\ssh\administrators_authorized_keys /inheritance:r /grant "Administrators:F" /grant "SYSTEM:F"
+New-ItemProperty -Path 'HKLM:\SOFTWARE\OpenSSH' -Name DefaultShell -Value 'C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe' -PropertyType String -Force
+New-NetFirewallRule -DisplayName 'SSH' -Direction Inbound -Protocol TCP -LocalPort 22 -Action Allow
+Set-Service sshd -StartupType Automatic
+Start-Service sshd
+New-Item -ItemType Directory -Force C:\churn | Out-Null
+Copy-Item "\$PSScriptRoot\churn.ps1" C:\churn\churn.ps1 -Force
+\$a = New-ScheduledTaskAction -Execute powershell.exe -Argument '-NoProfile -ExecutionPolicy Bypass -File C:\churn\churn.ps1'
+Register-ScheduledTask -TaskName churn -Action \$a -Trigger (New-ScheduledTaskTrigger -AtStartup) -User SYSTEM -RunLevel Highest -Force
+Start-ScheduledTask -TaskName churn
+reg add "HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon" /v AutoAdminLogon /t REG_SZ /d 0 /f
+EOF
+    cat > "$cd/autounattend.xml" <<EOF
+<?xml version="1.0" encoding="utf-8"?>
+<unattend xmlns="urn:schemas-microsoft-com:unattend">
+  <settings pass="windowsPE">
+    <component name="Microsoft-Windows-International-Core-WinPE" processorArchitecture="amd64" publicKeyToken="31bf3856ad364e35" language="neutral" versionScope="nonSxS">
+      <SetupUILanguage><UILanguage>en-US</UILanguage></SetupUILanguage>
+      <InputLocale>en-US</InputLocale><SystemLocale>en-US</SystemLocale>
+      <UILanguage>en-US</UILanguage><UserLocale>en-US</UserLocale>
+    </component>
+    <component name="Microsoft-Windows-Setup" processorArchitecture="amd64" publicKeyToken="31bf3856ad364e35" language="neutral" versionScope="nonSxS" xmlns:wcm="http://schemas.microsoft.com/WMIConfig/2002/State">
+      <DiskConfiguration>
+        <Disk wcm:action="add">
+          <DiskID>0</DiskID>
+          <WillWipeDisk>true</WillWipeDisk>
+          <CreatePartitions>
+            <CreatePartition wcm:action="add"><Order>1</Order><Type>Primary</Type><Size>500</Size></CreatePartition>
+            <CreatePartition wcm:action="add"><Order>2</Order><Type>Primary</Type><Extend>true</Extend></CreatePartition>
+          </CreatePartitions>
+          <ModifyPartitions>
+            <ModifyPartition wcm:action="add"><Order>1</Order><PartitionID>1</PartitionID><Label>System</Label><Format>NTFS</Format><Active>true</Active></ModifyPartition>
+            <ModifyPartition wcm:action="add"><Order>2</Order><PartitionID>2</PartitionID><Label>Windows</Label><Format>NTFS</Format><Letter>C</Letter></ModifyPartition>
+          </ModifyPartitions>
+        </Disk>
+      </DiskConfiguration>
+      <ImageInstall>
+        <OSImage>
+          <InstallFrom><MetaData wcm:action="add"><Key>/IMAGE/NAME</Key><Value>Windows Server 2025 Standard Evaluation</Value></MetaData></InstallFrom>
+          <InstallTo><DiskID>0</DiskID><PartitionID>2</PartitionID></InstallTo>
+        </OSImage>
+      </ImageInstall>
+      <UserData><AcceptEula>true</AcceptEula><FullName>Administrator</FullName><Organization>vmwlab</Organization></UserData>
+    </component>
+  </settings>
+  <settings pass="specialize">
+    <component name="Microsoft-Windows-Shell-Setup" processorArchitecture="amd64" publicKeyToken="31bf3856ad364e35" language="neutral" versionScope="nonSxS">
+      <ComputerName>$name</ComputerName>
+      <TimeZone>Romance Standard Time</TimeZone>
+    </component>
+  </settings>
+  <settings pass="oobeSystem">
+    <component name="Microsoft-Windows-Shell-Setup" processorArchitecture="amd64" publicKeyToken="31bf3856ad364e35" language="neutral" versionScope="nonSxS" xmlns:wcm="http://schemas.microsoft.com/WMIConfig/2002/State">
+      <UserAccounts><AdministratorPassword><Value>$pw</Value><PlainText>true</PlainText></AdministratorPassword></UserAccounts>
+      <AutoLogon><Enabled>true</Enabled><Username>Administrator</Username><Password><Value>$pw</Value><PlainText>true</PlainText></Password><LogonCount>1</LogonCount></AutoLogon>
+      <OOBE><HideEULAPage>true</HideEULAPage><HideLocalAccountScreen>true</HideLocalAccountScreen><HideOEMRegistrationScreen>true</HideOEMRegistrationScreen><HideOnlineAccountScreens>true</HideOnlineAccountScreens><HideWirelessSetupInOOBE>true</HideWirelessSetupInOOBE><NetworkLocation>Work</NetworkLocation><ProtectYourPC>3</ProtectYourPC></OOBE>
+      <FirstLogonCommands>
+        <SynchronousCommand wcm:action="add">
+          <Order>1</Order>
+          <CommandLine>cmd /c for %d in (D E F G H) do if exist %d:\\vmwlab-setup.ps1 powershell -NoProfile -ExecutionPolicy Bypass -File %d:\\vmwlab-setup.ps1 &gt; C:\\vmwlab-setup.log 2&gt;&amp;1</CommandLine>
+          <Description>Configuration du banc</Description>
+        </SynchronousCommand>
+      </FirstLogonCommands>
+    </component>
+  </settings>
+</unattend>
+EOF
+    chmod 600 "$cd"/*
+}
+
+make_windows() {  # $1 numéro (3 ou 4)
+    local name="vmwlab-src-$1" ip="172.16.2.8$(( $1 + 1 ))" tmp cd
+    if govc_vc vm.info "$name" 2>/dev/null | grep "^Name:" >/dev/null; then
+        # Reprise : le CD du fichier de réponses (mot de passe) ne doit pas
+        # rester, même après une installation interrompue côté outil.
+        # (un lecteur restant, ou le fichier : une éjection refusée peut avoir
+        # détaché l'ISO du lecteur en laissant le fichier au datastore)
+        if govc_vc device.ls -dc "$DC" -vm "$name" | grep "^cdrom-" >/dev/null \
+            || govc_vc datastore.ls -dc "$DC" -ds "$DS" "$name/unattend.iso" >/dev/null 2>&1; then
+            wait_ssh "Administrator@$ip" 5400 || { say "$name injoignable en SSH"; return 1; }
+            unattend_cleanup "$name" "$ip"
+        fi
+        say "$name existe déjà"; return
+    fi
+    [[ -s "$WIN_ISO" ]] || { say "ISO Windows absente ($WIN_ISO)"; return 1; }
+    if ! govc_vc datastore.ls -dc "$DC" -ds "$DS" "iso/$(basename "$WIN_ISO")" >/dev/null 2>&1; then
+        say "envoi de l'ISO Windows dans le datastore"
+        govc_vc datastore.mkdir -dc "$DC" -ds "$DS" -p iso
+        govc_vc datastore.upload -dc "$DC" -ds "$DS" "$WIN_ISO" "iso/$(basename "$WIN_ISO")" >/dev/null
+    fi
+    tmp="$(mktemp -d)"; chmod 700 "$tmp"
+    render_windows_cd "$name" "$ip" "$tmp/cd"
+    xorriso -as mkisofs -V UNATTEND -J -R -o "$tmp/unattend.iso" "$tmp/cd" >/dev/null 2>&1
+    govc_vc datastore.mkdir -dc "$DC" -ds "$DS" -p "$name"
+    govc_vc datastore.upload -dc "$DC" -ds "$DS" "$tmp/unattend.iso" "$name/unattend.iso" >/dev/null
+    rm -rf "$tmp"
+    govc_vc vm.create -dc "$DC" -ds "$DS" -host "$ESX_IP" -m 4096 -c 2 -g windows2019srv_64Guest \
+        -net "VM Network" -net.adapter e1000e -disk.controller lsilogic-sas -disk 40GB \
+        -firmware bios -iso "iso/$(basename "$WIN_ISO")" -on=false "$name"
+    local cd2; cd2="$(govc_vc device.cdrom.add -dc "$DC" -vm "$name")"
+    govc_vc device.cdrom.insert -dc "$DC" -ds "$DS" -vm "$name" -device "$cd2" "$name/unattend.iso"
+    govc_vc vm.change -dc "$DC" -vm "$name" -e ctkEnabled=TRUE -e scsi0:0.ctkEnabled=TRUE
+    govc_vc vm.power -dc "$DC" -on "$name" >/dev/null
+    say "installation de Windows sur $name ($ip), 30 à 90 min en imbriqué"
+    wait_ssh "Administrator@$ip" 5400 || { say "$name injoignable en SSH après 90 min"; return 1; }
+    unattend_cleanup "$name" "$ip"
+    say "$name installée ($ip), CBT actif, SSH ouvert, écritures continues en cours"
+}
+
+# Le second CD porte le mot de passe administrateur : retiré dès
+# l'installation finie. Un lecteur IDE ne se retire ni ne s'éjecte VM allumée
+# sur cet ESXi imbriqué (« Connection control operation failed for disk
+# ide0:1 », vécu le 28/09/2026) : arrêt propre de Windows par SSH, retrait
+# des deux lecteurs (la VM source n'en garde aucun), effacement du fichier,
+# redémarrage (la tâche churn repart seule).
+unattend_cleanup() {  # $1 nom de la VM, $2 IP
+    local dev
+    ssh -o BatchMode=yes -o LogLevel=ERROR "Administrator@$2" "Stop-Computer -Force" >/dev/null 2>&1 || true
+    for _ in $(seq 1 60); do
+        govc_vc vm.info -dc "$DC" "$1" | grep poweredOff >/dev/null && break
+        sleep 5
+    done
+    govc_vc vm.info -dc "$DC" "$1" | grep poweredOff >/dev/null || govc_vc vm.power -dc "$DC" -off -force "$1" >/dev/null
+    for dev in $(govc_vc device.ls -dc "$DC" -vm "$1" | awk '/^cdrom-/ {print $1}'); do
+        govc_vc device.remove -dc "$DC" -vm "$1" "$dev" >/dev/null
+    done
+    govc_vc datastore.rm -dc "$DC" -ds "$DS" "$1/unattend.iso" >/dev/null 2>&1 || true
+    govc_vc vm.power -dc "$DC" -on "$1" >/dev/null
+    wait_ssh "Administrator@$2" 900 || say "$1 : pas de SSH après le redémarrage"
 }
 
 cmd_inventory() {
@@ -550,6 +727,9 @@ cmd_inventory() {
     vc_rest setup
     make_source 1
     make_source 2
+    make_windows 3
+    autostart "$VC" vmwlab-src-1 vmwlab-src-2 vmwlab-src-3
+    say "démarrage automatique avec l'ESXi : vCenter puis VMs sources"
 }
 
 cmd_status() {
@@ -567,21 +747,40 @@ cmd_status() {
     fi
 }
 
+# Arrêt propre : les VMs sources par SSH (elles n'ont pas les VMware Tools,
+# l'arrêt de l'invité par l'API leur est impossible), le vCenter par son
+# invité, puis l'ESXi. Une VM encore allumée après 5 min est coupée.
 cmd_stop() {
-    # Le vCenter d'abord, par l'arrêt propre de son invité, puis l'ESXi.
-    govc_esx vm.power -s "$VC" >/dev/null 2>&1 || true
-    for _ in $(seq 1 60); do
-        govc_esx vm.info "$VC" 2>/dev/null | grep -q 'poweredOff' && break
-        sleep 5
-    done
+    if govc_esx about >/dev/null 2>&1; then
+        local entry target cmd
+        # ssh -n : sinon ssh lit l'entrée de la boucle et avale les lignes
+        # suivantes (piège déjà payé sur harvlab).
+        while IFS= read -r entry; do
+            target="${entry%%:*}"; cmd="${entry#*:}"
+            ssh -n -o BatchMode=yes -o ConnectTimeout=5 -o LogLevel=ERROR "$target" "$cmd" >/dev/null 2>&1 || true
+        done < <(printf '%s\n' "debian@172.16.2.82:sudo systemctl poweroff" \
+            "debian@172.16.2.83:sudo systemctl poweroff" \
+            "Administrator@172.16.2.84:Stop-Computer -Force")
+        govc_esx vm.power -s "$VC" >/dev/null 2>&1 || true
+        local on=""
+        for _ in $(seq 1 60); do
+            on="$(govc_esx find / -type m -runtime.powerState poweredOn 2>/dev/null)"
+            [[ -z "$on" ]] && break
+            sleep 5
+        done
+        if [[ -n "$on" ]]; then
+            say "encore allumées après 5 min, coupées : $(echo "$on" | xargs -n1 basename | tr '\n' ' ')"
+            echo "$on" | while read -r v; do govc_esx vm.power -off -force "$v" >/dev/null 2>&1 || true; done
+        fi
+    fi
     on_node2 "sudo virsh shutdown $ESX >/dev/null 2>&1 || true"
-    say "arrêt demandé (vCenter puis ESXi)"
+    say "arrêt demandé : VMs du banc éteintes, ESXi en cours d'arrêt"
 }
 
 cmd_start() {
     filter_active || { say "filtre absent : lancer « filter » d'abord"; exit 1; }
     on_node2 "sudo virsh start $ESX >/dev/null 2>&1 || true"
-    say "ESXi démarré ; le vCenter redémarre avec lui (démarrage automatique)"
+    say "ESXi démarré ; le vCenter et les VMs sources suivent (démarrage automatique, ~15 min pour le vCenter)"
 }
 
 cmd_destroy() {
@@ -606,6 +805,8 @@ case "${1:-}" in
     destroy)   cmd_destroy ;;
     # Débogage : kickstart rendu (le mot de passe n'y est que haché).
     render-ks) render_ks ;;
+    # Débogage : CD d'installation Windows (contient le mot de passe).
+    render-windows) render_windows_cd "$2" "$3" "$4" ;;
     # Tests (test_vmwlab.sh) : vérifie une OVA quelconque.
     verify-ova) verify_ova "$2" ;;
     *) sed -n '2,/^set -euo/p' "$0" | sed '$d'; exit 1 ;;

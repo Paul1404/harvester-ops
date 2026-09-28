@@ -1902,15 +1902,17 @@ tests/bench/vmware/vmwlab.sh status
 
 Expected: ESXi et vCenter répondent ; `kubectl get nodes` de harvlab2 donne `harvlab2-n1 Ready`.
 
-- [ ] **Step 2: registre du banc (Gitea de node1) et accès de harvlab2**
+- [ ] **Step 2: registre du banc et accès de harvlab2**
 
-1. Jeton Gitea d'écriture de paquets (`write:package`) et jeton de lecture (`read:package`), créés par l'API Gitea avec le compte `jniedergang` (mot de passe Vault `secret/services/gitea`), valeurs écrites dans Vault `secret/services/gitea` (champs `registry_push_token`, `registry_read_token`) par l'entrée standard, jamais affichées.
-2. Vérifier que harvlab2 joint le registre : `ssh rancher@172.16.2.71 "curl -s -o /dev/null -w '%{http_code}' http://172.16.1.11:3000/v2/"`. Expected: `401`.
+Gitea ne convient pas : son service de jetons s'annonce sous `gitea.home.zypp.fr`, nom retiré du LAN en juillet 2026, injoignable depuis les bancs (vérifié le 28/09/2026). Le banc a son propre registre, `vmwlab-registry` sur node1, déjà monté à la main le 28/09 et à consigner dans l'outil du banc :
+
+1. `tests/bench/vmware/vmwlab.sh registry` (nouvelle commande, README à jour) : conteneur podman rootless `vmwlab-registry`, image `registry.opensuse.org/opensuse/registry` épinglée par empreinte, `--user 0:0` (sinon le fichier htpasswd 0600 est illisible par le compte du registre), `--memory 512m`, `-p 172.16.1.11:5005:5000`, authentification htpasswd (bcrypt, compte `harvops`, mot de passe Vault `secret/infra/vmware-lab` champ `registry_password`, jamais affiché), données dans `~/.local/share/vmwlab-registry/` ; pare-feu de node1 : règles riches pour 172.16.2.60/30 et 172.16.2.70/31 seulement, port 5005. Idempotente.
+2. Vérifier que harvlab2 joint le registre : `ssh rancher@172.16.2.71 "curl -s -o /dev/null -w '%{http_code}' http://172.16.1.11:5005/v2/"`. Expected: `401` (vérifié le 28/09).
 3. Réglage `containerd-registry` de harvlab2 par la console (fichier 0600 effacé aussitôt) :
 
 ```json
-{"Mirrors": {"172.16.1.11:3000": {"Endpoints": ["http://172.16.1.11:3000"]}},
- "Configs": {"172.16.1.11:3000": {"Auth": {"Username": "jniedergang", "Password": "<registry_read_token>"}}}}
+{"Mirrors": {"172.16.1.11:5005": {"Endpoints": ["http://172.16.1.11:5005"]}},
+ "Configs": {"172.16.1.11:5005": {"Auth": {"Username": "harvops", "Password": "<registry_password>"}}}}
 ```
 
 ```bash
@@ -1936,12 +1938,12 @@ Expected: `STEP_EVENT|install|done|Forklift is installed` ; les 5 déploiements 
 - [ ] **Step 4: image VDDK poussée, puis tirée et copiée par harvlab2**
 
 ```bash
-printf '{"username":"jniedergang","password":"%s"}' "$PUSH_TOKEN" | bin/harvester-forklift.py vddk-image \
+printf '{"username":"harvops","password":"%s"}' "$REG_PW" | bin/harvester-forklift.py vddk-image \
     --archive ~/ISO/VMware-vix-disklib-8.0.3-23950268.x86_64.tar.gz \
-    --image 172.16.1.11:3000/jniedergang/vddk:8.0.3 --plain-http --auth-stdin
+    --image 172.16.1.11:5005/harvops/vddk:8.0.3 --plain-http --auth-stdin
 ```
 
-(`$PUSH_TOKEN` lu dans Vault par une variable, jamais tapé ni affiché.)
+(`$REG_PW` lu dans Vault par une variable, jamais tapé ni affiché.)
 
 Puis un pod d'essai qui fait ce que fera CDI : conteneur d'amorçage = l'image VDDK, `/opt` en `emptyDir`, conteneur principal `registry.suse.com/bci/bci-busybox:16.0` qui liste `/opt/vmware-vix-disklib-distrib/lib64/libvixDiskLib.so*`. Expected: pod `Completed`, la bibliothèque listée ; pod supprimé ensuite.
 
@@ -1955,7 +1957,7 @@ env["VAULT_TOKEN"] = subprocess.run(["sudo", "cat", "/data/vault/root-token"], c
 get = lambda f: subprocess.run(["vault", "kv", "get", f"-field={f}", "secret/infra/vmware-lab"],
                                capture_output=True, text=True, env=env).stdout
 print(json.dumps({"url": "172.16.2.81", "user": get("sso_user"), "password": get("sso_password"),
-                  "insecure": True, "vddk_image": "172.16.1.11:3000/jniedergang/vddk:8.0.3"}))
+                  "insecure": True, "vddk_image": "172.16.1.11:5005/harvops/vddk:8.0.3"}))
 EOF
 kubectl --kubeconfig ~/.kube/harvlab2.yaml get provider -n default vmwlab
 ```

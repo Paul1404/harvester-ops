@@ -36,6 +36,7 @@ class FakeKube:
         self.objs, self.calls, self.crd = {}, [], False
         self.stuck = stuck                       # composant qui ne démarre jamais
         self.provider_status = {"phase": "Ready", "conditions": [{"type": "Ready", "status": "True"}]}
+        self.refuse_secret = None                # message à lever quand un Secret est appliqué
         if cert_manager:
             self._cert_manager()
 
@@ -93,6 +94,8 @@ class FakeKube:
             self.crd = True
 
     def apply(self, docs, field_manager="harvester-ops", timeout=None):
+        if self.refuse_secret and any(d["kind"] == "Secret" for d in docs):
+            raise KubeError(self.refuse_secret)
         for d in docs:
             o = copy.deepcopy(d)
             if d["kind"] == "Provider":
@@ -297,3 +300,28 @@ def test_vddk_image_reads_the_registry_credentials_on_stdin(monkeypatch, capsys)
 
 def op_default():
     return hfk.op.DEFAULT_BASE
+
+
+def test_credentials_refused_by_forklift_s_webhook_create_no_provider(monkeypatch, capsys):
+    """Le webhook de Forklift teste les identifiants à l'écriture du secret :
+    un refus ne doit laisser aucun fournisseur orphelin."""
+    k = installed()
+    k.refuse_secret = ('Error from server: admission webhook "secrets.forklift.konveyor" '
+                        'denied the request: Invalid credentials')
+    monkeypatch.setattr(sys, "stdin", io.StringIO(json.dumps(SPEC)))
+    c = Clock()
+    assert hfk.cmd_provider_apply(prov_args(), kube=k, sleep=c.sleep, now=c.now) == hfk.EXIT_FAIL
+    assert (hf.K_PROVIDER, "default", "vmwlab") not in k.objs
+    captured = capsys.readouterr()
+    assert "STEP_EVENT|provider|error|Invalid credentials" in captured.err
+    assert "Very-S3cret" not in captured.err and "Very-S3cret" not in captured.out
+
+
+def test_stdin_that_is_not_an_object_is_refused(monkeypatch, capsys):
+    """Un JSON valide mais qui n'est pas un objet (liste, chaîne...) ne doit
+    jamais faire planter un appelant en AttributeError sur .get()."""
+    monkeypatch.setattr(hfk, "kube_from", lambda args: FakeKube())
+    monkeypatch.setattr(sys, "stdin", io.StringIO(json.dumps([1, 2])))
+    rc = hfk.main(["provider-apply", "--kubeconfig", "kc", "--namespace", "default", "--name", "vc"])
+    assert rc == 2
+    assert "a JSON object expected" in capsys.readouterr().err

@@ -61,10 +61,15 @@ def get_opt(kube, kind, ns, name):
 
 def read_stdin_json():
     raw = sys.stdin.read()
+    if not raw.strip():
+        return {}
     try:
-        return json.loads(raw) if raw.strip() else {}
+        data = json.loads(raw)
     except json.JSONDecodeError:
         raise ValueError("stdin: JSON expected") from None
+    if not isinstance(data, dict):
+        raise ValueError("stdin: a JSON object expected")
+    return data
 
 
 def until(fn, timeout, label, sleep=time.sleep, now=time.time, every=5):
@@ -193,7 +198,14 @@ def cmd_provider_apply(args, kube=None, sleep=time.sleep, now=time.time):
     if not install_state(kube)["ready"]:
         step("provider", "error", "Forklift is not installed and running on this cluster: run install first")
         return EXIT_REFUSED
-    kube.apply([secret, prov])
+    try:
+        kube.apply([secret])
+    except KubeError as e:
+        msg = str(e)
+        reason = msg.split("denied the request: ", 1)[1] if "denied the request: " in msg else msg
+        step("provider", "error", reason)
+        return EXIT_FAIL
+    kube.apply([prov])
     step("provider", "running", f"provider {ns}/{name} applied: Forklift checks the vCenter")
     return until(lambda: hf.provider_state(kube.get(hf.K_PROVIDER, ns, name)), args.timeout, "provider", sleep, now)
 

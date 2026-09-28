@@ -59,6 +59,36 @@ Chacun est vérifié en réel avant le suivant.
   d'enregistrement systématique).
 - Pas de release de la console pour ce sous-projet (outil de banc et doc).
 
+### Ce que le réel a appris avant B (28/09/2026)
+
+- **Harvester 1.9 ne livre pas Forklift.** L'add-on `forklift-operator` est
+  expérimental (dépôt `harvester/sv-addons`, chart `harvester/charts`, images
+  de `harvester/forklift-packaging`, Forklift amont 2.9) ; il n'est pas dans
+  le dépôt des add-ons expérimentaux où la conception le cherchait.
+- Chart `forklift-operator` 1.9.0 publié le 16/09/2026, mais images publiées
+  seulement jusqu'à `v1.8.2` sur `registry.rancher.com/harvester` ; les
+  valeurs par défaut du chart pointent sur `rancher/nginx:latest` : dépôt,
+  image et tag se posent toujours.
+- Forklift exige **cert-manager**, absent de Harvester : la console l'a déjà
+  dans son paquet Cluster API (manifeste v1.16.2), il sert ici.
+- Un `ForkliftController` fait déployer les composants ; le fournisseur de
+  destination `host` est créé par Forklift.
+- Harvester 1.9 relaie l'inventaire de Forklift
+  (`/v1/harvester/providers/vsphere/<id>/{vms,networks,datastores}`), mais
+  par l'authentification de Rancher ; la console lira le service
+  `forklift-inventory` elle-même, avec un jeton court d'un compte de service
+  (le proxy de l'apiserver retire l'en-tête Authorization). La question
+  « inventaire de Forklift ou API de vCenter » est tranchée : Forklift, qui
+  donne aussi le CBT et ses propres réserves par VM.
+- **Image VDDK** : la console n'a ni podman ni buildah ; l'image se construit
+  par l'API de registre (base BCI busybox + l'archive VDDK telle quelle comme
+  couche) et se pousse dans le registre de l'exploitant, que le cluster doit
+  pouvoir tirer (réglage `containerd-registry`).
+- **B se découpe en B1 et B2**, chacun avec sa release : B1 = installation,
+  image VDDK, fournisseur, inventaire (plan :
+  `docs/design/2026-09-28-forklift-b1-plan.md`) ; B2 = correspondances, plans
+  à chaud, bascule, retour arrière.
+
 ### B. Forklift du côté de Harvester
 
 - Activer l'add-on `forklift-operator` depuis la console, comme les autres

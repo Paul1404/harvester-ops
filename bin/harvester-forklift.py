@@ -174,7 +174,9 @@ def cmd_install(args, kube=None, sleep=time.sleep, now=time.time):
 
 
 def build_parser():
-    ap = argparse.ArgumentParser(prog="harvester-forklift", description=__doc__.split("\n\n")[0])
+    ap = argparse.ArgumentParser(prog="harvester-forklift",
+                                 description="Forklift on a Harvester cluster: install, VDDK "
+                                             "image, vCenter provider, inventory.")
     sub = ap.add_subparsers(dest="cmd", required=True)
 
     def cluster_args(sp):

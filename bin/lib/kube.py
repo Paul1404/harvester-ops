@@ -116,21 +116,38 @@ class Kube:
     @contextlib.contextmanager
     def port_forward(self, ns, target, port, timeout=20):
         """Un port local vers `target` (svc/nom) : rend le port choisi par
-        kubectl, et coupe le relais en sortie."""
+        kubectl, et coupe le relais en sortie.
+
+        Tube binaire, lu par `select`/`os.read` : `readline()` sur le tube
+        texte tamponné pouvait bloquer bien après `timeout` si la ligne de
+        kubectl arrivait en plusieurs morceaux (le numéro de port sans son
+        saut de ligne, par exemple)."""
         p = subprocess.Popen(self._base() + ["port-forward", "-n", ns, target, f":{port}"],
-                             stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+                             stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         try:
             deadline = time.time() + timeout
-            local = None
-            while time.time() < deadline and local is None:
-                ready, _, _ = select.select([p.stdout], [], [], 1)
+            local, buf, fd = None, b"", p.stdout.fileno()
+            while local is None:
+                remaining = deadline - time.time()
+                if remaining <= 0:
+                    break
+                ready, _, _ = select.select([fd], [], [], min(1, remaining))
                 if ready:
-                    m = re.search(r"127\.0\.0\.1:(\d+)", p.stdout.readline())
-                    local = int(m.group(1)) if m else None
-                if p.poll() is not None:
+                    chunk = os.read(fd, 4096)
+                    if not chunk:
+                        break                   # kubectl a refermé sa sortie : il quitte
+                    buf += chunk
+                    m = re.search(rb"127\.0\.0\.1:(\d+)", buf)
+                    if m:
+                        local = int(m.group(1))
+                if local is None and p.poll() is not None:
                     break
             if local is None:
-                raise KubeError("port-forward failed: " + (p.stderr.read() if p.poll() is not None else "no port")[:300])
+                if p.poll() is not None:
+                    msg = (p.stderr.read() or b"").decode(errors="replace").strip()
+                else:
+                    msg = "no port"
+                raise KubeError(("port-forward failed: " + msg)[:300])
             yield local
         finally:
             if p.poll() is None:
@@ -139,6 +156,8 @@ class Kube:
                     p.wait(5)
                 except subprocess.TimeoutExpired:
                     p.kill()
+            p.stdout.close()
+            p.stderr.close()
 
     def server_host(self):
         try:

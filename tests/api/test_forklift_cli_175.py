@@ -188,3 +188,17 @@ def test_status_reads_everything_without_writing(capsys):
     out = json.loads(capsys.readouterr().out)
     assert out["install"]["ready"] is True and out["providers"] == []
     assert not [c for c in k.calls if c[0] in ("create", "apply", "patch", "delete")]
+
+
+def test_a_bad_chart_version_on_the_command_line_is_refused(capsys):
+    rc = hfk.main(["install", "--kubeconfig", "kc", "--chart-version", "latest"])
+    assert rc == hfk.EXIT_REFUSED
+    err = capsys.readouterr().err
+    lines = [ln for ln in err.splitlines() if ln.startswith("STEP_EVENT|install|error|")]
+    assert lines and "chart version" in lines[0]
+
+
+def test_the_help_description_is_in_english():
+    ap, _ = hfk.build_parser()
+    assert ap.description == ("Forklift on a Harvester cluster: install, VDDK image, vCenter "
+                              "provider, inventory.")

@@ -29,6 +29,7 @@ tests/bench/vmware/vmwlab.sh media       # ISO ESXi à installation automatique
 tests/bench/vmware/vmwlab.sh install     # VM ESXi, installée sans intervention
 tests/bench/vmware/vmwlab.sh vcenter     # vCenter déployé et configuré seul
 tests/bench/vmware/vmwlab.sh inventory   # datacenter, hôte, VMs sources
+tests/bench/vmware/vmwlab.sh registry    # registre d'images des essais Forklift
 ```
 
 Durées mesurées : installation d'ESXi ~10 min, envoi de l'OVA ~6 min,
@@ -97,6 +98,25 @@ le banc, qui ne s'en sert pas.
   `C:\churn`). Le mot de passe administrateur (Vault,
   `windows_admin_password`) n'est que sur ce second CD, retiré de la VM et du
   datastore dès l'installation finie.
+
+## Registre du banc
+
+`vmwlab.sh registry` monte sur node1 le registre d'images des essais
+Forklift (image VDDK) : conteneur podman sans privilèges `vmwlab-registry`,
+image openSUSE `registry` épinglée par empreinte, `http://172.16.1.11:5005`,
+compte `harvops` (mot de passe Vault `secret/infra/vmware-lab`,
+`registry_password`), données dans `~/.local/share/vmwlab-registry/`, pare-feu
+ouvert aux seuls bancs harvlab (172.16.2.60 à .63) et harvlab2 (.70, .71).
+Relancer la commande ne crée rien en double.
+
+- **Pas Gitea** : son service de jetons s'annonce sous `gitea.home.zypp.fr`,
+  nom retiré du LAN, que les bancs ne résolvent pas ; containerd ne pourrait
+  pas s'y authentifier.
+- `--user 0:0` : le compte propre du registre ne lit pas le fichier htpasswd
+  en 0600 ; en podman sans privilèges, ce root n'est que l'utilisateur de
+  node1.
+- Côté Harvester, le réglage `containerd-registry` doit déclarer ce registre
+  en HTTP avec le compte `harvops`.
 
 ## Filtre réseau
 

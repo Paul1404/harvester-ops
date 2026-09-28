@@ -21,6 +21,8 @@
 #   vmwlab.sh install     crée la VM ESXi et l'installe sans intervention
 #   vmwlab.sh vcenter     déploie le vCenter dans l'ESXi et attend qu'il réponde
 #   vmwlab.sh inventory   datacenter, cluster, hôte ajouté, VMs sources (CBT)
+#   vmwlab.sh registry    registre d'images du banc sur node1 (image VDDK de
+#                         Forklift), Basic, joignable des seuls bancs Harvester
 #   vmwlab.sh status      état de la VM, de l'ESXi, du vCenter, du filtre
 #   vmwlab.sh stop|start  arrêt propre (vCenter puis ESXi) ou démarrage
 #   vmwlab.sh destroy     supprime la VM ESXi et ses disques (confirmation)
@@ -732,6 +734,55 @@ cmd_inventory() {
     say "démarrage automatique avec l'ESXi : vCenter puis VMs sources"
 }
 
+# Registre du banc (image VDDK de Forklift) : un conteneur podman sans
+# privilèges sur node1. Pas Gitea : son service de jetons s'annonce sous
+# gitea.home.zypp.fr, nom retiré du LAN, donc injoignable des bancs (vu le
+# 28/09/2026). Basic (htpasswd bcrypt), mot de passe dans Vault ; pare-feu
+# ouvert aux seuls bancs harvlab (.60-.63) et harvlab2 (.70-.71).
+REGISTRY_IMAGE=registry.opensuse.org/opensuse/registry
+REGISTRY_DIR="$HOME/.local/share/vmwlab-registry"
+REGISTRY_ADDR=172.16.1.11:5005
+
+cmd_registry() {
+    vault_env
+    if ! vault_field registry_password >/dev/null 2>&1; then
+        python3 -c 'import json, secrets; print(json.dumps({"registry_user": "harvops", "registry_password": secrets.token_urlsafe(24)}))' \
+            | vault kv patch "$VAULT_PATH" - >/dev/null
+        say "mot de passe du registre créé dans Vault ($VAULT_PATH)"
+    fi
+    install -d -m 700 "$REGISTRY_DIR" "$REGISTRY_DIR/data" "$REGISTRY_DIR/auth"
+    # bcrypt (seul format du registre) ; le mot de passe passe par un tube
+    vault_field registry_password | python3 -c 'import bcrypt, sys
+print("harvops:" + bcrypt.hashpw(sys.stdin.read().encode(), bcrypt.gensalt(rounds=10)).decode())' \
+        > "$REGISTRY_DIR/auth/htpasswd"
+    chmod 600 "$REGISTRY_DIR/auth/htpasswd"
+    podman pull -q "$REGISTRY_IMAGE:latest" >/dev/null
+    local digest; digest="$(podman image inspect "$REGISTRY_IMAGE:latest" --format '{{.Digest}}')"
+    podman rm -f vmwlab-registry >/dev/null 2>&1 || true
+    # --user 0:0 : le compte du registre ne lirait pas le htpasswd 0600 ; en
+    # podman sans privilèges, ce root n'est que l'utilisateur de node1.
+    podman run -d --name vmwlab-registry --restart unless-stopped --user 0:0 \
+        --memory 512m --memory-swap 512m -p "$REGISTRY_ADDR:5000" \
+        -v "$REGISTRY_DIR/data:/var/lib/registry:Z" -v "$REGISTRY_DIR/auth:/auth:Z,ro" \
+        -e REGISTRY_STORAGE_FILESYSTEM_ROOTDIRECTORY=/var/lib/registry -e REGISTRY_AUTH=htpasswd \
+        -e REGISTRY_AUTH_HTPASSWD_REALM=vmwlab -e REGISTRY_AUTH_HTPASSWD_PATH=/auth/htpasswd \
+        "$REGISTRY_IMAGE@$digest" >/dev/null
+    local src
+    for src in 172.16.2.60/30 172.16.2.70/31; do
+        sudo firewall-cmd -q --zone=public --permanent --query-rich-rule="rule family=ipv4 source address=$src port port=5005 protocol=tcp accept" \
+            || sudo firewall-cmd -q --zone=public --permanent --add-rich-rule="rule family=ipv4 source address=$src port port=5005 protocol=tcp accept"
+    done
+    sudo firewall-cmd -q --reload
+    local code=""
+    for _ in $(seq 1 15); do
+        code="$(curl -s -o /dev/null -w '%{http_code}' "http://$REGISTRY_ADDR/v2/" || true)"
+        [[ "$code" == 401 ]] && break
+        sleep 2
+    done
+    [[ "$code" == 401 ]] || { say "le registre ne répond pas ($code)"; exit 1; }
+    say "registre du banc prêt : http://$REGISTRY_ADDR (compte harvops, image ${digest:0:19})"
+}
+
 cmd_status() {
     on_node2 "sudo virsh list --all | grep -E '$ESX|Name' || true"
     filter_active && say "filtre : actif" || say "filtre : ABSENT"
@@ -799,6 +850,7 @@ case "${1:-}" in
     install)   cmd_install ;;
     vcenter)   cmd_vcenter ;;
     inventory) cmd_inventory ;;
+    registry)  cmd_registry ;;
     status)    cmd_status ;;
     stop)      cmd_stop ;;
     start)     cmd_start ;;

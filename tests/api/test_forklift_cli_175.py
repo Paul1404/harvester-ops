@@ -202,3 +202,98 @@ def test_the_help_description_is_in_english():
     ap, _ = hfk.build_parser()
     assert ap.description == ("Forklift on a Harvester cluster: install, VDDK image, vCenter "
                               "provider, inventory.")
+
+
+def installed():
+    k = FakeKube(cert_manager=True)
+    assert run_install(k) == hfk.EXIT_OK
+    k.calls.clear()
+    return k
+
+
+def prov_args(**kw):
+    a = dict(cluster=None, kubeconfig="kc", namespace="default", name="vmwlab", timeout=300, with_secret=False)
+    a.update(kw)
+    return argparse.Namespace(**a)
+
+
+SPEC = {"url": "172.16.2.81", "user": "administrator@vsphere.local", "password": "Very-S3cret!pw",
+        "insecure": True, "vddk_image": "172.16.1.11:3000/ju/vddk:8.0.3"}
+
+
+def test_provider_apply_refused_while_forklift_is_not_installed(monkeypatch, capsys):
+    monkeypatch.setattr(sys, "stdin", io.StringIO(json.dumps(SPEC)))
+    c = Clock()
+    assert hfk.cmd_provider_apply(prov_args(), kube=FakeKube(), sleep=c.sleep, now=c.now) == hfk.EXIT_REFUSED
+    assert "run install first" in capsys.readouterr().err
+
+
+def test_provider_apply_writes_the_secret_and_the_provider_and_waits(monkeypatch, capsys):
+    k = installed()
+    monkeypatch.setattr(sys, "stdin", io.StringIO(json.dumps(SPEC)))
+    c = Clock()
+    assert hfk.cmd_provider_apply(prov_args(), kube=k, sleep=c.sleep, now=c.now) == hfk.EXIT_OK
+    assert [x[:2] for x in k.calls if x[0] == "apply"] == [("apply", "Secret"), ("apply", "Provider")]
+    sec = k.objs[("secrets", "default", "vmwlab-vsphere")]
+    assert sec["stringData"]["password"] == "Very-S3cret!pw"
+    prov = k.objs[(hf.K_PROVIDER, "default", "vmwlab")]
+    assert prov["spec"]["settings"]["vddkInitImage"] == "172.16.1.11:3000/ju/vddk:8.0.3"
+    captured = capsys.readouterr()
+    assert "Very-S3cret" not in captured.err + captured.out
+    assert "STEP_EVENT|provider|done|ready" in captured.err
+
+
+def test_the_vcenter_refusal_is_said(monkeypatch, capsys):
+    k = installed()
+    k.provider_status = {"phase": "ConnectionFailed", "conditions": [
+        {"type": "ConnectionTestFailed", "status": "True", "category": "Critical",
+         "message": "Login failed: incorrect user name or password."}]}
+    monkeypatch.setattr(sys, "stdin", io.StringIO(json.dumps(SPEC)))
+    c = Clock()
+    assert hfk.cmd_provider_apply(prov_args(), kube=k, sleep=c.sleep, now=c.now) == hfk.EXIT_FAIL
+    assert "incorrect user name or password" in capsys.readouterr().err
+
+
+def test_a_provider_used_by_a_plan_is_not_deleted(capsys):
+    k = installed()
+    k.objs[(hf.K_PROVIDER, "default", "vmwlab")] = {"metadata": {"name": "vmwlab", "namespace": "default"}, "spec": {}}
+    k.objs[(hf.K_PLAN, "mig", "wave-1")] = {"metadata": {"name": "wave-1", "namespace": "mig"},
+                                          "spec": {"provider": {"source": {"name": "vmwlab", "namespace": "default"}}}}
+    c = Clock()
+    assert hfk.cmd_provider_delete(prov_args(), kube=k, sleep=c.sleep, now=c.now) == hfk.EXIT_REFUSED
+    assert "mig/wave-1" in capsys.readouterr().err and not [x for x in k.calls if x[0] == "delete"]
+
+
+def test_delete_takes_the_secret_only_if_the_console_made_it():
+    k = installed()
+    k.objs[(hf.K_PROVIDER, "default", "vmwlab")] = {"metadata": {"name": "vmwlab", "namespace": "default"},
+                                                    "spec": {"secret": {"name": "vmwlab-vsphere", "namespace": "default"}}}
+    k.objs[("secrets", "default", "vmwlab-vsphere")] = {"metadata": {"labels": {"harvester-ops.io/managed": "true"}}}
+    c = Clock()
+    assert hfk.cmd_provider_delete(prov_args(with_secret=True), kube=k, sleep=c.sleep, now=c.now) == hfk.EXIT_OK
+    assert ("delete", "secrets", "vmwlab-vsphere") in k.calls
+    k.objs[(hf.K_PROVIDER, "default", "vmwlab")] = {"metadata": {}, "spec": {"secret": {"name": "theirs", "namespace": "default"}}}
+    k.objs[("secrets", "default", "theirs")] = {"metadata": {"labels": {}}}
+    assert hfk.cmd_provider_delete(prov_args(with_secret=True), kube=k, sleep=c.sleep, now=c.now) == hfk.EXIT_OK
+    assert ("delete", "secrets", "theirs") not in k.calls
+
+
+def test_vddk_image_reads_the_registry_credentials_on_stdin(monkeypatch, capsys):
+    seen = {}
+
+    def fake_push(archive, image, **kw):
+        seen.update(kw, archive=archive, image=image)
+        kw["step"]("VDDK layer sent")
+        return {"image": image, "pinned": "r/x@sha256:" + "d" * 64, "digest": "sha256:" + "d" * 64}
+    monkeypatch.setattr(hfk.op, "push_vddk_image", fake_push)
+    monkeypatch.setattr(sys, "stdin", io.StringIO(json.dumps({"username": "ju", "password": "tok-secret"})))
+    args = argparse.Namespace(archive="/x/vddk.tar.gz", image="172.16.1.11:3000/ju/vddk:8.0.3",
+                              base=op_default(), plain_http=True, auth_stdin=True)
+    assert hfk.cmd_vddk_image(args) == hfk.EXIT_OK
+    assert seen["target_creds"] == {"username": "ju", "password": "tok-secret"} and seen["plain_http"] is True
+    out = capsys.readouterr()
+    assert json.loads(out.out)["digest"] == "sha256:" + "d" * 64 and "tok-secret" not in out.err + out.out
+
+
+def op_default():
+    return hfk.op.DEFAULT_BASE

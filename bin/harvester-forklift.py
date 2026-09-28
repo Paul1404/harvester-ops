@@ -173,6 +173,52 @@ def cmd_install(args, kube=None, sleep=time.sleep, now=time.time):
     return EXIT_OK
 
 
+def cmd_vddk_image(args):
+    creds = read_stdin_json() if args.auth_stdin else None
+    if args.auth_stdin and not (creds.get("username") and creds.get("password")):
+        raise ValueError('--auth-stdin: {"username": ..., "password": ...} expected on stdin')
+    step("vddk", "running", f"building the VDDK image from {Path(args.archive).name}")
+    res = op.push_vddk_image(args.archive, args.image, base=args.base, target_creds=creds,
+                             plain_http=args.plain_http, step=lambda m: step("vddk", "running", m))
+    step("vddk", "done", f"{res['image']} ({res['digest'][:19]})")
+    print(json.dumps(res))
+    return EXIT_OK
+
+
+def cmd_provider_apply(args, kube=None, sleep=time.sleep, now=time.time):
+    kube = kube or kube_from(args)
+    ns, name = hf.check_name(args.namespace, "namespace"), hf.check_name(args.name, "provider")
+    spec = read_stdin_json()
+    secret, prov = hf.provider_secret(ns, name, spec), hf.provider_manifest(ns, name, spec)
+    if not install_state(kube)["ready"]:
+        step("provider", "error", "Forklift is not installed and running on this cluster: run install first")
+        return EXIT_REFUSED
+    kube.apply([secret, prov])
+    step("provider", "running", f"provider {ns}/{name} applied: Forklift checks the vCenter")
+    return until(lambda: hf.provider_state(kube.get(hf.K_PROVIDER, ns, name)), args.timeout, "provider", sleep, now)
+
+
+def cmd_provider_delete(args, kube=None, sleep=time.sleep, now=time.time):
+    kube = kube or kube_from(args)
+    ns, name = hf.check_name(args.namespace, "namespace"), hf.check_name(args.name, "provider")
+    cur = get_opt(kube, hf.K_PROVIDER, ns, name)
+    if cur is None:
+        raise ValueError(f"no provider {ns}/{name}")
+    users = hf.plans_using(ns, name, kube.list(hf.K_PLAN, None))
+    if users:
+        step("provider", "error", f"provider {ns}/{name} is used by migration plans: {', '.join(users)}")
+        return EXIT_REFUSED
+    kube.delete(hf.K_PROVIDER, ns, name)
+    ref = (cur.get("spec") or {}).get("secret") or {}
+    if args.with_secret and ref.get("name"):
+        sec = kube.get("secrets", ref.get("namespace") or ns, ref["name"])
+        if sec and ((sec.get("metadata") or {}).get("labels") or {}).get(hf.L_MANAGED) == "true":
+            kube.delete("secrets", ref.get("namespace") or ns, ref["name"])
+            step("provider", "running", f"secret {ref['name']} deleted")
+    return until(lambda: (True, f"provider {ns}/{name} deleted") if get_opt(kube, hf.K_PROVIDER, ns, name) is None
+                 else (None, "deleting"), args.timeout, "provider", sleep, now)
+
+
 def build_parser():
     ap = argparse.ArgumentParser(prog="harvester-forklift",
                                  description="Forklift on a Harvester cluster: install, VDDK "
@@ -193,6 +239,23 @@ def build_parser():
     sp.add_argument("--cert-manager-manifest", help="cert-manager YAML, applied if cert-manager is missing")
     sp.add_argument("--timeout", type=int, default=900)
     sp.set_defaults(fn=cmd_install)
+    sp = sub.add_parser("vddk-image", help="build the VDDK init image from VMware's archive and push it")
+    sp.add_argument("--archive", required=True, help="VMware-vix-disklib-*.x86_64.tar.gz")
+    sp.add_argument("--image", required=True, help="registry/path:tag to push to")
+    sp.add_argument("--base", default=op.DEFAULT_BASE, help="base image with cp")
+    sp.add_argument("--plain-http", action="store_true", help="the target registry speaks plain HTTP")
+    sp.add_argument("--auth-stdin", action="store_true", help='{"username": ..., "password": ...} on stdin')
+    sp.set_defaults(fn=cmd_vddk_image)
+    for name, fn, hlp in (("provider-apply", cmd_provider_apply, "declare or change a vCenter provider (JSON on stdin)"),
+                          ("provider-delete", cmd_provider_delete, "delete a vCenter provider")):
+        sp = sub.add_parser(name, help=hlp)
+        cluster_args(sp)
+        sp.add_argument("--namespace", required=True)
+        sp.add_argument("--name", required=True)
+        sp.add_argument("--timeout", type=int, default=300)
+        if name == "provider-delete":
+            sp.add_argument("--with-secret", action="store_true", help="also delete the secret the console created")
+        sp.set_defaults(fn=fn)
     return ap, sub
 
 

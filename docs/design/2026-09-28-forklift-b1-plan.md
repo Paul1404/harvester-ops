@@ -15,6 +15,7 @@
 - Le VDDK n'est jamais dans le dépôt ni dans le livrable (licence VMware) ; les tests fabriquent une fausse archive.
 - Chart `forklift-operator` 1.9.0 de `https://charts.harvesterhci.io` ; images `registry.rancher.com/harvester/harvester-forklift-*`, tag `v1.8.2` par défaut (dernier publié au 28/09/2026 ; aucun `v1.9.0` publié).
 - Image de base de l'image VDDK : `registry.suse.com/bci/bci-busybox:16.0` (BCI de SUSE, pour `cp`).
+- Harvester 1.9.1 devrait livrer l'opérateur Forklift officiel (information de l'exploitant, 28/09/2026) : un add-on `forklift-operator` déjà présent SANS l'étiquette `harvester-ops.io/managed` est celui de Harvester (ou d'un opérateur) ; la console l'active seulement, sans jamais réécrire son chart ni ses valeurs.
 - Code et noms en anglais, commentaires et docstrings en français, messages de l'outil en anglais (comme les autres outils).
 - Tests : `python3 -m pytest tests/api/ -q` vert avant chaque commit.
 - Commits Conventional Commits `feat(1.75.0): ...`, sans tiret cadratin ni flèche Unicode dans le contenu public.
@@ -45,7 +46,7 @@
 - Test: `tests/api/test_forklift_175.py`
 
 **Interfaces:**
-- Produces: constantes `G, API, NS, K_ADDON, K_CONTROLLER, K_PROVIDER, K_PLAN, K_DEPLOY, ADDON, CONTROLLER_NAME, CHART_REPO, CHART, CHART_VERSION, IMAGE_REPO, IMAGE_TAG, OPERATOR_DEPLOY, COMPONENTS, CERT_MANAGER, INVENTORY_SA, INVENTORY_SVC, INVENTORY_PORT, L_MANAGED` ; fonctions `check_name(name, what) -> str`, `operator_values(image_tag, image_repo) -> dict`, `addon_manifest(chart_version, image_tag, image_repo) -> dict`, `namespace_manifest() -> dict`, `controller_manifest() -> dict`, `deployment_ready(dep) -> bool`, `addon_state(addon) -> (str, str)`, `pod_problems(pods) -> list[str]`, `install_state(addon, deploys, controller, cert_manager_deploys) -> dict`, `inventory_rbac() -> list[dict]`.
+- Produces: constantes `G, API, NS, K_ADDON, K_CONTROLLER, K_PROVIDER, K_PLAN, K_DEPLOY, ADDON, CONTROLLER_NAME, CHART_REPO, CHART, CHART_VERSION, IMAGE_REPO, IMAGE_TAG, OPERATOR_DEPLOY, COMPONENTS, CERT_MANAGER, INVENTORY_SA, INVENTORY_SVC, INVENTORY_PORT, L_MANAGED` ; fonctions `check_name(name, what) -> str`, `operator_values(image_tag, image_repo) -> dict`, `addon_manifest(chart_version, image_tag, image_repo) -> dict`, `namespace_manifest() -> dict`, `controller_manifest() -> dict`, `deployment_ready(dep) -> bool`, `addon_state(addon) -> (str, str)`, `pod_problems(pods) -> list[str]`, `install_state(addon, deploys, controller, cert_manager_deploys) -> dict`, `pick_addon(addons) -> (addon|None, harvesters: bool)`, `inventory_rbac() -> list[dict]`.
 
 - [ ] **Step 1: écrire les tests**
 
@@ -144,6 +145,16 @@ def test_a_pod_that_cannot_pull_or_start_is_named_with_its_reason():
     probs = hf.pod_problems(pods)
     assert probs[0].startswith("forklift-controller-abc: ImagePullBackOff") and "v1.9.0" in probs[0]
     assert probs[1] == "forklift-validation-ghi: CrashLoopBackOff" and len(probs) == 2
+
+
+def test_harvester_s_own_addon_wins_over_the_console_s():
+    ours = {"metadata": {"name": "forklift-operator", "namespace": "forklift",
+                         "labels": {"harvester-ops.io/managed": "true"}}}
+    theirs = {"metadata": {"name": "forklift-operator", "namespace": "harvester-system"}, "spec": {"version": "1.9.1"}}
+    other = {"metadata": {"name": "vm-import-controller", "namespace": "harvester-system"}}
+    assert hf.pick_addon([ours, other]) == (ours, False)
+    assert hf.pick_addon([ours, theirs, other]) == (theirs, True)
+    assert hf.pick_addon([other]) == (None, False)
 
 
 def test_the_inventory_reader_can_only_read_providers():
@@ -311,6 +322,23 @@ def install_state(addon, deploys, controller, cert_manager_deploys):
             "ready": a == "ready" and operator and controller is not None and not comp_missing and not cm_missing}
 
 
+def pick_addon(addons):
+    """L'add-on forklift-operator à suivre, et s'il est celui de Harvester.
+    Harvester 1.9.1 devrait livrer le sien : un add-on de ce nom SANS
+    l'étiquette de la console n'est pas à elle, elle l'active sans jamais
+    réécrire son chart ni ses valeurs. Sinon, celui qu'elle a déclaré."""
+    mine = theirs = None
+    for a in addons or []:
+        m = a.get("metadata") or {}
+        if m.get("name") != ADDON[1]:
+            continue
+        if (m.get("labels") or {}).get(L_MANAGED) == "true":
+            mine = a
+        else:
+            theirs = a
+    return (theirs, True) if theirs is not None else (mine, False)
+
+
 def inventory_rbac():
     """Le compte qui lit l'inventaire : le service d'inventaire vérifie le
     jeton (TokenReview) et le droit de lire les fournisseurs."""
@@ -331,7 +359,7 @@ def inventory_rbac():
 - [ ] **Step 4: les tests passent**
 
 Run: `python3 -m pytest tests/api/test_forklift_175.py -q`
-Expected: 12 passed
+Expected: 13 passed
 
 - [ ] **Step 5: commit**
 
@@ -1169,6 +1197,7 @@ fetched without credentials since registry CDNs refuse a second auth."
 
 **Interfaces:**
 - Consumes: `hv_forklift` (Tasks 1, 2), `oci_push` (Task 3), `kube.Kube`, `kube.KubeError`, `kube.cluster_config`.
+- Note: l'add-on se lit par `hf.pick_addon(kube.list(hf.K_ADDON, None))` : celui de Harvester (1.9.1) est seulement activé.
 - Produces: `cmd_status(args, kube=None)`, `cmd_install(args, kube=None, sleep=time.sleep, now=time.time) -> int`, `until(fn, timeout, label, sleep, now, every=5) -> int`, codes `EXIT_OK=0, EXIT_FAIL=1, EXIT_REFUSED=2`, `main(argv) -> int`.
 
 - [ ] **Step 1: écrire les tests**
@@ -1260,8 +1289,13 @@ class FakeKube:
         return o
 
     def patch(self, kind, ns, name, patch):
-        self.calls.append(("patch", kind))
-        self.objs[(kind, ns, name)]["spec"].update(patch.get("spec") or {})
+        self.calls.append(("patch", kind, json.dumps(patch, sort_keys=True)))
+        o = self.objs[(kind, ns, name)]
+        o.setdefault("spec", {}).update(patch.get("spec") or {})
+        if kind == hf.K_ADDON and o["spec"].get("enabled"):
+            o["status"] = {"status": "AddonDeploySuccessful"}
+            self.dep(hf.NS, hf.OPERATOR_DEPLOY)
+            self.crd = True
 
     def apply(self, docs, field_manager="harvester-ops", timeout=None):
         for d in docs:
@@ -1334,6 +1368,21 @@ def test_a_component_that_cannot_pull_its_image_is_named(capsys):
     assert run_install(k, timeout=60) == hfk.EXIT_FAIL
     err = capsys.readouterr().err
     assert "forklift-controller-x: ImagePullBackOff (not found)" in err
+
+
+def test_harvester_s_own_addon_is_only_enabled_never_rewritten(capsys):
+    k = FakeKube(cert_manager=True)
+    k.objs[(hf.K_ADDON, "forklift", "forklift-operator")] = {
+        "metadata": {"name": "forklift-operator", "namespace": "forklift"},
+        "spec": {"enabled": False, "repo": "http://harvester-cluster-repo.cattle-system.svc/charts",
+                 "chart": "forklift-operator", "version": "1.9.1", "valuesContent": "theirs"}}
+    assert run_install(k) == hfk.EXIT_OK
+    patches = [c for c in k.calls if c[0] == "patch"]
+    assert patches == [("patch", hf.K_ADDON, '{"spec": {"enabled": true}}')]
+    spec = k.objs[(hf.K_ADDON, "forklift", "forklift-operator")]["spec"]
+    assert (spec["version"], spec["valuesContent"]) == ("1.9.1", "theirs")
+    assert not [c for c in k.calls if c[:2] == ("create", "Addon")]
+    assert "Harvester's own forklift-operator add-on" in capsys.readouterr().err
 
 
 def test_status_reads_everything_without_writing(capsys):
@@ -1474,7 +1523,7 @@ def until(fn, timeout, label, sleep=time.sleep, now=time.time, every=5):
 
 def install_state(kube):
     by_name = lambda items: {(d.get("metadata") or {}).get("name"): d for d in items}  # noqa: E731
-    return hf.install_state(kube.get(hf.K_ADDON, hf.NS, hf.ADDON[1]),
+    return hf.install_state(hf.pick_addon(kube.list(hf.K_ADDON, None))[0],
                             by_name(kube.list(hf.K_DEPLOY, hf.NS)),
                             get_opt(kube, hf.K_CONTROLLER, hf.NS, hf.CONTROLLER_NAME),
                             by_name(kube.list(hf.K_DEPLOY, hf.CERT_MANAGER[0])))
@@ -1517,8 +1566,16 @@ def cmd_install(args, kube=None, sleep=time.sleep, now=time.time):
             return rc
     if kube.get("namespaces", None, hf.NS) is None:
         kube.create(hf.namespace_manifest())
-    cur = kube.get(hf.K_ADDON, hf.NS, hf.ADDON[1])
-    if cur is None:
+    cur, theirs = hf.pick_addon(kube.list(hf.K_ADDON, None))
+    if theirs:
+        # celui de Harvester (1.9.1) : activé tel quel, jamais réécrit
+        m = cur.get("metadata") or {}
+        if not (cur.get("spec") or {}).get("enabled"):
+            kube.patch(hf.K_ADDON, m.get("namespace"), m.get("name"), {"spec": {"enabled": True}})
+            sleep(3)
+        step("addon", "running", f"Harvester's own forklift-operator add-on ({m.get('namespace')}, "
+             f"{(cur.get('spec') or {}).get('version')}): enabled, left as Harvester ships it")
+    elif cur is None:
         kube.create(want)
         step("addon", "running", f"forklift-operator {args.chart_version} declared, images {args.image_tag}")
     elif any((cur.get("spec") or {}).get(k) != v for k, v in want["spec"].items()):

@@ -1,0 +1,113 @@
+"""v1.75.0 : Forklift sur Harvester, installation. L'add-on expérimental
+forklift-operator (chart de charts.harvesterhci.io) exige qu'on pose dépôt,
+image et tag de l'opérateur (le défaut du chart est rancher/nginx:latest),
+puis un ForkliftController fait déployer les composants, qui exigent
+cert-manager (absent de Harvester)."""
+
+import json
+import sys
+from pathlib import Path
+
+import pytest
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "bin" / "lib"))
+import hv_forklift as hf  # noqa: E402
+
+
+def dep(name, ready=True, replicas=1):
+    return {"metadata": {"name": name}, "spec": {"replicas": replicas},
+            "status": {"availableReplicas": replicas if ready else 0}}
+
+
+def test_the_addon_always_names_the_operator_image():
+    a = hf.addon_manifest()
+    assert a["apiVersion"] == "harvesterhci.io/v1beta1" and a["kind"] == "Addon"
+    assert a["metadata"] == {"name": "forklift-operator", "namespace": "forklift",
+                             "labels": {"addon.harvesterhci.io/experimental": "true", "harvester-ops.io/managed": "true"}}
+    s = a["spec"]
+    assert (s["enabled"], s["repo"], s["chart"], s["version"]) == (True, "https://charts.harvesterhci.io", "forklift-operator", "1.9.0")
+    values = json.loads(s["valuesContent"])       # du JSON : c'est du YAML valide pour Harvester
+    op = values["forkliftOperatorAnsible"]["forkliftOperator"]
+    assert (op["repo"], op["operatorImage"], op["tag"]) == ("registry.rancher.com/harvester", "harvester-forklift-operator", "v1.8.2")
+    assert values["fullnameOverride"] == "harvester"   # d'où le déploiement harvester-forklift-operator-ansible
+    other = json.loads(hf.addon_manifest("1.8.2", "main-head")["spec"]["valuesContent"])
+    assert other["forkliftOperatorAnsible"]["forkliftOperator"]["tag"] == "main-head"
+
+
+@pytest.mark.parametrize("version,tag,match", [
+    ("latest", "v1.8.2", "chart version"), ("1.9", "v1.8.2", "chart version"),
+    ("1.9.0", "", "image tag"), ("1.9.0", "v1 8", "image tag"), ("1.9.0", "-bad", "image tag"),
+])
+def test_a_version_or_tag_that_would_break_the_chart_is_refused(version, tag, match):
+    with pytest.raises(ValueError, match=match):
+        hf.addon_manifest(version, tag)
+
+
+def test_the_controller_and_its_namespace():
+    assert hf.namespace_manifest() == {"apiVersion": "v1", "kind": "Namespace", "metadata": {"name": "forklift"}}
+    c = hf.controller_manifest()
+    assert c == {"apiVersion": "forklift.konveyor.io/v1beta1", "kind": "ForkliftController",
+                 "metadata": {"name": "forklift-controller", "namespace": "forklift"},
+                 "spec": {"feature_ui_plugin": "false"}}
+
+
+def test_the_addon_state_follows_harvester_s_statuses():
+    assert hf.addon_state(None)[0] == "absent"
+    assert hf.addon_state({"spec": {"enabled": False}})[0] == "disabled"
+    assert hf.addon_state({"spec": {"enabled": True}, "status": {"status": "AddonEnabling"}})[0] == "deploying"
+    for ok in ("AddonDeploySuccessful", "AddonUpdateSuccessful", "AddonDeployed"):
+        assert hf.addon_state({"spec": {"enabled": True}, "status": {"status": ok}})[0] == "ready"
+    st, msg = hf.addon_state({"spec": {"enabled": True}, "status": {"status": "AddonDeployFailed", "conditions": [
+        {"type": "OperationFailed", "status": "True", "message": "chart forklift-operator-9.9.9 not found"}]}})
+    assert st == "failed" and "chart forklift-operator-9.9.9 not found" in msg
+
+
+def test_a_deployment_is_ready_when_all_its_replicas_are_available():
+    assert hf.deployment_ready(dep("x")) and not hf.deployment_ready(dep("x", ready=False))
+    assert not hf.deployment_ready(None) and not hf.deployment_ready({"spec": {"replicas": 2}, "status": {"availableReplicas": 1}})
+
+
+def test_the_install_state_is_read_in_the_order_it_is_done():
+    cm = {n: dep(n) for n in hf.CERT_MANAGER[1]}
+    ok_addon = {"spec": {"enabled": True}, "status": {"status": "AddonDeploySuccessful"}}
+    deploys = {n: dep(n) for n in (hf.OPERATOR_DEPLOY,) + hf.COMPONENTS}
+    st = hf.install_state(ok_addon, deploys, {"kind": "ForkliftController"}, cm)
+    assert st["ready"] and st["cert_manager"] and st["operator"] and st["controller"] and st["components_missing"] == []
+    st = hf.install_state(None, {}, None, {})
+    assert not st["ready"] and st["addon"] == "absent" and st["cert_manager_missing"] == list(hf.CERT_MANAGER[1])
+    deploys["forklift-validation"] = dep("forklift-validation", ready=False)
+    st = hf.install_state(ok_addon, deploys, {"kind": "ForkliftController"}, cm)
+    assert not st["ready"] and st["components_missing"] == ["forklift-validation"]
+
+
+def test_a_pod_that_cannot_pull_or_start_is_named_with_its_reason():
+    pods = [
+        {"metadata": {"name": "forklift-controller-abc"}, "status": {"containerStatuses": [
+            {"state": {"waiting": {"reason": "ImagePullBackOff",
+                                   "message": 'Back-off pulling image "registry.rancher.com/harvester/harvester-forklift-controller:v1.9.0"'}}}]}},
+        {"metadata": {"name": "forklift-api-def"}, "status": {"containerStatuses": [{"state": {"running": {}}}]}},
+        {"metadata": {"name": "forklift-validation-ghi"}, "status": {"initContainerStatuses": [
+            {"state": {"waiting": {"reason": "CrashLoopBackOff"}}}]}},
+    ]
+    probs = hf.pod_problems(pods)
+    assert probs[0].startswith("forklift-controller-abc: ImagePullBackOff") and "v1.9.0" in probs[0]
+    assert probs[1] == "forklift-validation-ghi: CrashLoopBackOff" and len(probs) == 2
+
+
+def test_harvester_s_own_addon_wins_over_the_console_s():
+    ours = {"metadata": {"name": "forklift-operator", "namespace": "forklift",
+                         "labels": {"harvester-ops.io/managed": "true"}}}
+    theirs = {"metadata": {"name": "forklift-operator", "namespace": "harvester-system"}, "spec": {"version": "1.9.1"}}
+    other = {"metadata": {"name": "vm-import-controller", "namespace": "harvester-system"}}
+    assert hf.pick_addon([ours, other]) == (ours, False)
+    assert hf.pick_addon([ours, theirs, other]) == (theirs, True)
+    assert hf.pick_addon([other]) == (None, False)
+
+
+def test_the_inventory_reader_can_only_read_providers():
+    sa, role, binding = hf.inventory_rbac()
+    assert (sa["kind"], sa["metadata"]["name"], sa["metadata"]["namespace"]) == ("ServiceAccount", "harvester-ops-inventory", "forklift")
+    assert role["kind"] == "ClusterRole" and role["rules"] == [
+        {"apiGroups": ["forklift.konveyor.io"], "resources": ["providers"], "verbs": ["get", "list"]}]
+    assert binding["roleRef"]["name"] == role["metadata"]["name"]
+    assert binding["subjects"] == [{"kind": "ServiceAccount", "name": "harvester-ops-inventory", "namespace": "forklift"}]

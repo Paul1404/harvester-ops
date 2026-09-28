@@ -9,7 +9,7 @@ en réel les migrations VMware vers Harvester par Forklift, à chaud
 |---|---|---|
 | ESXi (VM KVM `vmwlab-esx1` sur node2) | 172.16.2.80 | `vmwlab-esx1.home.lo` |
 | vCenter (VM `vmwlab-vc` dans l'ESXi) | 172.16.2.81 | `vmwlab-vc.home.lo` |
-| VMs sources (dans l'ESXi) | 172.16.2.82 à .85 | réservées |
+| VMs sources `vmwlab-src-1`, `-2` (dans l'ESXi) | 172.16.2.82, .83 | (.84, .85 réservées) |
 
 Enregistrés dans NetBox (`infra-dotfiles/netbox/seed.py`, `seed_vms.py`) et
 Pi-hole (`dns.hosts`). Tout est en **mode évaluation** (60 jours) : aucune
@@ -27,7 +27,11 @@ tests/bench/vmware/vmwlab.sh filter      # filtre réseau du banc sur node2
 tests/bench/vmware/vmwlab.sh media       # ISO ESXi à installation automatique
 tests/bench/vmware/vmwlab.sh install     # VM ESXi, installée sans intervention
 tests/bench/vmware/vmwlab.sh vcenter     # vCenter déployé et configuré seul
+tests/bench/vmware/vmwlab.sh inventory   # datacenter, hôte, VMs sources
 ```
+
+Durées mesurées : installation d'ESXi ~10 min, envoi de l'OVA ~6 min,
+configuration du vCenter ~18 min, une VM source ~3 min.
 
 Puis `status`, `stop` (vCenter puis ESXi, proprement), `start`, `destroy`.
 Tests de l'outil : `bash tests/bench/vmware/test_vmwlab.sh`.
@@ -55,6 +59,24 @@ Versions : vCenter 8 gère les ESXi 7.0 et 8.0. Seul défaut connu du couple
 ESXi 7.0 GA et vCenter 8 : la vérification de conformité de vSphere
 Lifecycle Manager échoue (notes de version de vCenter 8.0 U3k), sans effet sur
 le banc, qui ne s'en sert pas.
+
+## Inventaire vCenter
+
+- Datacenter `vmwlab-dc`, l'ESXi ajouté par son IP (API REST du vCenter :
+  le mot de passe de l'hôte reste dans le processus, govc l'exigerait en
+  argument). Datastore `datastore1`, réseau `VM Network`.
+- VMs sources : image cloud **Debian 12 officielle** (`debian-12-generic`,
+  noyau complet avec pvscsi et vmxnet3 ; la variante `genericcloud` ne les a
+  pas), empreinte vérifiée par `SHA512SUMS` au téléchargement, dans
+  `~/ISO/vmware-lab/`. 1 vCPU, 1 Gio, disque de 10 Go sur **PVSCSI**, carte
+  **vmxnet3**, **CBT actif** (`ctkEnabled`), données cloud-init sur un CD
+  `cidata` : compte `debian` avec la clé de node1, IP fixe.
+- Le service **`churn`** écrit en continu dans l'invité (4 Mio toutes les
+  5 s, `/var/lib/churn`, compteur et heure du dernier passage) : de quoi
+  nourrir les copies incrémentales, et dater la coupure après migration.
+  `sudo systemctl stop churn` pour des incrémentales presque vides.
+- Console série de chaque VM dans `[datastore1] <vm>/serial.log`
+  (`govc datastore.download`) : l'image Debian écrit sur ttyS0.
 
 ## Filtre réseau
 
@@ -94,6 +116,13 @@ la VM sans le filtre.
   `vmwlab-vc.home.lo`, enregistré dans Pi-hole dans les deux sens. Journaux
   utiles : `/var/log/firstboot/firstbootStatus.json`,
   `/var/log/vmware/vmdir/vmafdvmdirclient.log`.
+- Le **premier démarrage** d'une VM source s'est bloqué une fois avant le
+  montage de sa racine (écran noir, aucune trace), puis a démarré au
+  redémarrage ; la VM n'avait pas encore de port série. Depuis, chaque VM en
+  a un dès sa création, et `inventory` la redémarre une fois si elle reste
+  muette 6 min.
+- L'**API REST** du vCenter répond 503 plusieurs minutes après son API SOAP :
+  `vcenter` attend les deux.
 - **`ignore_msrs`** sur node2 (`/etc/modprobe.d/vmwlab-kvm.conf`, posé aussi
   à chaud) : ESXi lit des MSR que KVM n'émule pas.
 - Carte **vmxnet3** (ESXi 7 ne reconnaît plus e1000 ni rtl8139), vidéo

@@ -334,6 +334,8 @@ props = {
     "guestinfo.cis.appliance.net.pnid": os.environ["VC_FQDN"],
     "guestinfo.cis.appliance.root.passwd": vault("vcsa_root_password"),
     "guestinfo.cis.appliance.ssh.enabled": "True",
+    # bash plutôt que l'appliancesh : les journaux se lisent par SSH.
+    "guestinfo.cis.appliance.root.shell": "/bin/bash",
     "guestinfo.cis.appliance.time.tools-sync": "True",
     "guestinfo.cis.vmdir.domain-name": "vsphere.local",
     "guestinfo.cis.vmdir.username": vault("sso_user"),
@@ -366,7 +368,8 @@ cmd_vcenter() {
     say "configuration automatique du vCenter en cours (30 à 60 min en imbriqué)"
     local i
     for i in $(seq 1 180); do
-        if govc_vc about >/dev/null 2>&1; then
+        # L'API SOAP (govc) répond avant l'API REST : on attend les deux.
+        if govc_vc about >/dev/null 2>&1 && vc_rest ping >/dev/null 2>&1; then
             say "vCenter prêt : $(govc_vc about | sed -n 's/^FullName: *//p')"
             return
         fi
@@ -381,7 +384,7 @@ cmd_vcenter() {
 vc_rest() {
     vault_env
     VC_IP="$VC_IP" ESX_IP="$ESX_IP" DC="$DC" python3 - "$VAULT_PATH" "$@" <<'PY'
-import base64, json, os, ssl, subprocess, sys, urllib.request
+import base64, json, os, ssl, subprocess, sys, time, urllib.error, urllib.request
 vault_path, action = sys.argv[1], sys.argv[2]
 def vault(field):
     return subprocess.run(["vault", "kv", "get", f"-field={field}", vault_path],
@@ -389,15 +392,27 @@ def vault(field):
 ctx = ssl._create_unverified_context()
 base = f"https://{os.environ['VC_IP']}"
 def call(method, path, body=None, auth=None):
-    req = urllib.request.Request(base + path, method=method,
-                                 data=json.dumps(body).encode() if body is not None else None,
-                                 headers={"Content-Type": "application/json", **(auth or {})})
-    with urllib.request.urlopen(req, context=ctx, timeout=120) as r:
-        raw = r.read()
-        return json.loads(raw) if raw else None
+    # 503 : les services du vCenter démarrent encore (l'API SOAP répond
+    # bien avant l'API REST) ; on attend jusqu'à 15 min.
+    for attempt in range(90):
+        req = urllib.request.Request(base + path, method=method,
+                                     data=json.dumps(body).encode() if body is not None else None,
+                                     headers={"Content-Type": "application/json", **(auth or {})})
+        try:
+            with urllib.request.urlopen(req, context=ctx, timeout=120) as r:
+                raw = r.read()
+                return json.loads(raw) if raw else None
+        except urllib.error.HTTPError as e:
+            if e.code == 503 and attempt < 89:
+                time.sleep(10)
+                continue
+            sys.exit(f"{method} {path} : HTTP {e.code} {e.read()[:300].decode(errors='replace')}")
 basic = base64.b64encode(f"{vault('sso_user')}:{vault('sso_password')}".encode()).decode()
 token = call("POST", "/api/session", auth={"Authorization": "Basic " + basic})
 s = {"vmware-api-session-id": token}
+if action == "ping":
+    call("DELETE", "/api/session", auth=s)
+    sys.exit(0)
 dc_name = os.environ["DC"]
 dcs = call("GET", f"/api/vcenter/datacenter?names={dc_name}", auth=s)
 if not dcs:
@@ -493,7 +508,7 @@ make_source() {  # $1 numéro (1..4)
     tmp="$(mktemp -d)"
     qemu-img convert -O vmdk -o subformat=streamOptimized "$SRC_IMAGE" "$tmp/$name.vmdk"
     render_seed "$name" "$ip" "$tmp/seed"
-    govc_vc import.vmdk -dc "$DC" -ds "$DS" "$tmp/$name.vmdk" "$name" >/dev/null
+    govc_vc import.vmdk -dc "$DC" -ds "$DS" "$tmp/$name.vmdk" "$name/$name.vmdk" >/dev/null
     govc_vc datastore.upload -dc "$DC" -ds "$DS" "$tmp/seed/seed.iso" "$name/seed.iso" >/dev/null
     rm -rf "$tmp"
     govc_vc vm.create -dc "$DC" -ds "$DS" -host "$ESX_IP" -m 1024 -c 1 -g debian11_64Guest \
@@ -504,14 +519,37 @@ make_source() {  # $1 numéro (1..4)
     govc_vc device.cdrom.insert -dc "$DC" -ds "$DS" -vm "$name" -device "$cd" "$name/seed.iso"
     # CBT : condition du mode à chaud de Forklift (copies incrémentales).
     govc_vc vm.change -dc "$DC" -vm "$name" -e ctkEnabled=TRUE -e scsi0:0.ctkEnabled=TRUE
+    # Console série dans un fichier du datastore (datastore.download pour la
+    # lire) : l'image Debian écrit sa console sur ttyS0, l'écran reste noir.
+    local ser; ser="$(govc_vc device.serial.add -dc "$DC" -vm "$name")"
+    govc_vc device.serial.connect -dc "$DC" -vm "$name" -device "$ser" "[$DS] $name/serial.log"
     govc_vc vm.power -dc "$DC" -on "$name" >/dev/null
-    say "$name créée ($ip), CBT actif, démarrée"
+    # Le premier démarrage d'une VM créée ainsi s'est déjà bloqué avant le
+    # montage de la racine (écran noir, aucune trace ; vécu le 28/09/2026 sur
+    # vmwlab-src-1), et un redémarrage l'a débloqué : une seule relance.
+    if ! wait_ssh "debian@$ip" 360; then
+        say "$name muette après 6 min : redémarrage"
+        govc_vc vm.power -dc "$DC" -r -force "$name" >/dev/null
+        wait_ssh "debian@$ip" 360 || { say "$name injoignable en SSH"; return 1; }
+    fi
+    say "$name créée ($ip), CBT actif, SSH ouvert, écritures continues en cours"
+}
+
+wait_ssh() {  # $1 compte@hôte, $2 délai en secondes
+    local end=$((SECONDS + $2))
+    while (( SECONDS < end )); do
+        ssh -o BatchMode=yes -o ConnectTimeout=5 -o StrictHostKeyChecking=accept-new \
+            -o LogLevel=ERROR "$1" true 2>/dev/null && return 0
+        sleep 10
+    done
+    return 1
 }
 
 cmd_inventory() {
     govc_vc about >/dev/null 2>&1 || { say "vCenter injoignable : lancer « vcenter » d'abord"; exit 1; }
     vc_rest setup
     make_source 1
+    make_source 2
 }
 
 cmd_status() {

@@ -36,6 +36,7 @@ class FakeRegistry:
     def __init__(self, user=None, password=None, redirect_blobs=False):
         self.blobs, self.manifests, self.uploads = {}, {}, []
         self.user, self.password, self.redirect = user, password, redirect_blobs
+        self.blobs_cdn_broken = False
         reg = self
 
         class H(BaseHTTPRequestHandler):
@@ -76,6 +77,8 @@ class FakeRegistry:
                 if path.startswith("/cdn/"):
                     if self.headers.get("Authorization"):
                         return self._send(400, b"only one auth mechanism allowed")
+                    if reg.blobs_cdn_broken:
+                        return self._send(404, b"not found")
                     return self._send(200, reg.blobs[path[5:]])
                 if reg.user is not None and self.headers.get("Authorization") != "Bearer good-token":
                     return self._send(401, b"{}", {"WWW-Authenticate":
@@ -120,6 +123,7 @@ class FakeRegistry:
 
     def close(self):
         self.srv.shutdown()
+        self.srv.server_close()
 
 
 def targz(files, links=()):
@@ -270,3 +274,26 @@ def test_a_digest_is_not_a_place_to_push_to(vddk):
     p, _, _ = vddk
     with pytest.raises(ValueError, match="tag"):
         op.push_vddk_image(p, "harbor.lan/p/vddk@sha256:" + "c" * 64)
+
+
+def test_a_failing_redirect_target_is_a_registry_error(vddk, base):
+    base.redirect = True
+    base.blobs_cdn_broken = True          # the « CDN » answers 404
+    target = FakeRegistry()
+    try:
+        with pytest.raises(op.RegistryError, match="HTTP 404"):
+            op.push_vddk_image(vddk[0], f"{target.host}/ju/vddk:1", base=f"{base.host}/bci/bci-busybox:16.0",
+                               plain_http=True, base_plain_http=True)
+    finally:
+        target.close()
+
+
+def test_an_unreachable_registry_is_a_registry_error(vddk):
+    import socket
+    s = socket.socket()
+    s.bind(("127.0.0.1", 0))
+    port = s.getsockname()[1]
+    s.close()                                  # nothing listens there any more
+    with pytest.raises(op.RegistryError, match=f"127.0.0.1:{port}"):
+        op.push_vddk_image(vddk[0], f"127.0.0.1:{port}/ju/vddk:1", base=f"127.0.0.1:{port}/bci/bci-busybox:16.0",
+                           plain_http=True, base_plain_http=True)

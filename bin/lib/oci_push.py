@@ -110,15 +110,27 @@ class Registry:
             with self.opener.open(req, timeout=self.timeout) as r:
                 body = json.load(r)
         except urllib.error.HTTPError as e:
+            e.close()
             raise RegistryError(f"{self.host}: authentication refused (HTTP {e.code})") from None
+        except urllib.error.URLError as e:
+            raise RegistryError(f"{self.host}: authentication failed ({e.reason})") from None
+        except OSError as e:
+            raise RegistryError(f"{self.host}: authentication failed ({e})") from None
         tok = body.get("token") or body.get("access_token")
         if not tok:
             raise RegistryError(f"{self.host}: authentication refused (no token)")
         return "Bearer " + tok
 
+    def _http_error(self, method, url, e):
+        text = e.read()[:200].decode(errors="replace")
+        e.close()
+        return RegistryError(f"{method} {self.host}{urllib.parse.urlparse(url).path}: HTTP {e.code} {text}")
+
     def request(self, method, url, scope, data=None, headers=None, ok=()):
         """(code, en-têtes, corps). Un 401 fait prendre un jeton ou poser
-        Basic, une fois ; une redirection est suivie sans identifiant."""
+        Basic, une fois ; une redirection est suivie sans identifiant. Toute
+        panne, y compris celle de la cible d'une redirection, devient une
+        RegistryError qui nomme l'hôte, jamais un identifiant."""
         if not url.startswith("http"):
             url = self.base + url
         for attempt in (0, 1):
@@ -130,25 +142,38 @@ class Registry:
                 with self.opener.open(req, timeout=self.timeout) as r:
                     return r.status, r.headers, r.read()
             except urllib.error.HTTPError as e:
-                if e.code in (301, 302, 303, 307, 308) and method in ("GET", "HEAD") and e.headers.get("Location"):
-                    loc = urllib.parse.urljoin(url, e.headers["Location"])
-                    with self.opener.open(urllib.request.Request(loc, method=method), timeout=self.timeout) as r:
-                        return r.status, r.headers, r.read()
-                if e.code == 401 and attempt == 0:
-                    ch = e.headers.get("WWW-Authenticate", "")
-                    if ch.lower().startswith("bearer"):
-                        self.auth[scope] = self._token(ch, scope)
-                    elif self._basic():
-                        self.auth[scope] = self._basic()
-                    else:
-                        raise RegistryError(f"{self.host}: authentication required") from None
-                    continue
-                if e.code in ok:
-                    return e.code, e.headers, b""
-                if e.code == 401:
-                    raise RegistryError(f"{self.host}: authentication refused") from None
-                text = e.read()[:200].decode(errors="replace")
-                raise RegistryError(f"{method} {self.host}{urllib.parse.urlparse(url).path}: HTTP {e.code} {text}") from None
+                try:
+                    if e.code in (301, 302, 303, 307, 308) and method in ("GET", "HEAD") and e.headers.get("Location"):
+                        loc = urllib.parse.urljoin(url, e.headers["Location"])
+                        try:
+                            with self.opener.open(urllib.request.Request(loc, method=method), timeout=self.timeout) as r:
+                                return r.status, r.headers, r.read()
+                        except urllib.error.HTTPError as e2:
+                            raise self._http_error(method, loc, e2) from None
+                        except urllib.error.URLError as e2:
+                            raise RegistryError(f"{method} {self.host}: {e2.reason}") from None
+                        except OSError as e2:
+                            raise RegistryError(f"{method} {self.host}: {e2}") from None
+                    if e.code == 401 and attempt == 0:
+                        ch = e.headers.get("WWW-Authenticate", "")
+                        if ch.lower().startswith("bearer"):
+                            self.auth[scope] = self._token(ch, scope)
+                        elif self._basic():
+                            self.auth[scope] = self._basic()
+                        else:
+                            raise RegistryError(f"{self.host}: authentication required") from None
+                        continue
+                    if e.code in ok:
+                        return e.code, e.headers, b""
+                    if e.code == 401:
+                        raise RegistryError(f"{self.host}: authentication refused") from None
+                    raise self._http_error(method, url, e) from None
+                finally:
+                    e.close()
+            except urllib.error.URLError as e:
+                raise RegistryError(f"{method} {self.host}: {e.reason}") from None
+            except OSError as e:
+                raise RegistryError(f"{method} {self.host}: {e}") from None
         raise RegistryError(f"{self.host}: authentication refused")
 
     def manifest(self, repo, ref):

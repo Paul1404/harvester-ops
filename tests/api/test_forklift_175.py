@@ -111,3 +111,92 @@ def test_the_inventory_reader_can_only_read_providers():
         {"apiGroups": ["forklift.konveyor.io"], "resources": ["providers"], "verbs": ["get", "list"]}]
     assert binding["roleRef"]["name"] == role["metadata"]["name"]
     assert binding["subjects"] == [{"kind": "ServiceAccount", "name": "harvester-ops-inventory", "namespace": "forklift"}]
+
+
+CA = "-----BEGIN CERTIFICATE-----\nMIIB\n-----END CERTIFICATE-----"
+
+
+@pytest.mark.parametrize("given,want", [
+    ("vc.lan", "https://vc.lan/sdk"), ("https://vc.lan", "https://vc.lan/sdk"),
+    ("https://vc.lan/sdk", "https://vc.lan/sdk"), ("172.16.2.81", "https://172.16.2.81/sdk"),
+    ("https://vc.lan:8443/sdk/", "https://vc.lan:8443/sdk"),
+])
+def test_the_vcenter_url_is_the_one_forklift_expects(given, want):
+    assert hf.check_url(given) == want
+
+
+@pytest.mark.parametrize("bad", ["http://vc.lan/sdk", "", "https://vc lan", "https://vc.lan/ui"])
+def test_a_vcenter_url_forklift_cannot_use_is_refused(bad):
+    with pytest.raises(ValueError, match="vCenter URL"):
+        hf.check_url(bad)
+
+
+def test_an_image_must_be_complete_and_pullable():
+    for ok in ("172.16.1.11:3000/jniedergang/vddk:8.0.3", "registry.example.com/vddk@sha256:" + "a" * 64,
+               "harbor.lan/proj/vddk:8.0.3-1"):
+        assert hf.check_image(ok) == ok
+    for bad in ("vddk", "harbor.lan/proj/vddk", "Harbor.lan/Proj/vddk:1", "harbor.lan/proj/vddk:bad tag"):
+        with pytest.raises(ValueError, match="VDDK image"):
+            hf.check_image(bad, "VDDK image")
+
+
+def test_the_provider_secret_is_labelled_as_forklift_reads_it():
+    s = hf.provider_secret("default", "vmwlab", {"url": "172.16.2.81", "user": "administrator@vsphere.local",
+                                                 "password": "pw", "insecure": True})
+    assert s["metadata"]["name"] == "vmwlab-vsphere" and s["metadata"]["namespace"] == "default"
+    assert s["metadata"]["labels"] == {"createdForProviderType": "vsphere", "createdForResourceType": "providers",
+                                       "harvester-ops.io/managed": "true"}
+    assert s["stringData"] == {"user": "administrator@vsphere.local", "password": "pw",
+                               "url": "https://172.16.2.81/sdk", "insecureSkipVerify": "true"}
+    s = hf.provider_secret("default", "vc", {"url": "vc.lan", "user": "u", "password": "p", "cacert": CA})
+    assert s["stringData"]["insecureSkipVerify"] == "false" and s["stringData"]["cacert"] == CA + "\n"
+    long_name = "a" * 63
+    assert len(hf.secret_name(long_name)) <= 63 and hf.secret_name(long_name).endswith("-vsphere")
+
+
+@pytest.mark.parametrize("spec,match", [
+    ({"url": "vc.lan", "user": "u"}, "user and password"),
+    ({"url": "vc.lan", "user": "", "password": "Zq9-secret"}, "user and password"),
+    ({"url": "vc.lan", "user": "u", "password": "Zq9-secret", "cacert": "not a pem"}, "PEM"),
+    ({"url": "http://vc.lan", "user": "u", "password": "Zq9-secret"}, "https only"),
+])
+def test_an_incomplete_provider_is_refused_without_echoing_the_password(spec, match):
+    with pytest.raises(ValueError, match=match) as e:
+        hf.provider_secret("default", "vc", spec)
+    assert "Zq9-secret" not in str(e.value)
+
+
+def test_the_provider_points_at_its_secret_and_the_vddk_image():
+    p = hf.provider_manifest("default", "vmwlab", {"url": "172.16.2.81", "vddk_image": "172.16.1.11:3000/ju/vddk:8.0.3"})
+    assert p["apiVersion"] == "forklift.konveyor.io/v1beta1" and p["kind"] == "Provider"
+    assert p["spec"] == {"type": "vsphere", "url": "https://172.16.2.81/sdk",
+                         "secret": {"name": "vmwlab-vsphere", "namespace": "default"},
+                         "settings": {"sdkEndpoint": "vcenter", "vddkInitImage": "172.16.1.11:3000/ju/vddk:8.0.3"}}
+    assert "vddkInitImage" not in hf.provider_manifest("default", "vc", {"url": "vc.lan"})["spec"]["settings"]
+
+
+def test_the_provider_state_is_ready_refused_or_being_checked():
+    assert hf.provider_state(None)[0] is None
+    ok = {"status": {"phase": "Ready", "conditions": [
+        {"type": "ConnectionTestSucceeded", "status": "True", "category": "Required"},
+        {"type": "InventoryCreated", "status": "True", "category": "Required"},
+        {"type": "Ready", "status": "True", "category": "Required"}]}}
+    assert hf.provider_state(ok)[0] is True
+    bad = {"status": {"phase": "ConnectionFailed", "conditions": [
+        {"type": "ConnectionTestFailed", "status": "True", "category": "Critical",
+         "message": "Login failed: incorrect user name or password."}]}}
+    res, msg = hf.provider_state(bad)
+    assert res is False and "incorrect user name or password" in msg
+    staging = {"status": {"phase": "Staging", "conditions": [
+        {"type": "ConnectionTestSucceeded", "status": "True", "category": "Required"}]}}
+    res, msg = hf.provider_state(staging)
+    assert res is None and "Staging" in msg and "ConnectionTestSucceeded" in msg
+
+
+def test_plans_that_use_a_provider_are_found():
+    plans = [{"metadata": {"name": "wave-1", "namespace": "mig"},
+              "spec": {"provider": {"source": {"name": "vmwlab", "namespace": "default"}}}},
+             {"metadata": {"name": "other", "namespace": "mig"},
+              "spec": {"provider": {"source": {"name": "vc2", "namespace": "default"}}}}]
+    assert hf.plans_using("default", "vmwlab", plans) == ["mig/wave-1"]
+    assert hf.plans_using("default", "nobody", plans) == []

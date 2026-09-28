@@ -178,3 +178,95 @@ def inventory_rbac():
          "roleRef": {"apiGroup": "rbac.authorization.k8s.io", "kind": "ClusterRole", "name": INVENTORY_SA},
          "subjects": [{"kind": "ServiceAccount", "name": INVENTORY_SA, "namespace": NS}]},
     ]
+
+
+# --- fournisseur vSphere ---------------------------------------------------
+
+URL_RE = re.compile(r"^(?:https://)?([A-Za-z0-9](?:[A-Za-z0-9.-]*[A-Za-z0-9])?|\[[0-9A-Fa-f:]+\])(:\d{1,5})?(?:/sdk)?/?$")
+IMAGE_RE = re.compile(r"^[a-z0-9]+(?:[._-][a-z0-9]+)*(?::\d{1,5})?(?:/[a-z0-9]+(?:[._-][a-z0-9]+)*)+"
+                      r"(?::[A-Za-z0-9_][A-Za-z0-9_.-]{0,127})?(?:@sha256:[0-9a-f]{64})?$")
+
+
+def check_url(url):
+    """https://<hôte>/sdk, comme Forklift l'attend ; l'hôte seul, avec ou sans
+    https:// et /sdk, est complété. http:// est refusé."""
+    u = str(url or "").strip()
+    if u.lower().startswith("http://"):
+        raise ValueError("vCenter URL: https only")
+    m = URL_RE.match(u)
+    if not m:
+        raise ValueError(f"vCenter URL: {u!r} is not a host, an address or https://<host>/sdk")
+    return f"https://{m.group(1)}{m.group(2) or ''}/sdk"
+
+
+def check_image(ref, what="image"):
+    ref = str(ref or "").strip()
+    last = ref.rsplit("/", 1)[-1]
+    if not IMAGE_RE.match(ref) or (":" not in last and "@" not in last):
+        raise ValueError(f"{what}: {ref!r} is not a full image reference (registry/path:tag or @sha256:...)")
+    return ref
+
+
+def secret_name(provider):
+    base = provider[:63 - len("-vsphere")].rstrip("-")
+    return f"{base}-vsphere"
+
+
+def provider_secret(ns, name, spec):
+    """Le secret d'un fournisseur vSphere, étiqueté comme Forklift le lit. Les
+    messages d'erreur ne citent jamais une valeur."""
+    user = str(spec.get("user") or "").strip()
+    password = str(spec.get("password") or "")
+    if not user or not password:
+        raise ValueError("user and password are required")
+    data = {"user": user, "password": password, "url": check_url(spec.get("url")),
+            "insecureSkipVerify": "true" if spec.get("insecure") else "false"}
+    if spec.get("cacert"):
+        ca = str(spec["cacert"]).strip()
+        if "BEGIN CERTIFICATE" not in ca:
+            raise ValueError("cacert: a PEM certificate")
+        data["cacert"] = ca + "\n"
+    return {"apiVersion": "v1", "kind": "Secret", "type": "Opaque",
+            "metadata": {"name": secret_name(check_name(name, "provider")), "namespace": check_name(ns, "namespace"),
+                         "labels": {"createdForProviderType": "vsphere", "createdForResourceType": "providers",
+                                    L_MANAGED: "true"}},
+            "stringData": data}
+
+
+def provider_manifest(ns, name, spec):
+    settings = {"sdkEndpoint": "vcenter"}
+    if spec.get("vddk_image"):
+        settings["vddkInitImage"] = check_image(spec["vddk_image"], "VDDK image")
+    return {"apiVersion": API, "kind": "Provider",
+            "metadata": {"name": check_name(name, "provider"), "namespace": check_name(ns, "namespace"),
+                         "labels": {L_MANAGED: "true"}},
+            "spec": {"type": "vsphere", "url": check_url(spec.get("url")),
+                     "secret": {"name": secret_name(name), "namespace": ns},
+                     "settings": settings}}
+
+
+def provider_state(p):
+    """(True prêt, False refusé, None en cours, message). Forklift classe ses
+    conditions : une « Critical » vraie est un refus (identifiants,
+    certificat, adresse), « Ready » vraie la fin."""
+    if p is None:
+        return None, "waiting for the provider"
+    st = p.get("status") or {}
+    conds = st.get("conditions") or []
+    crit = [c for c in conds if c.get("category") == "Critical" and str(c.get("status")) == "True"]
+    if crit:
+        return False, "; ".join(c.get("message") or c.get("type") or "refused" for c in crit)
+    if any(c.get("type") == "Ready" and str(c.get("status")) == "True" for c in conds):
+        return True, "ready: vCenter reached, inventory loaded"
+    have = [c.get("type") for c in conds if str(c.get("status")) == "True"]
+    return None, f"being checked ({st.get('phase') or 'pending'}" + (f": {', '.join(have)}" if have else "") + ")"
+
+
+def plans_using(ns, name, plans):
+    out = []
+    for pl in plans or []:
+        src = (((pl.get("spec") or {}).get("provider") or {}).get("source")) or {}
+        if src.get("name") == name and src.get("namespace") == ns:
+            m = pl.get("metadata") or {}
+            out.append(f"{m.get('namespace')}/{m.get('name')}")
+    return out

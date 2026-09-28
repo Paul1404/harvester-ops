@@ -5,10 +5,13 @@ image introuvable nommée."""
 
 import argparse
 import copy
+import http.server
 import importlib.util
 import io
 import json
+import socket
 import sys
+import threading
 from pathlib import Path
 
 import pytest
@@ -34,6 +37,7 @@ class FakeKube:
 
     def __init__(self, cert_manager=False, stuck=None):
         self.objs, self.calls, self.crd = {}, [], False
+        self.run_args = []                       # full argument tuples of every kube.run(...)
         self.stuck = stuck                       # composant qui ne démarre jamais
         self.provider_status = {"phase": "Ready", "conditions": [{"type": "Ready", "status": "True"}]}
         self.refuse_secret = None                # message à lever quand un Secret est appliqué
@@ -59,6 +63,7 @@ class FakeKube:
         return [copy.deepcopy(o) for (k, n, _), o in self.objs.items() if k == kind and (ns is None or n == ns)]
 
     def run(self, *args, input=None, timeout=None):
+        self.run_args.append(args)
         self.calls.append(("run",) + args[:2])
         if args[0] == "apply":
             self._cert_manager()
@@ -350,6 +355,68 @@ def test_inventory_uses_a_short_token_through_a_port_forward(capsys):
     assert hfk.cmd_inventory(args, kube=k, fetch=fetch) == hfk.EXIT_OK
     assert seen["pf"] == ("forklift", "svc/forklift-inventory", 8443)
     assert seen["url"] == "https://127.0.0.1:40123/providers/vsphere/u-123/networks?detail=1"
-    assert seen["token"] == "tok-123" and ("run", "create", "token") in k.calls
+    assert seen["token"] == "tok-123"
+    assert ("create", "token", "harvester-ops-inventory", "-n", "forklift", "--duration", "10m") in k.run_args
     assert json.loads(capsys.readouterr().out) == [{"id": "network-12", "name": "VM Network",
                                                     "path": "/vmwlab-dc/network/VM Network"}]
+
+
+def test_an_inventory_service_refusal_is_a_tool_error():
+    """Un 403 du service d'inventaire devient une KubeError courte, jamais
+    une trace Python, et ne porte jamais le jeton."""
+    class Handler(http.server.BaseHTTPRequestHandler):
+        def do_GET(self):
+            self.send_response(403)
+            self.end_headers()
+
+        def log_message(self, *a):
+            pass
+
+    server = http.server.HTTPServer(("127.0.0.1", 0), Handler)
+    thread = threading.Thread(target=server.serve_forever)
+    thread.start()
+    try:
+        with pytest.raises(KubeError) as exc:
+            hfk.fetch_json(f"http://127.0.0.1:{server.server_port}/x", "tok-SECRET")
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join()
+    assert "403" in str(exc.value)
+    assert "tok-SECRET" not in str(exc.value)
+
+
+def test_an_unreachable_inventory_service_is_a_tool_error():
+    s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    s.bind(("127.0.0.1", 0))
+    port = s.getsockname()[1]
+    s.close()                                     # nothing listens there any more
+    with pytest.raises(KubeError) as exc:
+        hfk.fetch_json(f"http://127.0.0.1:{port}/x", "tok-SECRET")
+    assert "tok-SECRET" not in str(exc.value)
+
+
+def test_inventory_errors_are_reported_not_raised(monkeypatch, capsys):
+    """Un fetch_json qui échoue (jeton refusé, relais tombé...) ressort comme
+    STEP_EVENT|inventory|error|..., pas comme une trace Python."""
+    k = installed()
+    k.objs[(hf.K_PROVIDER, "default", "vmwlab")] = {"metadata": {"name": "vmwlab", "namespace": "default", "uid": "u-123"}}
+
+    class PF:
+        def __init__(self, ns, target, port):
+            pass
+
+        def __enter__(self):
+            return 40123
+
+        def __exit__(self, *a):
+            return False
+    k.port_forward = PF
+    monkeypatch.setattr(hfk, "kube_from", lambda args: k)
+
+    def fail(url, token):
+        raise KubeError("inventory service: HTTP 403 Forbidden")
+    monkeypatch.setattr(hfk, "fetch_json", fail)
+    rc = hfk.main(["inventory", "--kubeconfig", "kc", "--namespace", "default", "--name", "vmwlab", "--kind", "vms"])
+    assert rc == hfk.EXIT_FAIL
+    assert "STEP_EVENT|inventory|error|inventory service: HTTP 403 Forbidden" in capsys.readouterr().err

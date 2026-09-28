@@ -24,6 +24,7 @@ import json
 import ssl
 import sys
 import time
+import urllib.error
 import urllib.request
 from pathlib import Path
 
@@ -233,12 +234,26 @@ def cmd_provider_delete(args, kube=None, sleep=time.sleep, now=time.time):
 
 def fetch_json(url, token):
     """GET du service d'inventaire par le relais local : son certificat est
-    celui du cluster (cert-manager), le canal est celui de kubectl."""
+    celui du cluster (cert-manager), le canal est celui de kubectl. Toute
+    panne (jeton refusé, relais tombé, JSON invalide) devient une KubeError
+    courte, jamais une trace Python, et ne porte jamais le jeton."""
     ctx = ssl.create_default_context()
     ctx.check_hostname, ctx.verify_mode = False, ssl.CERT_NONE
     req = urllib.request.Request(url, headers={"Authorization": f"Bearer {token}"})
-    with urllib.request.urlopen(req, timeout=60, context=ctx) as r:
-        return json.load(r)
+    try:
+        with urllib.request.urlopen(req, timeout=60, context=ctx) as r:
+            body = r.read()
+    except urllib.error.HTTPError as e:
+        e.close()
+        raise KubeError(f"inventory service: HTTP {e.code} {e.reason}") from None
+    except urllib.error.URLError as e:
+        raise KubeError(f"inventory service: {e.reason}") from None
+    except OSError as e:
+        raise KubeError(f"inventory service: {e}") from None
+    try:
+        return json.loads(body)
+    except ValueError:
+        raise KubeError("inventory service: invalid JSON") from None
 
 
 def cmd_inventory(args, kube=None, fetch=None):

@@ -1397,6 +1397,79 @@ contrôleur, sont réservés aux administrateurs. En ligne de commande :
 `harvester-resources vmimport source-apply|source-recheck|source-delete|
 import-create|import-follow|import-delete`.
 
+### Migrations VMware par Forklift : installation, image VDDK, fournisseur vCenter (1.75.0)
+
+Harvester 1.9 ne livre pas Forklift. `harvester-forklift install` pose
+cert-manager (depuis le paquet Cluster API de la console), l'add-on
+expérimental forklift-operator (chart 1.9.0, images `v1.8.2` par défaut,
+`--image-tag` pour une autre) et le ForkliftController sur le cluster,
+dans cet ordre ; les images viennent de `registry.rancher.com/harvester`
+(prévoir un miroir en airgap). Si Harvester porte déjà son propre add-on
+forklift-operator (attendu depuis la 1.9.1), la console l'active tel quel
+et ne réécrit jamais son chart ni ses valeurs.
+
+**Migrations VMware**, dans le menu Cluster juste après VM Import, ouvre
+trois onglets :
+
+- **Préparation**, trois étapes dans l'ordre où il faut les faire, chacune
+  avec son état et son bouton : Forklift (installer ou reprendre, avec le
+  détail relu : cert-manager, add-on, opérateur, contrôleur, composants) ;
+  l'image VDDK (l'archive de VMware est déposée une fois dans le magasin
+  de la console et sert à tous les clusters ; l'image cible est proposée
+  d'après le réglage `containerd-registry` de Harvester, dont les
+  identifiants pour ce registre sont réutilisables sans être montrés,
+  Harvester 1.9 les gardant dans un secret de fleet-local, ou peuvent être
+  saisis à la place ; le cluster retient la dernière image poussée et le
+  formulaire la reproposera) ; et les sources vCenter, avec le nombre de
+  celles qui sont prêtes et un lien vers l'onglet suivant.
+- **Sources vCenter** : un bloc par fournisseur vSphere, son état (en
+  vérification, prêt, ou refusé avec le message de Forklift), son image
+  VDDK s'il en a une, et le nombre de plans de migration qui l'utilisent.
+  Ajouter une source peut reprendre un vCenter déjà déclaré dans VM
+  Import sans ressaisir son mot de passe, lu par le serveur ; en saisir
+  une demande l'adresse, un utilisateur, un mot de passe et un certificat
+  (certificat d'autorité, ou non vérifié). Modifier une source ne
+  redemande jamais le mot de passe sauf s'il est saisi, et garde le
+  réglage TLS sauf s'il est changé. La suppression est refusée tant qu'un
+  plan de migration utilise la source. La modification n'est offerte que
+  pour une source créée par la console elle-même ; une source faite
+  depuis la ligne de commande ailleurs peut encore être lue et supprimée,
+  pas modifiée.
+- **Inventaire**, en lecture seule : choisir une source, puis les VMs, les
+  réseaux ou les datastores, chercher par nom, et pour les VMs un filtre
+  sur celles qui peuvent migrer à chaud (Changed Block Tracking actif).
+  Chaque VM montre ses CPU, sa mémoire, ses disques, si le CBT est actif,
+  et les points d'attention de Forklift traduits en texte clair
+  (critique, avertissement, information). Un lien depuis VM Import >
+  VMware mène directement ici.
+
+En ligne de commande : `harvester-forklift status|install|vddk-image|
+provider-apply|provider-delete|inventory`. `install` prend
+`--chart-version` et `--image-tag`, et soit `--cert-manager-manifest`
+soit `--cert-manager-from-bundle` (le paquet Cluster API de la console).
+`vddk-image` construit l'image d'amorçage depuis l'archive de VMware et
+la pousse, identifiants de registre sur l'entrée standard ou dans un
+fichier privé (`--spec`) ; avec `--cluster` ou `--kubeconfig`, elle note
+aussi l'image poussée sur le cluster (ConfigMap
+`forklift/harvester-ops-vddk`), pour qu'un formulaire ultérieur la
+repropose. `provider-apply` lit sa demande en JSON (`url`, `user`,
+`password`, `insecure` ou `cacert`, `vddk_image`) sur l'entrée standard ou
+`--spec` ; `provider-delete` refuse tant qu'un plan utilise le
+fournisseur ; `inventory` lit `vms`, `networks` ou `datastores` tels que
+Forklift les voit.
+
+Vérifié en réel sur le banc harvlab2, contre le vCenter imbriqué de
+vmwlab, depuis l'onglet : c'était aussi la première vérification réelle
+d'une source VMware de VM Import contre un vrai vCenter, pas seulement
+vcsim. Pas encore : les vagues de migration à chaud, la bascule, le
+retour arrière et la vue globale « Migrations (tous clusters) » ; elles
+viennent avec l'étape suivante (B2).
+
+La lecture est ouverte à tous les rôles ; la modification est réservée
+aux administrateurs, et chaque écriture (Forklift installé, image VDDK
+poussée, source ajoutée, modifiée ou supprimée) est une action suivie,
+dans le dock et dans Activity.
+
 ### Stockage LVM et téléchargement des images CDI (1.74.0)
 
 - **Les images sur une classe hors Longhorn v1** (LVM, Longhorn v2, stockage

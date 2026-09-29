@@ -4,6 +4,20 @@ All notable changes to this project will be documented here.
 Format inspired by [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 This file summarises each minor release; per-patch detail lives in `git log`.
 
+## [1.75.0] - 2026-09-29 - VMware migrations tab: Forklift, VDDK image, vCenter sources
+
+### Added
+- A "VMware migrations" tab in each cluster: Preparation (Forklift, the VDDK image, vCenter sources, in order, each with its state and its button), vCenter sources (add, take a vCenter of VM Import without retyping its password, change without retyping it, delete refused while a wave uses it) and a read-only Inventory (Changed Block Tracking, Forklift's concerns, filter on VMs that can move warm). VMware's VDDK archive is given once to the console and serves every cluster; the registry is proposed from Harvester's containerd-registry setting, whose credentials can be reused without being shown.
+- `harvester-forklift`, a new tool: `install` puts cert-manager, the experimental forklift-operator add-on (images named, v1.8.2 by default) and the ForkliftController on a Harvester cluster, in that order; `status` reads it all back.
+- `harvester-forklift vddk-image` builds Forklift's VDDK init image from VMware's archive and pushes it to the operator's registry through the registry API, without podman or buildah; the VDDK never ships with the console.
+- `harvester-forklift provider-apply`, `provider-delete` and `inventory`: a vCenter declared as a Forklift provider (password on stdin), followed until Forklift reaches it or says why not, and its VMs, networks and datastores as Forklift sees them (CBT, size, disks, concerns).
+
+### Internal
+- `bin/lib/hv_forklift.py`, `bin/lib/oci_push.py`, `Kube.port_forward()`; `harvester-forklift` reads secrets from a private file (`--spec`), remembers the pushed VDDK image in the cluster and takes cert-manager from the console's Cluster API bundle.
+
+### Tests
+- `test_forklift_175.py`, `test_oci_push_175.py` (two simulated registries, Bearer auth, redirected blobs), `test_forklift_cli_175.py`, `test_forklift_ui_cli_175.py`, `test_forklift_routes_175.py`, `tests/e2e/test_forklift_175.py`; checked for real on the harvlab2 bench against the nested vCenter of vmwlab, from the tab.
+
 ## [1.74.0] - 2026-09-27 - LVM storage and downloading CDI images
 
 ### Added

@@ -1251,6 +1251,72 @@ administrators. On the command line: `harvester-resources vmimport
 source-apply|source-recheck|source-delete|import-create|import-follow|
 import-delete`.
 
+### VMware migrations with Forklift: installation, VDDK image, vCenter provider (1.75.0)
+
+Harvester 1.9 does not ship Forklift. `harvester-forklift install` puts
+cert-manager (from the console's own Cluster API bundle), the experimental
+forklift-operator add-on (chart 1.9.0, images `v1.8.2` by default,
+`--image-tag` for another) and the ForkliftController on the cluster, in
+that order; images are pulled from `registry.rancher.com/harvester` (plan a
+mirror in airgap). If Harvester itself already carries a forklift-operator
+add-on (expected from 1.9.1), the console enables it as it ships and never
+rewrites its chart or its values.
+
+**VMware migrations**, in the Cluster menu right after VM Import, opens
+three tabs:
+
+- **Preparation**, three steps in the order they must be done, each with
+  its state and its button: Forklift (install or resume, with the parts
+  read back: cert-manager, add-on, operator, controller, components); the
+  VDDK image (VMware's archive is given once to the console's own store and
+  serves every cluster; the target image is proposed from Harvester's
+  `containerd-registry` setting, and Harvester's own credentials for that
+  registry are reusable without being shown, Harvester 1.9 keeping them in
+  a fleet-local secret, or credentials can be typed instead; the cluster
+  remembers the last image pushed and the form offers it again); and
+  vCenter sources, with a count of how many are ready and a link to the
+  next tab.
+- **vCenter sources**: one block per vSphere provider, its state
+  (checking, ready, or refused with Forklift's message), its VDDK image if
+  any, and how many migration plans use it. Adding a source can take a
+  vCenter already declared in VM Import without retyping its password,
+  read on the server; typing one instead asks for the address, a user, a
+  password, and a certificate (CA certificate, or insecure). Changing a
+  source never asks for the password again unless one is typed, and keeps
+  the TLS setting unless it is changed. Deleting is refused while a
+  migration plan uses the source. Editing is offered only for a source the
+  console itself created; one made from the command line elsewhere can
+  still be read and deleted, not edited.
+- **Inventory**, read-only: pick a source, then VMs, networks or
+  datastores, search by name, and for VMs a filter on the ones that can
+  move warm (Changed Block Tracking on). Each VM shows its CPUs, memory,
+  disks, whether CBT is on, and Forklift's concerns translated to plain
+  text (critical, warning, information). A link from VM Import > VMware
+  leads here directly.
+
+On the command line: `harvester-forklift status|install|vddk-image|
+provider-apply|provider-delete|inventory`. `install` takes
+`--chart-version` and `--image-tag`, and either `--cert-manager-manifest`
+or `--cert-manager-from-bundle` (the console's own Cluster API bundle).
+`vddk-image` builds the init image from VMware's archive and pushes it,
+registry credentials on stdin or in a private file (`--spec`); with
+`--cluster` or `--kubeconfig` it also records the pushed image on the
+cluster (ConfigMap `forklift/harvester-ops-vddk`), so a later form offers
+it again. `provider-apply` reads its request as JSON (`url`, `user`,
+`password`, `insecure` or `cacert`, `vddk_image`) from stdin or `--spec`;
+`provider-delete` refuses while a plan uses the provider; `inventory`
+reads `vms`, `networks` or `datastores` as Forklift sees them.
+
+Checked for real on the harvlab2 bench, against the nested vCenter of
+vmwlab, from the tab: this was also the first real check of a VM Import
+VMware source against a real vCenter, not only vcsim. Not yet: warm
+migration waves, cutover, rollback, and the global "Migrations (all
+clusters)" view; they come with the next step (B2).
+
+Reading is open to every role; changing is for administrators, and every
+write (Forklift installed, the VDDK image pushed, a source added, changed
+or deleted) is a tracked action, in the dock and in Activity.
+
 ### LVM storage and downloading CDI images (1.74.0)
 
 - **Images on a class outside Longhorn v1** (LVM, Longhorn v2, third-party

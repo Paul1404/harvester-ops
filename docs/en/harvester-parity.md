@@ -1,8 +1,8 @@
 # Parity with the Harvester UI
 
-Status on 2026-09-27, console **v1.74.0**, compared with the **Harvester v1.9** UI (menus taken from the harvester-ui-extension v1.9.0 source and the v1.9 documentation).
+Status on 2026-09-29, console **v1.75.0**, compared with the **Harvester v1.9** UI (menus taken from the harvester-ui-extension v1.9.0 source and the v1.9 documentation).
 
-Of 135 functions of the Harvester UI: **132 done**, **2 partial**, **1 missing**; 2 out of scope. A missing function shows the version it is planned for.
+Of 136 functions of the Harvester UI: **132 done**, **3 partial**, **1 missing**; 1 out of scope. A missing function shows the version it is planned for.
 
 Statuses: Done, Partial (what is missing is said), Missing (planned version), Console only (what Harvester does not have), Out of scope.
 
@@ -260,7 +260,7 @@ Harvester menu: *VM Imports / VM Migration*
 |---|---|---|---|
 | VM imports (VMware, OpenStack, OVA) | Done | 1.71 | OVA imported end to end for real; VMware source checked against vcsim; the real export from VMware and OpenStack is not verified (no vCenter nor OpenStack on the benches) |
 | Reason of a blocked import or source, from the controller's log; names refused before writing | Console only | 1.71 | Harvester loops silently (image name too long, refused credentials) |
-| Migration through forklift-operator | Out of scope |  | add-on missing from the 1.9 docs |
+| Migration through forklift-operator | Partial | 1.75 | VMware migrations tab: Forklift installed, VDDK image, vCenter sources, inventory; warm waves to come |
 
 ## What the console adds
 

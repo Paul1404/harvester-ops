@@ -1,8 +1,8 @@
 # Parité avec l'interface de Harvester
 
-État au 2026-09-27, console **v1.74.0**, comparée à l'interface de **Harvester v1.9** (menus relevés dans le code de harvester-ui-extension v1.9.0 et la documentation v1.9).
+État au 2026-09-29, console **v1.75.0**, comparée à l'interface de **Harvester v1.9** (menus relevés dans le code de harvester-ui-extension v1.9.0 et la documentation v1.9).
 
-Sur 135 fonctions de l'interface de Harvester : **132 faites**, **2 partielles**, **1 manquantes** ; 2 hors périmètre. Une fonction manquante porte la version où elle est prévue.
+Sur 136 fonctions de l'interface de Harvester : **132 faites**, **3 partielles**, **1 manquantes** ; 1 hors périmètre. Une fonction manquante porte la version où elle est prévue.
 
 Statuts : Fait, Partiel (ce qui manque est dit), Manquant (version prévue), Console seulement (ce que Harvester n'a pas), Hors périmètre.
 
@@ -260,7 +260,7 @@ Menu Harvester : *VM Imports / VM Migration*
 |---|---|---|---|
 | Imports de VM (VMware, OpenStack, OVA) | Fait | 1.71 | OVA importée de bout en bout en réel ; source VMware vérifiée contre vcsim ; l'export réel depuis VMware et OpenStack n'est pas vérifié (ni vCenter ni OpenStack sur les bancs) |
 | Raison d'un import ou d'une source bloqués, tirée du journal du contrôleur ; noms refusés avant d'écrire | Console seulement | 1.71 | Harvester boucle sans rien dire (image au nom trop long, identifiants refusés) |
-| Migration par forklift-operator | Hors périmètre |  | add-on absent de la documentation 1.9 |
+| Migration par forklift-operator | Partiel | 1.75 | onglet Migrations VMware : Forklift installé, image VDDK, sources vCenter, inventaire ; vagues à chaud à venir |
 
 ## Ce que la console ajoute
 

@@ -32,9 +32,10 @@ const Forklift = (() => {
   };
 
   // { cluster, host, kind, data, store, timer, invToken, dirty, uploading, uploadNote }
-  // dirty : le formulaire VDDK a été modifié ; uploading : une archive part.
-  // Tant que l'un des deux tient, la relecture de fond ne redessine pas
-  // l'étape VDDK (étapes 1 et 3 seulement), comme la fenêtre de mise à jour.
+  // dirty : les formulaires de la Préparation en cours de saisie (Set de
+  // 'vddk', 'cdi', 'precopy') ; uploading : une archive part. La relecture
+  // de fond ne redessine jamais un formulaire en cours de saisie (ni l'étape
+  // VDDK pendant un envoi), comme la fenêtre de mise à jour.
   let cur = null;
   let lastInv = null;   // { cluster, source, namespace, kind, q, warm } : retrouvé au retour sur l'onglet (U4)
 
@@ -58,7 +59,7 @@ const Forklift = (() => {
   function start(cluster, host) {
     stop();
     const kind = KINDS.includes(host.dataset.fk) ? host.dataset.fk : 'prep';
-    cur = { cluster, host, kind, data: null, store: null, dirty: false, uploading: false, uploadNote: '' };
+    cur = { cluster, host, kind, data: null, store: null, dirty: new Set(), uploading: false, uploadNote: '' };
     // v1.75.0 : le bouton « Ajouter un vCenter » n'a sa place que sur l'onglet Sources
     const newBtn = kind === 'sources'
       ? `<button type="button" class="btn btn-sm btn-primary tip needs-admin" data-fk="new-source" data-tip="${esc(tr('fk.t.newSource'))}">${icon('add')} ${esc(tr('fk.newSource'))}</button>` : '';
@@ -97,7 +98,7 @@ const Forklift = (() => {
     if (c !== cur) return;
     // une saisie ou un envoi en cours : un aléa de la relecture de fond
     // (réseau, cluster injoignable) ne doit jamais effacer le formulaire
-    if ((c.dirty || c.uploading) && (!d || d.error || d.unreachable)) return;
+    if ((c.dirty.size || c.uploading) && (!d || d.error || d.unreachable)) return;
     c.data = d;
     c.store = store;
     render();
@@ -121,12 +122,18 @@ const Forklift = (() => {
     }
     if (cur.kind === 'prep') {
       const steps = prepSteps(d);
-      if ((cur.dirty || cur.uploading) && body.querySelector('[data-fk-step="vddk"]')) {
-        // une saisie ou un envoi en cours n'est jamais effacé : seules les
-        // étapes Forklift et sources se redessinent (CDI, VDDK et
-        // l'intervalle des copies restent tels quels)
-        body.querySelector('[data-fk-step="forklift"]').outerHTML = steps.one;
-        body.querySelector('[data-fk-step="sources"]').outerHTML = steps.sources;
+      if ((cur.dirty.size || cur.uploading) && body.querySelector('[data-fk-step="vddk"]')) {
+        // une saisie ou un envoi en cours n'est jamais effacé : chaque partie
+        // se redessine, sauf les formulaires en cours de saisie (et l'étape
+        // VDDK pendant un envoi), laissés tels quels
+        const keep = (k) => cur.dirty.has(k) || (k === 'vddk' && cur.uploading);
+        const parts = [['forklift', '[data-fk-step="forklift"]', steps.one], ['cdi', '[data-fk-step="cdi"]', steps.cdi],
+                       ['vddk', '[data-fk-step="vddk"]', steps.vddk], ['sources', '[data-fk-step="sources"]', steps.sources],
+                       ['precopy', '[data-fk-precopy]', steps.precopy]];
+        for (const [k, sel, html] of parts) {
+          const el = body.querySelector(sel);
+          if (el && !keep(k)) el.outerHTML = html;
+        }
       } else {
         body.innerHTML = steps.one + steps.cdi + steps.vddk + steps.sources + steps.precopy;
       }
@@ -180,7 +187,8 @@ const Forklift = (() => {
 
   // -- Intervalle des copies incrémentales (v1.76.0) -----------------------
   function precopyBox(d) {
-    const minutes = d.precopy_interval == null ? 60 : d.precopy_interval;
+    // la route rend toujours la valeur (défaut du contrôleur compris)
+    const minutes = d.precopy_interval;
     return `<div class="fk-precopy" data-fk-precopy>
       <div class="fk-step-head"><b>${esc(tr('fk.step.precopy'))}</b> ${badge('info', tr('fk.precopy.current', { minutes }))}</div>
       <p class="form-hint">${esc(tr('fk.precopyHint'))}</p>
@@ -434,6 +442,7 @@ const Forklift = (() => {
     if (s.kind === 'vms') syncComposeUI();
     const q = s.q.toLowerCase();
     let rows = (cur.invRows || []).filter(r => !q || `${r.name} ${r.path || ''} ${r.guest || ''}`.toLowerCase().includes(q));
+    // voulu : « à chaud seulement » ne filtre que sur le CBT, la colonne d'éligibilité dit en plus les outils VMware
     if (s.kind === 'vms' && s.warm) rows = rows.filter(r => r.cbt);
     cur.host.querySelector('.res-count').textContent = tr('fk.inv.count', { n: rows.length });
     if (s.kind === 'networks') {
@@ -489,7 +498,7 @@ const Forklift = (() => {
     }
     if (act === 'refresh') {
       // un clic explicite relit tout, saisie comprise (sauf un envoi en cours)
-      cur.dirty = false;
+      cur.dirty.clear();
       return load();
     }
     if (act === 'install') return post('install', {}, tr('fk.done.install'));
@@ -505,16 +514,20 @@ const Forklift = (() => {
       else if (val('username')) { body.username = val('username'); body.password = box.querySelector('[name="password"]').value; }
       const c = cur;
       // poussée envoyée : le formulaire redevient celui du cluster
-      return post('vddk-image', body, tr('fk.done.push', { image: body.image })).then((ok) => { if (ok && c === cur) c.dirty = false; });
+      return post('vddk-image', body, tr('fk.done.push', { image: body.image })).then((ok) => { if (ok && c === cur) c.dirty.delete('vddk'); });
     }
     if (act === 'cdi-upstream') {
       const box = b.closest('[data-fk-step="cdi"]');
       const img = box.querySelector('[name="cdi_image"]').value.trim();
       const body = { mode: 'upstream' };
       if (img) body.image = img;
-      return post('cdi-importer', body, tr('fk.done.cdiUpstream'));
+      const c = cur;
+      return post('cdi-importer', body, tr('fk.done.cdiUpstream')).then((ok) => { if (ok && c === cur) c.dirty.delete('cdi'); });
     }
-    if (act === 'cdi-original') return post('cdi-importer', { mode: 'original' }, tr('fk.done.cdiOriginal'));
+    if (act === 'cdi-original') {
+      const c = cur;
+      return post('cdi-importer', { mode: 'original' }, tr('fk.done.cdiOriginal')).then((ok) => { if (ok && c === cur) c.dirty.delete('cdi'); });
+    }
     if (act === 'precopy-save') {
       const box = b.closest('[data-fk-precopy]');
       const msg = box.querySelector('[data-fk="precopy-msg"]');
@@ -524,7 +537,8 @@ const Forklift = (() => {
         return;
       }
       if (msg) msg.innerHTML = '';
-      return post('precopy-interval', { minutes }, tr('fk.done.precopy', { minutes }));
+      const c = cur;
+      return post('precopy-interval', { minutes }, tr('fk.done.precopy', { minutes })).then((ok) => { if (ok && c === cur) c.dirty.delete('precopy'); });
     }
     if (act === 'new-source') return sourceForm(null);
     const name = b.dataset.name;
@@ -548,15 +562,18 @@ const Forklift = (() => {
     }
   }
 
-  /** Une modification du formulaire VDDK (pas le choix d'un fichier à
-   *  déposer, qui lance l'envoi). */
-  function touchVddk(t) {
-    if (cur && t.closest && t.closest('[data-fk-step="vddk"]') && t.dataset.fk !== 'upload-file') cur.dirty = true;
+  /** Une saisie dans un formulaire de la Préparation : VDDK (pas le choix
+   *  d'un fichier à déposer, qui lance l'envoi), miroir de l'importeur CDI,
+   *  intervalle des copies. */
+  const DIRTY_PARTS = [['vddk', '[data-fk-step="vddk"]'], ['cdi', '[data-fk-step="cdi"]'], ['precopy', '[data-fk-precopy]']];
+  function touchPrep(t) {
+    if (!cur || !t.closest || t.dataset.fk === 'upload-file') return;
+    for (const [k, sel] of DIRTY_PARTS) if (t.closest(sel)) cur.dirty.add(k);
   }
 
   function onChange(e) {
     const t = e.target;
-    touchVddk(t);
+    touchPrep(t);
     if (t.name === 'use_cluster_auth') {
       const box = t.closest('.fk-form');
       const creds = box && box.querySelector('[data-fk="reg-creds"]');
@@ -580,7 +597,7 @@ const Forklift = (() => {
   }
 
   function onInput(e) {
-    touchVddk(e.target);
+    touchPrep(e.target);
     if (e.target.name === 'q' && lastInv) {
       lastInv.q = e.target.value;
       paintInventory();

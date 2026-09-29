@@ -150,6 +150,50 @@ def test_an_interval_out_of_bounds_is_refused_before_sending(context, flask_serv
     expect(box.locator('[data-fk="precopy-msg"]')).to_contain_text("5")
 
 
+# --- Préparation : une saisie survit à la relecture de fond ------------------
+
+def test_the_importer_mirror_being_typed_survives_the_background_refresh(context, flask_server):
+    reads = []
+
+    def data():
+        reads.append(1)
+        return DATA
+    page, _ = open_tab(context, flask_server, data)
+    cdi = page.locator('#tab-forklift [data-fk-step="cdi"]')
+    cdi.locator('[name="cdi_image"]').fill("172.16.1.11:5005/harvops/cdi-importer:v1.65.0")
+    n = len(reads)
+    page.evaluate("Forklift.backgroundRefresh()")
+    page.wait_for_timeout(400)
+    assert len(reads) > n
+    expect(cdi.locator('[name="cdi_image"]')).to_have_value("172.16.1.11:5005/harvops/cdi-importer:v1.65.0")
+
+
+def test_the_interval_being_typed_survives_the_background_refresh(context, flask_server):
+    reads = []
+
+    def data():
+        reads.append(1)
+        return DATA
+    page, _ = open_tab(context, flask_server, data)
+    box = page.locator('#tab-forklift [data-fk-precopy]')
+    box.locator('[name="precopy_minutes"]').fill("15")
+    n = len(reads)
+    page.evaluate("Forklift.backgroundRefresh()")
+    page.wait_for_timeout(400)
+    assert len(reads) > n
+    expect(box.locator('[name="precopy_minutes"]')).to_have_value("15")
+
+
+def test_an_untouched_interval_follows_the_cluster_value(context, flask_server):
+    state = {"minutes": 60}
+    page, _ = open_tab(context, flask_server, lambda: {**DATA, "precopy_interval": state["minutes"]})
+    box = page.locator('#tab-forklift [data-fk-precopy]')
+    expect(box.locator('[name="precopy_minutes"]')).to_have_value("60")
+    state["minutes"] = 15
+    page.evaluate("Forklift.backgroundRefresh()")
+    expect(box.locator('[name="precopy_minutes"]')).to_have_value("15")
+
+
 # --- Inventaire : outils VMware, raison, sélection --------------------------
 
 def test_the_tools_column_says_running_or_not(context, flask_server):

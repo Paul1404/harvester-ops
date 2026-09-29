@@ -1,14 +1,15 @@
 /**
- * harvester-ops : migrations VMware par Forklift, onglet d'un cluster (v1.75.0)
+ * harvester-ops : migrations VMware par Forklift, onglet d'un cluster (v1.76.0)
  *
  * Trois onglets de la section « Migrations VMware » :
- * - Préparation : Forklift sur le cluster, l'image VDDK, les sources, dans
- *   l'ordre où il faut les faire, chacun avec son état et son geste ;
+ * - Préparation : Forklift sur le cluster, l'importeur de disques (CDI),
+ *   l'image VDDK, les sources et l'intervalle des copies incrémentales,
+ *   dans l'ordre où il faut les faire, chacun avec son état et son geste ;
  * - Sources vCenter : un bloc par fournisseur vSphere de Forklift, ajout et
  *   modification en fenêtre (un vCenter de VM Import se reprend sans
  *   ressaisir son mot de passe, lu par le serveur) ;
- * - Inventaire : ce que Forklift voit d'un vCenter, en lecture seule (les
- *   vagues à chaud viennent avec l'étape suivante).
+ * - Inventaire : ce que Forklift voit d'un vCenter, avec la raison de refus
+ *   par VM (CBT, outils VMware) et une sélection pour composer une vague.
  * Toute écriture passe par l'outil harvester-forklift, en action suivie.
  */
 const Forklift = (() => {
@@ -122,11 +123,12 @@ const Forklift = (() => {
       const steps = prepSteps(d);
       if ((cur.dirty || cur.uploading) && body.querySelector('[data-fk-step="vddk"]')) {
         // une saisie ou un envoi en cours n'est jamais effacé : seules les
-        // étapes 1 et 3 se redessinent
+        // étapes Forklift et sources se redessinent (CDI, VDDK et
+        // l'intervalle des copies restent tels quels)
         body.querySelector('[data-fk-step="forklift"]').outerHTML = steps.one;
-        body.querySelector('[data-fk-step="sources"]').outerHTML = steps.three;
+        body.querySelector('[data-fk-step="sources"]').outerHTML = steps.sources;
       } else {
-        body.innerHTML = steps.one + steps.two + steps.three;
+        body.innerHTML = steps.one + steps.cdi + steps.vddk + steps.sources + steps.precopy;
       }
     } else if (cur.kind === 'sources') body.innerHTML = sourcesView(d);   // U4
     else inventoryView(body, d);                                        // U4
@@ -153,8 +155,44 @@ const Forklift = (() => {
       <b>${esc(title)}</b> ${stateHtml}</div>${bodyHtml}</div>`;
   }
 
-  /** Les trois étapes de la Préparation, séparément : la relecture de fond
-   *  peut n'en redessiner qu'une partie. */
+  // -- Importeur CDI (v1.76.0) -------------------------------------------
+  const CDI_BADGE = { 'suse-no-vddk': ['fail', () => tr('fk.cdi.suse')], upstream: ['ok', () => tr('fk.cdi.upstream')],
+                      other: ['warn', () => tr('fk.cdi.other')] };
+
+  function cdiStep(d) {
+    const c = d.cdi_importer || { image: '', kind: 'other', original: '' };
+    const [cls, label] = CDI_BADGE[c.kind] || CDI_BADGE.other;
+    const orig = c.original || '';
+    return stepBox('cdi', 2, tr('fk.step.cdi'), badge(cls, label(), c.image),
+      `<p class="form-hint">${esc(tr('fk.cdiHint'))}</p>
+       ${c.kind === 'suse-no-vddk' ? `<div class="sto-finding sev-critical"><div class="sto-finding-title">${icon('warn')} ${esc(tr('fk.cdi.warnSuse'))}</div></div>` : ''}
+       <p class="form-hint">${esc(tr('fk.cdi.upgradeWarn'))}</p>
+       <div class="fk-form">
+         ${field('cdi_image', tr('fk.f.cdiImage'), '<input name="cdi_image" placeholder="quay.io/kubevirt/cdi-importer:v1.60.0">', tr('fk.t.cdiImage'))}
+         <div class="fk-source-actions">
+           <button type="button" class="btn btn-sm btn-primary tip needs-admin" data-fk="cdi-upstream" ${c.kind === 'upstream' ? 'disabled' : ''}
+             data-tip="${esc(tr('fk.t.cdiUpstream'))}">${icon('download')} ${esc(tr('fk.cdi.useUpstream'))}</button>
+           <button type="button" class="btn btn-sm btn-secondary tip needs-admin" data-fk="cdi-original" ${orig ? '' : 'disabled'}
+             data-tip="${esc(orig ? tr('fk.t.cdiOriginal', { image: orig }) : tr('fk.t.cdiNoOriginal'))}">${icon('undo')} ${esc(tr('fk.cdi.useOriginal'))}</button>
+         </div>
+       </div>`);
+  }
+
+  // -- Intervalle des copies incrémentales (v1.76.0) -----------------------
+  function precopyBox(d) {
+    const minutes = d.precopy_interval == null ? 60 : d.precopy_interval;
+    return `<div class="fk-precopy" data-fk-precopy>
+      <div class="fk-step-head"><b>${esc(tr('fk.step.precopy'))}</b> ${badge('info', tr('fk.precopy.current', { minutes }))}</div>
+      <p class="form-hint">${esc(tr('fk.precopyHint'))}</p>
+      <div class="fk-form">
+        ${field('precopy_minutes', tr('fk.f.precopyMinutes'), `<input name="precopy_minutes" type="number" min="5" max="1440" value="${esc(minutes)}">`, tr('fk.t.precopyMinutes'))}
+        <button type="button" class="btn btn-sm btn-primary tip needs-admin" data-fk="precopy-save" data-tip="${esc(tr('fk.t.precopySave'))}">${icon('save')} ${esc(tr('fk.precopy.save'))}</button>
+        <span class="form-hint" data-fk="precopy-msg"></span>
+      </div></div>`;
+  }
+
+  /** Les étapes de la Préparation, séparément : la relecture de fond peut
+   *  n'en redessiner qu'une partie. */
   function prepSteps(d) {
     const st = d.install;
     // un add-on déployé ne dit pas une installation finie (composants ou
@@ -169,10 +207,11 @@ const Forklift = (() => {
        ${d.harvester_addon ? `<p class="form-hint">${esc(tr('fk.harvesterAddon'))}</p>` : ''}
        ${st.ready ? '' : `<button type="button" class="btn btn-sm btn-primary tip needs-admin" data-fk="install" ${canInstall ? '' : 'disabled'}
           data-tip="${esc(canInstall ? tr('fk.t.install') : tr('fk.t.noBundle'))}">${icon('download')} ${esc(st.addon === 'absent' ? tr('fk.install') : tr('fk.resume'))}</button>`}`);
+    const cdi = cdiStep(d);
     const v = d.vddk;
     const archives = (cur.store && cur.store.archives) || [];
     const pick = (v && archives.some(a => a.name === v.archive)) ? v.archive : (archives[0] && archives[0].name) || '';
-    const two = stepBox('vddk', 2, tr('fk.step.vddk'),
+    const vddk = stepBox('vddk', 3, tr('fk.step.vddk'),
       v ? badge('ok', v.image, tr('fk.t.vddkDone', { digest: v.digest.slice(0, 19), when: v.pushed_at })) : badge('warn', tr('fk.st.todo')),
       `<p class="form-hint">${esc(tr('fk.vddkHint'))}</p>
        <div class="fk-form">
@@ -193,11 +232,11 @@ const Forklift = (() => {
          <button type="button" class="btn btn-sm btn-primary tip needs-admin" data-fk="push-vddk" ${archives.length ? '' : 'disabled'} data-tip="${esc(tr('fk.t.push'))}">${icon('upload')} ${esc(tr('fk.push'))}</button>
        </div>`);
     const ready = d.providers.filter(p => p.ready === true).length;
-    const three = stepBox('sources', 3, tr('fk.step.sources'),
+    const sources = stepBox('sources', 4, tr('fk.step.sources'),
       d.providers.length ? badge(ready ? 'ok' : 'warn', tr('fk.st.sources', { ready, total: d.providers.length })) : badge('warn', tr('fk.st.todo')),
       `<p class="form-hint">${esc(tr('fk.sourcesHint'))}</p>
        <button type="button" class="btn btn-sm btn-secondary tip" data-fk="goto-sources" data-tip="${esc(tr('fk.t.gotoSources'))}">${icon('cloud')} ${esc(tr('section.fkSources'))}</button>`);
-    return { one, two, three };
+    return { one, cdi, vddk, sources, precopy: precopyBox(d) };
   }
 
   // -- Sources vCenter (U4) ----------------------------------------------------
@@ -307,9 +346,29 @@ const Forklift = (() => {
   const INV_LABEL = { vms: () => tr('fk.inv.vms'), networks: () => tr('fk.inv.networks'), datastores: () => tr('fk.inv.datastores') };
   const INV_TIP = { vms: () => tr('fk.t.inv.vms'), networks: () => tr('fk.t.inv.networks'), datastores: () => tr('fk.t.inv.datastores') };
 
+  /** Pourquoi une VM ne peut pas entrer dans une vague à chaud, même règle
+   *  que `vm_warm_blockers` de la bibliothèque : CBT absent, ou allumée sans
+   *  outils VMware en marche (la bascule ne peut alors pas arrêter la
+   *  source). Une VM sans raison est éligible. */
+  function vmBlockers(row) {
+    const out = [];
+    if (!row.cbt) out.push(tr('fk.warm.cbt'));
+    if (row.power === 'poweredOn' && !row.tools) out.push(tr('fk.warm.tools'));
+    return out;
+  }
+
+  /** Les VMs cochées de la source courante, avec la source à laquelle elles
+   *  appartiennent (W6 : fenêtre « Composer une vague »). */
+  function selectedVms() {
+    if (!lastInv || lastInv.kind !== 'vms' || !lastInv.selected || !lastInv.selected.size) return [];
+    const rows = (cur && cur.invRows) || [];
+    return rows.filter(r => lastInv.selected.has(String(r.id || r.name)))
+               .map(r => ({ ...r, namespace: lastInv.namespace, source: lastInv.source }));
+  }
+
   function openInventory(name, namespace) {
     lastInv = { cluster: cur ? cur.cluster : (window.App && App.getCurrentCluster()), source: name,
-               namespace: namespace || 'forklift', kind: 'vms', q: '', warm: false };
+               namespace: namespace || 'forklift', kind: 'vms', q: '', warm: false, selected: new Set() };
     Sections.open('forklift', 'inventory');
   }
 
@@ -321,18 +380,23 @@ const Forklift = (() => {
     }
     if (!lastInv || lastInv.cluster !== cur.cluster
         || !ready.some(p => p.name === lastInv.source && p.namespace === lastInv.namespace)) {
-      lastInv = { cluster: cur.cluster, source: ready[0].name, namespace: ready[0].namespace, kind: 'vms', q: '', warm: false };
+      lastInv = { cluster: cur.cluster, source: ready[0].name, namespace: ready[0].namespace, kind: 'vms', q: '', warm: false, selected: new Set() };
     }
+    if (!lastInv.selected) lastInv.selected = new Set();
     const s = lastInv;
     // une source hors « forklift » se distingue dans la liste (deux vCenters
     // peuvent porter le même nom dans des namespaces différents)
     const srcOpts = ready.map(p => [`${p.namespace}/${p.name}`, p.namespace === 'forklift' ? p.name : `${p.name} (${p.namespace})`]);
+    const canCompose = !!(window.Forklift && typeof Forklift.composeWave === 'function');
     body.innerHTML = `<div class="fk-inv-tools">
         ${field('source', tr('fk.inv.source'), `<select name="source">${opts(srcOpts, `${s.namespace}/${s.source}`)}</select>`, tr('fk.t.invSource'))}
         <div class="sub-tabs sub-tabs-inline">${INV_KINDS.map(k => `<button type="button" class="sub-tab tip ${k === s.kind ? 'active' : ''}" data-fk="inv-kind" data-kind="${k}" data-tip="${esc(INV_TIP[k]())}">${esc(INV_LABEL[k]())}</button>`).join('')}</div>
         <input name="q" class="tip" data-tip="${esc(tr('fk.t.search'))}" placeholder="${esc(tr('fk.search'))}" value="${esc(s.q)}">
         ${s.kind === 'vms' ? `<label class="fk-check tip" data-tip="${esc(tr('fk.t.warmOnly'))}"><input type="checkbox" name="warm_only" ${s.warm ? 'checked' : ''}> ${esc(tr('fk.warmOnly'))}</label>` : ''}
         <button type="button" class="btn btn-sm btn-secondary tip" data-fk="inv-refresh" data-tip="${esc(tr('fk.t.invRefresh'))}">${icon('refresh')}</button>
+        ${s.kind === 'vms' ? `<span class="form-hint" data-fk="inv-selected-count">${esc(tr('fk.inv.selected', { n: s.selected.size }))}</span>
+        <button type="button" class="btn btn-sm btn-primary tip" data-fk="compose-wave" ${(canCompose && s.selected.size) ? '' : 'disabled'}
+          data-tip="${esc(!canCompose ? tr('fk.t.composeSoon') : (s.selected.size ? tr('fk.t.composeWave') : tr('fk.t.composeNone')))}">${icon('build')} ${esc(tr('fk.composeWave'))}</button>` : ''}
       </div><div data-fk="inv-out"><p class="form-hint">${esc(tr('common.loading'))}</p></div>`;
     const c = cur;
     // jeton de requête : changer de source ou de sorte pendant qu'une
@@ -350,10 +414,24 @@ const Forklift = (() => {
     paintInventory();
   }
 
+  /** Le nombre de VMs cochées et l'état du bouton « Composer une vague »,
+   *  sans redessiner tout le bandeau (la sélection change à chaque coche). */
+  function syncComposeUI() {
+    const count = cur.host.querySelector('[data-fk="inv-selected-count"]');
+    const btn = cur.host.querySelector('[data-fk="compose-wave"]');
+    if (!count || !btn) return;
+    const n = (lastInv.selected && lastInv.selected.size) || 0;
+    count.textContent = tr('fk.inv.selected', { n });
+    const canCompose = !!(window.Forklift && typeof Forklift.composeWave === 'function');
+    btn.disabled = !(canCompose && n);
+    btn.setAttribute('data-tip', canCompose ? (n ? tr('fk.t.composeWave') : tr('fk.t.composeNone')) : tr('fk.t.composeSoon'));
+  }
+
   function paintInventory() {
     const out = cur.host.querySelector('[data-fk="inv-out"]');
     if (!out) return;
     const s = lastInv;
+    if (s.kind === 'vms') syncComposeUI();
     const q = s.q.toLowerCase();
     let rows = (cur.invRows || []).filter(r => !q || `${r.name} ${r.path || ''} ${r.guest || ''}`.toLowerCase().includes(q));
     if (s.kind === 'vms' && s.warm) rows = rows.filter(r => r.cbt);
@@ -369,21 +447,33 @@ const Forklift = (() => {
       return;
     }
     out.innerHTML = `<table class="data-table res-table" data-fk="inv-table"><thead><tr>
-        <th>${esc(tr('fk.inv.vm'))}</th><th>${esc(tr('fk.inv.power'))}</th><th>${esc(tr('fk.inv.os'))}</th>
-        <th>${esc(tr('fk.inv.cpuMem'))}</th><th>${esc(tr('fk.inv.disks'))}</th><th>${esc(tr('fk.inv.warm'))}</th><th>${esc(tr('fk.inv.concerns'))}</th></tr></thead>
+        <th></th><th>${esc(tr('fk.inv.vm'))}</th><th>${esc(tr('fk.inv.power'))}</th><th>${esc(tr('fk.inv.os'))}</th>
+        <th>${esc(tr('fk.inv.cpuMem'))}</th><th>${esc(tr('fk.inv.disks'))}</th><th>${esc(tr('fk.inv.warm'))}</th>
+        <th>${esc(tr('fk.inv.tools'))}</th><th>${esc(tr('fk.inv.concerns'))}</th><th>${esc(tr('fk.inv.reason'))}</th></tr></thead>
       <tbody>${rows.map(r => {
         const total = (r.disks || []).reduce((a, x) => a + (x.capacity || 0), 0);
         const cs = r.concerns || [];
         const shown = cs.filter(c => !/^Disk - /.test(c.label || '')).slice(0, 2);
         const rest = cs.length - shown.length;
-        return `<tr data-vm="${esc(r.name)}"><td class="tip" data-tip="${esc(r.path || '')}">${esc(r.name)}</td>
+        const id = String(r.id || r.name);
+        const blockers = vmBlockers(r);
+        const checked = s.selected.has(id);
+        return `<tr data-vm="${esc(r.name)}">
+          <td><input type="checkbox" class="tip" data-fk="vm-select" value="${esc(id)}" ${checked ? 'checked' : ''} ${blockers.length ? 'disabled' : ''}
+            data-tip="${esc(blockers.length ? tr('fk.t.eligibleNo', { reasons: blockers.join('; ') }) : tr('fk.t.select'))}"></td>
+          <td class="tip" data-tip="${esc(r.path || '')}">${esc(r.name)}</td>
           <td>${esc(r.power === 'poweredOn' ? tr('fk.inv.on') : r.power === 'poweredOff' ? tr('fk.inv.off') : r.power || '')}</td>
           <td>${esc(r.guest || '')}</td><td>${esc(`${r.cpus || '?'} / ${size((r.memory_mib || 0) * 1048576)}`)}</td>
           <td>${esc(`${(r.disks || []).length} · ${size(total)}`)}</td>
           <td>${r.cbt ? `<span class="tip" data-fk-warm="yes" data-tip="${esc(tr('fk.t.cbtOn'))}">${icon('ok')} ${esc(tr('fk.inv.cbtOn'))}</span>`
                       : `<span class="tip" data-fk-warm="no" data-tip="${esc(tr('fk.t.cbtOff'))}">${icon('fail')} ${esc(tr('fk.inv.cbtOff'))}</span>`}</td>
+          <td>${r.tools ? `<span class="tip" data-fk-tools="yes" data-tip="${esc(tr('fk.t.toolsOn'))}">${icon('ok')} ${esc(tr('fk.inv.toolsOn'))}</span>`
+                        : `<span class="tip" data-fk-tools="no" data-tip="${esc(tr('fk.t.toolsOff'))}">${icon('fail')} ${esc(tr('fk.inv.toolsOff'))}</span>`}</td>
           <td class="fk-concerns">${shown.map(c => `<span class="tip" data-tip="${esc(c.label)}">${icon(SEV[c.category] || 'info', 12)} ${esc(concernText(c))}</span>`).join(' ')}
-            ${rest > 0 ? `<span class="badge tip" data-tip="${esc(cs.map(concernText).join('\n'))}">+${rest}</span>` : ''}</td></tr>`;
+            ${rest > 0 ? `<span class="badge tip" data-tip="${esc(cs.map(concernText).join('\n'))}">+${rest}</span>` : ''}</td>
+          <td class="fk-reason" data-fk-eligible="${blockers.length ? 'no' : 'yes'}">${blockers.length
+              ? `<span class="tip" data-tip="${esc(blockers.join('\n'))}">${icon('warn', 12)} ${esc(blockers.join('; '))}</span>`
+              : `<span class="tip" data-tip="${esc(tr('fk.t.eligibleYes'))}">${icon('ok', 12)} ${esc(tr('fk.inv.eligibleYes'))}</span>`}</td></tr>`;
       }).join('')}</tbody></table>`;
   }
 
@@ -417,6 +507,25 @@ const Forklift = (() => {
       // poussée envoyée : le formulaire redevient celui du cluster
       return post('vddk-image', body, tr('fk.done.push', { image: body.image })).then((ok) => { if (ok && c === cur) c.dirty = false; });
     }
+    if (act === 'cdi-upstream') {
+      const box = b.closest('[data-fk-step="cdi"]');
+      const img = box.querySelector('[name="cdi_image"]').value.trim();
+      const body = { mode: 'upstream' };
+      if (img) body.image = img;
+      return post('cdi-importer', body, tr('fk.done.cdiUpstream'));
+    }
+    if (act === 'cdi-original') return post('cdi-importer', { mode: 'original' }, tr('fk.done.cdiOriginal'));
+    if (act === 'precopy-save') {
+      const box = b.closest('[data-fk-precopy]');
+      const msg = box.querySelector('[data-fk="precopy-msg"]');
+      const minutes = parseInt(box.querySelector('[name="precopy_minutes"]').value, 10);
+      if (!Number.isFinite(minutes) || minutes < 5 || minutes > 1440) {
+        if (msg) msg.innerHTML = `<span class="res-error">${esc(tr('fk.precopy.range'))}</span>`;
+        return;
+      }
+      if (msg) msg.innerHTML = '';
+      return post('precopy-interval', { minutes }, tr('fk.done.precopy', { minutes }));
+    }
     if (act === 'new-source') return sourceForm(null);
     const name = b.dataset.name;
     const ns = b.dataset.ns;
@@ -431,6 +540,12 @@ const Forklift = (() => {
     if (act === 'inv-source' && prov) return openInventory(name, prov.namespace);
     if (act === 'inv-kind') { lastInv.kind = b.dataset.kind; return render(); }
     if (act === 'inv-refresh') return render();
+    if (act === 'compose-wave') {
+      const vms = selectedVms();
+      if (!vms.length) return;
+      if (window.Forklift && typeof Forklift.composeWave === 'function') return Forklift.composeWave(vms);
+      return;
+    }
   }
 
   /** Une modification du formulaire VDDK (pas le choix d'un fichier à
@@ -452,9 +567,14 @@ const Forklift = (() => {
       const i = t.value.indexOf('/');
       lastInv.namespace = t.value.slice(0, i);
       lastInv.source = t.value.slice(i + 1);
+      lastInv.selected = new Set();   // une autre source n'a pas les mêmes identifiants de VM
       render();
     } else if (t.name === 'warm_only' && lastInv) {
       lastInv.warm = t.checked;
+      paintInventory();
+    } else if (t.dataset.fk === 'vm-select' && lastInv) {
+      if (!lastInv.selected) lastInv.selected = new Set();
+      if (t.checked) lastInv.selected.add(t.value); else lastInv.selected.delete(t.value);
       paintInventory();
     }
   }
@@ -576,6 +696,6 @@ const Forklift = (() => {
     });
   }
 
-  return { start, stop, openInventory, backgroundRefresh };
+  return { start, stop, openInventory, backgroundRefresh, selectedVms };
 })();
 window.Forklift = Forklift;

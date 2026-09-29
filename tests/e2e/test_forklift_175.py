@@ -59,12 +59,14 @@ def open_tab(context, flask_server, data):
 
 
 def test_preparation_shows_three_steps_with_their_state(context, flask_server):
+    # v1.76.0 : la Préparation gagne l'étape CDI (entre Forklift et VDDK) et
+    # l'intervalle des copies (après les sources) : 4 [data-fk-step], pas 3.
     page, _ = open_tab(context, flask_server, DATA)
     steps = page.locator("#tab-forklift [data-fk-step]")
-    expect(steps).to_have_count(3)
+    expect(steps).to_have_count(4)
     expect(steps.nth(0)).to_contain_text("ready")
-    expect(steps.nth(1)).to_contain_text("172.16.1.11:5005/harvops/vddk:8.0.3")
-    expect(steps.nth(2)).to_contain_text("1")
+    expect(steps.nth(2)).to_contain_text("172.16.1.11:5005/harvops/vddk:8.0.3")
+    expect(steps.nth(3)).to_contain_text("1")
     for b in page.locator("#tab-forklift button:visible").all():
         assert b.get_attribute("data-tip") or b.get_attribute("title"), b.inner_text()
 

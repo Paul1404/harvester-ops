@@ -7,7 +7,7 @@ English · [Français](README.fr.md)
 
 [![License: Apache 2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
 [![Release](https://img.shields.io/github/v/release/jniedergang/harvester-ops)](https://github.com/jniedergang/harvester-ops/releases/latest)
-[![Tests](https://img.shields.io/badge/tests-1230%2B_passing-green.svg)](tests/)
+[![Tests](https://img.shields.io/badge/tests-2500%2B_passing-green.svg)](tests/)
 
 > Independent open source project. Not affiliated with, endorsed by, or
 > supported by SUSE.
@@ -38,15 +38,22 @@ recorded, whether it was made from the console or somewhere else.
   networks and what is attached to them, storage classes, volumes and the
   space really left on each disk, network cards, bonds and virtual
   switches.
+- **The Harvester interface, and more.** Every Harvester menu is here,
+  section by section: storage, networks and kube-ovn VPCs, add-ons,
+  security, monitoring and logging, advanced settings, PCI/USB/SR-IOV
+  devices, upgrades and VM imports, each with create, edit and delete in
+  windows. A [parity table](docs/en/harvester-parity.md) tracks it
+  function by function.
 - **A console that stays live**: views refresh on their own, long
   operations stream their steps, consoles and editors open as windows kept
   in a bar, and a VM's VNC console can be watched by several people at
   once.
 - **Five languages** (English, French, German, Spanish, Italian), light and
   dark themes, and a tooltip on every control.
-- **Roles and identities**: viewer, operator and admin, denied by default,
-  and actions carried out on the cluster under each operator's own
-  identity.
+- **Sign-in, roles and identities**: sign-in is required, with a console
+  account or through Rancher, where each person acts with the rights
+  Rancher gives them. Viewer, operator and admin roles, denied by default;
+  Rancher projects, quotas and members managed from the console.
 
 ### Automation made simple
 
@@ -61,6 +68,11 @@ recorded, whether it was made from the console or somewhere else.
   throughput and time left, with a speed choice that says what it costs.
   An archive is downloaded from the window that made it, and added to
   another console's store from the browser, checked before it is kept.
+- **VMware migrations with Forklift**: the console installs Forklift on a
+  cluster, builds the VDDK image from VMware's archive and pushes it to
+  your registry, connects vCenter servers (reusing those already declared
+  for VM imports) and shows their inventory, with the VMs that can move
+  warm. Warm migration waves, switchover and rollback come next.
 - **Node maintenance, guided**: a pre-check says which VMs will migrate,
   which would stop and what would hold the drain, then the drain is
   followed to the end.
@@ -68,8 +80,10 @@ recorded, whether it was made from the console or somewhere else.
   five back up, each one checked before the next, and only the VMs that
   were running come back.
 - **Infrastructure as code and provisioning**: saved Terraform
-  declarations and the Harvester provider installed from the console;
-  the Cluster API stack and its downstream RKE2 clusters; Harvester
+  declarations, each with its own state and a plan read before it is
+  applied, and the Harvester provider installed from the console; the
+  Cluster API stack, RKE2 clusters created from a window and services
+  deployed on them; Harvester
   installed on a blank machine over Redfish virtual media.
 - **Scriptable**: the power sequencing also runs from the command line,
   for pipelines and airgapped sites, and every operation has a dry run.
@@ -213,11 +227,12 @@ See [install](docs/en/install.md) and the
 
 ## Tested on real clusters
 
-Unit and browser tests run on every change (over 1,000 backend tests and
-200 browser tests). Each feature is also exercised on a real cluster
-before release: a single-node production cluster, and a three-node test
+Unit and browser tests run on every change (over 2,100 backend tests and
+390 browser tests). Each feature is also exercised on a real cluster
+before release: a single-node production cluster, a three-node test
 cluster for what needs several nodes (maintenance, migration, a full
-shutdown and startup). The clips above were filmed on that test cluster,
+shutdown and startup), a second test cluster for moves between clusters,
+and a nested VMware lab (ESXi and vCenter) for migrations. The clips above were filmed on that test cluster,
 and filming them found and fixed defects that no single-node cluster could
 show; the [changelog](CHANGELOG.md) tells each story.
 

@@ -8,7 +8,7 @@ courantes automatisées, chaque événement conservé.**
 
 [![Licence : Apache 2.0](https://img.shields.io/badge/Licence-Apache_2.0-blue.svg)](LICENSE)
 [![Version](https://img.shields.io/github/v/release/jniedergang/harvester-ops)](https://github.com/jniedergang/harvester-ops/releases/latest)
-[![Tests](https://img.shields.io/badge/tests-1230%2B_au_vert-green.svg)](tests/)
+[![Tests](https://img.shields.io/badge/tests-2500%2B_au_vert-green.svg)](tests/)
 
 > Projet libre et indépendant. Sans lien avec SUSE, ni approuvé ni pris en
 > charge par SUSE.
@@ -42,15 +42,24 @@ ailleurs.
   font tourner, les réseaux et ce qui y est raccordé, les classes de
   stockage, les volumes et la place réellement disponible sur chaque
   disque, les cartes réseau, agrégats et commutateurs virtuels.
+- **L'interface de Harvester, et plus.** Chaque menu de Harvester est là,
+  section par section : stockage, réseaux et VPC kube-ovn, add-ons,
+  sécurité, supervision et journaux, réglages avancés, périphériques
+  PCI/USB/SR-IOV, mises à jour et imports de VM, chacun avec création,
+  modification et suppression en fenêtres. Un
+  [tableau de parité](docs/fr/parite-harvester.md) le suit fonction par
+  fonction.
 - **Une console qui reste vivante** : les vues se rafraîchissent seules,
   les opérations longues affichent leurs étapes au fil de l'eau, consoles
   et éditeurs s'ouvrent en fenêtres rangées dans une barre, et la console
   VNC d'une VM peut être suivie par plusieurs personnes à la fois.
 - **Cinq langues** (anglais, français, allemand, espagnol, italien), thèmes
   clair et sombre, et une bulle d'aide sur chaque contrôle.
-- **Rôles et identités** : lecteur, opérateur et administrateur, tout est
-  refusé par défaut, et les actions sont portées sur le cluster sous
-  l'identité propre de chaque opérateur.
+- **Connexion, rôles et identités** : la connexion est obligatoire, par un
+  compte de la console ou par Rancher, où chacun agit avec les droits que
+  Rancher lui donne. Rôles lecteur, opérateur et administrateur, tout est
+  refusé par défaut ; projets, quotas et membres Rancher gérés depuis la
+  console.
 
 ### L'automatisation simplifiée
 
@@ -67,6 +76,12 @@ ailleurs.
   qui dit ce qu'il coûte. Une archive se télécharge depuis la fenêtre qui
   l'a produite, et se dépose dans le magasin d'une autre console depuis le
   navigateur, vérifiée avant d'être gardée.
+- **Migrations VMware par Forklift** : la console installe Forklift sur un
+  cluster, construit l'image VDDK depuis l'archive de VMware et la pousse
+  dans votre registre, raccorde les serveurs vCenter (en reprenant ceux
+  déjà déclarés pour les imports de VM) et montre leur inventaire, avec les
+  VMs qui peuvent partir à chaud. Les vagues de migration à chaud, la
+  bascule et le retour arrière viennent ensuite.
 - **Maintenance des nœuds, guidée** : un pré-contrôle dit quelles VMs
   migreront, lesquelles s'arrêteraient et ce qui bloquerait la vidange,
   puis la vidange est suivie jusqu'au bout.
@@ -74,8 +89,10 @@ ailleurs.
   l'arrêt, cinq au démarrage, chacune vérifiée avant la suivante, et seules
   les VMs qui tournaient reviennent.
 - **Infrastructure en code et provisionnement** : déclarations Terraform
-  sauvegardées et fournisseur Harvester installé depuis la console ; la
-  pile Cluster API et ses clusters RKE2 en aval ; Harvester installé sur
+  gardées par la console, chacune avec son état et un plan lu avant
+  d'appliquer, et fournisseur Harvester installé depuis la console ; la
+  pile Cluster API, des clusters RKE2 créés depuis une fenêtre et les
+  services qu'on y déploie ; Harvester installé sur
   une machine vierge par média virtuel Redfish.
 - **Scriptable** : le séquençage électrique s'exécute aussi en ligne de
   commande, pour les chaînes d'automatisation et les sites hors ligne, et
@@ -228,10 +245,12 @@ Voir [l'installation](docs/fr/installation.md) et la
 ## Testé sur de vrais clusters
 
 Les tests unitaires et navigateur tournent à chaque modification (plus de
-1 000 tests côté serveur et 200 dans le navigateur). Chaque fonctionnalité
+2 100 tests côté serveur et 390 dans le navigateur). Chaque fonctionnalité
 est aussi exercée sur un vrai cluster avant d'être livrée : un cluster de
-production à un nœud, et un cluster d'essai à trois nœuds pour ce qui en
-demande plusieurs (maintenance, migration, arrêt et redémarrage complets).
+production à un nœud, un cluster d'essai à trois nœuds pour ce qui en
+demande plusieurs (maintenance, migration, arrêt et redémarrage complets),
+un second cluster d'essai pour les déplacements entre clusters, et un banc
+VMware imbriqué (ESXi et vCenter) pour les migrations.
 Les vidéos ci-dessus ont été tournées sur ce cluster d'essai, et leur
 tournage a trouvé et corrigé des défauts qu'aucun cluster à un nœud ne
 pouvait montrer ; le [journal des versions](CHANGELOG.md) raconte chacun

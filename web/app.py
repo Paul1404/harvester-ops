@@ -13622,6 +13622,13 @@ def api_forklift(cluster):
              # v1.76.0 : vagues à chaud (Préparation étendue, onglet Vagues)
              "cdi_deploy": (_hf.K_DEPLOY, _hf.CDI_OPERATOR[1], "-n", _hf.CDI_OPERATOR[0]),
              "migrations": (_hf.K_MIGRATION, "-A")}
+    # ?targets=1 (onglet Vagues seulement) : les destinations d'une vague,
+    # réseaux de VM, classes de stockage et namespaces ; trois lectures de
+    # plus que la Préparation n'a pas à payer toutes les 10 s
+    targets = request.args.get("targets") == "1"
+    if targets:
+        reads.update({"nads": ("network-attachment-definitions.k8s.cni.cncf.io", "-A"),
+                      "classes": ("storageclasses",), "namespaces": ("namespaces",)})
     with ThreadPoolExecutor(max_workers=len(reads)) as pool:
         futs = {k: pool.submit(_kubectl_json, kc, "get", *a, timeout=30, cluster=cluster) for k, a in reads.items()}
         got = {k: f.result() for k, f in futs.items()}
@@ -13643,7 +13650,9 @@ def api_forklift(cluster):
                           "managed": (m.get("labels") or {}).get(_hf.L_MANAGED) == "true"})
     waves = sorted((_hf.wave_state(p, items("migrations")) for p in items("plans") if _fk_is_wave(p)),
                    key=lambda w: w["name"] or "")
+    extra = _fk_wave_targets(items("nads"), items("classes"), items("namespaces")) if targets else {}
     return jsonify({
+        **extra,
         "cluster": cluster,
         "install": _hf.install_state(addon, by_name("deploys"), got["controller"], by_name("cm_deploys"),
                                      got["inv_sa"]),
@@ -13662,6 +13671,22 @@ def api_forklift(cluster):
         "precopy_interval": _hf.precopy_interval(got["controller"]),
         "waves": waves,
     })
+
+
+def _fk_wave_targets(nads, classes, namespaces):
+    """Où une vague peut poser ses VMs : réseaux de VM (`<ns>/<nom>`),
+    classes de stockage hors classes internes de Harvester, la classe par
+    défaut, les namespaces (même lecture que l'onglet VM Import)."""
+    meta = lambda o: o.get("metadata") or {}  # noqa: E731
+    return {
+        "nads": sorted(f"{meta(n).get('namespace')}/{meta(n).get('name')}" for n in nads),
+        "classes": sorted(meta(c).get("name") for c in classes
+                          if (c.get("parameters") or {}).get("harvesterhci.io/isInternalStorageClass") != "true"),
+        "default_class": next((meta(c).get("name") for c in classes
+                               if (meta(c).get("annotations") or {})
+                               .get("storageclass.kubernetes.io/is-default-class") == "true"), ""),
+        "namespaces": sorted(meta(n).get("name") for n in namespaces),
+    }
 
 
 def _fk_is_wave(plan):

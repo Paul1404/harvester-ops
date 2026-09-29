@@ -5123,6 +5123,9 @@ td.tpl-acts .btn + .btn { margin-left: 4px; }
 .fk-precopy { border: 1px solid var(--border); border-radius: 8px; padding: 10px 12px; margin-bottom: 10px; }
 .fk-reason span { white-space: nowrap; }
 td.fk-reason { max-width: 260px; white-space: normal; }
+.fk-wave-vms { margin: 4px 0; padding-left: 18px; }
+.fk-when { white-space: nowrap; }
+[data-fk="follow-table"] progress { width: 90px; vertical-align: middle; }
 /* v1.72.0 : projets Rancher dans la fenêtre Namespaces */
 .nsw-tabs { margin-bottom: 8px; }
 .pj-qrow { display: grid; grid-template-columns: 1.2fr 1fr 1fr auto; gap: 6px; margin-bottom: 6px; align-items: center; }

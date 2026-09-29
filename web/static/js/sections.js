@@ -31,7 +31,9 @@ const Sections = (() => {
                                            openstack: { mod: 'VMImport' }, ova: { mod: 'VMImport' } } },
     // v1.75.0 : migrations VMware par Forklift
     forklift: { first: 'prep', panes: { prep: { mod: 'Forklift' }, sources: { mod: 'Forklift' },
-                                        inventory: { mod: 'Forklift' } } },
+                                        inventory: { mod: 'Forklift' },
+                                        // v1.76.0 : vagues à chaud
+                                        waves: { mod: 'Forklift' } } },
     // v1.67.0 : le menu Advanced de Harvester (réglages, paquet de support, kubeconfigs)
     advanced: { first: 'settings', panes: { settings: { mod: 'Advanced' },
                                             // v1.68.0 : les périphériques de Harvester

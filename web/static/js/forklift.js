@@ -9,7 +9,10 @@
  *   modification en fenêtre (un vCenter de VM Import se reprend sans
  *   ressaisir son mot de passe, lu par le serveur) ;
  * - Inventaire : ce que Forklift voit d'un vCenter, avec la raison de refus
- *   par VM (CBT, outils VMware) et une sélection pour composer une vague.
+ *   par VM (CBT, outils VMware) et une sélection pour composer une vague ;
+ * - Vagues : un bloc par vague avec ses gestes selon l'état (lancer,
+ *   basculer maintenant ou à une date, revenir à la source, clore,
+ *   supprimer), la fenêtre de composition et la fenêtre de suivi.
  * Toute écriture passe par l'outil harvester-forklift, en action suivie.
  */
 const Forklift = (() => {
@@ -22,7 +25,7 @@ const Forklift = (() => {
   const badge = (cls, text, tip) =>
     `<span class="badge ${cls}${tip ? ' tip' : ''}"${tip ? ` data-tip="${esc(tip)}"` : ''}>${esc(text)}</span>`;
   const REFRESH_MS = 10000;
-  const KINDS = ['prep', 'sources', 'inventory'];
+  const KINDS = ['prep', 'sources', 'inventory', 'waves'];
   const size = (n) => {
     if (!n) return '–';
     const u = ['B', 'KiB', 'MiB', 'GiB', 'TiB'];
@@ -62,7 +65,9 @@ const Forklift = (() => {
     cur = { cluster, host, kind, data: null, store: null, dirty: new Set(), uploading: false, uploadNote: '' };
     // v1.75.0 : le bouton « Ajouter un vCenter » n'a sa place que sur l'onglet Sources
     const newBtn = kind === 'sources'
-      ? `<button type="button" class="btn btn-sm btn-primary tip needs-admin" data-fk="new-source" data-tip="${esc(tr('fk.t.newSource'))}">${icon('add')} ${esc(tr('fk.newSource'))}</button>` : '';
+      ? `<button type="button" class="btn btn-sm btn-primary tip needs-admin" data-fk="new-source" data-tip="${esc(tr('fk.t.newSource'))}">${icon('add')} ${esc(tr('fk.newSource'))}</button>`
+      : kind === 'waves'
+        ? `<button type="button" class="btn btn-sm btn-primary tip needs-admin" data-fk="waves-compose" data-tip="${esc(tr('fk.t.wavesCompose'))}">${icon('build')} ${esc(tr('fk.composeWave'))}</button>` : '';
     host.innerHTML = `<div class="card na-card fk-card">
         <div class="res-tools"><span class="res-count"></span>${newBtn}
           <button type="button" class="btn btn-sm btn-secondary tip" data-fk="refresh" data-tip="${esc(tr('res.refreshTip'))}">${icon('refresh')} ${esc(tr('overview.refresh'))}</button>
@@ -93,7 +98,8 @@ const Forklift = (() => {
   async function load() {
     if (!cur) return;
     const c = cur;
-    const [d, store] = await Promise.all([getJSON(`/api/forklift/${enc(c.cluster)}`),
+    // l'onglet Vagues lit aussi les destinations (réseaux, classes, namespaces)
+    const [d, store] = await Promise.all([getJSON(`/api/forklift/${enc(c.cluster)}${c.kind === 'waves' ? '?targets=1' : ''}`),
                                           c.kind === 'prep' ? getJSON('/api/forklift-vddk') : Promise.resolve(c.store)]);
     if (c !== cur) return;
     // une saisie ou un envoi en cours : un aléa de la relecture de fond
@@ -102,6 +108,7 @@ const Forklift = (() => {
     c.data = d;
     c.store = store;
     render();
+    if (d && !d.error && !d.unreachable) paintFollows(c.cluster, d);
   }
 
   function render() {
@@ -138,6 +145,7 @@ const Forklift = (() => {
         body.innerHTML = steps.one + steps.cdi + steps.vddk + steps.sources + steps.precopy;
       }
     } else if (cur.kind === 'sources') body.innerHTML = sourcesView(d);   // U4
+    else if (cur.kind === 'waves') { body.innerHTML = wavesView(d); tick(); }   // W6
     else inventoryView(body, d);                                        // U4
   }
 
@@ -395,7 +403,6 @@ const Forklift = (() => {
     // une source hors « forklift » se distingue dans la liste (deux vCenters
     // peuvent porter le même nom dans des namespaces différents)
     const srcOpts = ready.map(p => [`${p.namespace}/${p.name}`, p.namespace === 'forklift' ? p.name : `${p.name} (${p.namespace})`]);
-    const canCompose = !!(window.Forklift && typeof Forklift.composeWave === 'function');
     body.innerHTML = `<div class="fk-inv-tools">
         ${field('source', tr('fk.inv.source'), `<select name="source">${opts(srcOpts, `${s.namespace}/${s.source}`)}</select>`, tr('fk.t.invSource'))}
         <div class="sub-tabs sub-tabs-inline">${INV_KINDS.map(k => `<button type="button" class="sub-tab tip ${k === s.kind ? 'active' : ''}" data-fk="inv-kind" data-kind="${k}" data-tip="${esc(INV_TIP[k]())}">${esc(INV_LABEL[k]())}</button>`).join('')}</div>
@@ -403,8 +410,8 @@ const Forklift = (() => {
         ${s.kind === 'vms' ? `<label class="fk-check tip" data-tip="${esc(tr('fk.t.warmOnly'))}"><input type="checkbox" name="warm_only" ${s.warm ? 'checked' : ''}> ${esc(tr('fk.warmOnly'))}</label>` : ''}
         <button type="button" class="btn btn-sm btn-secondary tip" data-fk="inv-refresh" data-tip="${esc(tr('fk.t.invRefresh'))}">${icon('refresh')}</button>
         ${s.kind === 'vms' ? `<span class="form-hint" data-fk="inv-selected-count">${esc(tr('fk.inv.selected', { n: s.selected.size }))}</span>
-        <button type="button" class="btn btn-sm btn-primary tip" data-fk="compose-wave" ${(canCompose && s.selected.size) ? '' : 'disabled'}
-          data-tip="${esc(!canCompose ? tr('fk.t.composeSoon') : (s.selected.size ? tr('fk.t.composeWave') : tr('fk.t.composeNone')))}">${icon('build')} ${esc(tr('fk.composeWave'))}</button>` : ''}
+        <button type="button" class="btn btn-sm btn-primary tip needs-admin" data-fk="compose-wave" ${s.selected.size ? '' : 'disabled'}
+          data-tip="${esc(s.selected.size ? tr('fk.t.composeWave') : tr('fk.t.composeNone'))}">${icon('build')} ${esc(tr('fk.composeWave'))}</button>` : ''}
       </div><div data-fk="inv-out"><p class="form-hint">${esc(tr('common.loading'))}</p></div>`;
     const c = cur;
     // jeton de requête : changer de source ou de sorte pendant qu'une
@@ -430,9 +437,8 @@ const Forklift = (() => {
     if (!count || !btn) return;
     const n = (lastInv.selected && lastInv.selected.size) || 0;
     count.textContent = tr('fk.inv.selected', { n });
-    const canCompose = !!(window.Forklift && typeof Forklift.composeWave === 'function');
-    btn.disabled = !(canCompose && n);
-    btn.setAttribute('data-tip', canCompose ? (n ? tr('fk.t.composeWave') : tr('fk.t.composeNone')) : tr('fk.t.composeSoon'));
+    btn.disabled = !n;
+    btn.setAttribute('data-tip', n ? tr('fk.t.composeWave') : tr('fk.t.composeNone'));
   }
 
   function paintInventory() {
@@ -484,6 +490,325 @@ const Forklift = (() => {
               ? `<span class="tip" data-tip="${esc(blockers.join('\n'))}">${icon('warn', 12)} ${esc(blockers.join('; '))}</span>`
               : `<span class="tip" data-tip="${esc(tr('fk.t.eligibleYes'))}">${icon('ok', 12)} ${esc(tr('fk.inv.eligibleYes'))}</span>`}</td></tr>`;
       }).join('')}</tbody></table>`;
+  }
+
+  // -- Vagues (W6) ------------------------------------------------------------
+  // Clés en toutes lettres : le contrôle de parité ne lit que des littéraux.
+  const WAVE_STATE = {
+    ready: ['info', () => tr('fk.w.st.ready')], pending: ['warn', () => tr('fk.w.st.pending')],
+    invalid: ['fail', () => tr('fk.w.st.invalid')], copying: ['info', () => tr('fk.w.st.copying')],
+    'cutover-scheduled': ['warn', () => tr('fk.w.st.cutoverScheduled')],
+    'cutting-over': ['warn', () => tr('fk.w.st.cuttingOver')], succeeded: ['ok', () => tr('fk.w.st.succeeded')],
+    failed: ['fail', () => tr('fk.w.st.failed')], 'rolled-back': ['warn', () => tr('fk.w.st.rolledBack')],
+    closed: ['', () => tr('fk.w.st.closed')],
+  };
+  const stateBadge = (w) => {
+    const [cls, label] = WAVE_STATE[w.state] || ['warn', () => w.state];
+    return `<span data-fk-state="${esc(w.state)}">${badge(cls, label(), w.message || '')}</span>`;
+  };
+  // une migration tourne : ni clôture ni suppression (l'outil refuse aussi)
+  const RUNNING = ['copying', 'cutover-scheduled', 'cutting-over'];
+  // même liste que ROLLBACK_STATES de l'outil, moins la vague déjà revenue
+  const ROLLBACK = ['succeeded', 'failed'];
+
+  const fmtDur = (sec) => {
+    const s = Math.max(0, Math.round(sec));
+    const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), r = s % 60;
+    if (h) return `${h} h ${String(m).padStart(2, '0')} min`;
+    if (m) return `${m} min ${String(r).padStart(2, '0')} s`;
+    return `${r} s`;
+  };
+  const fmtWhen = (iso) => {
+    const t = Date.parse(iso || '');
+    return Number.isFinite(t) ? new Date(t).toLocaleString() : '';
+  };
+  /** Un instant à venir, avec son compte à rebours (tenu à jour par tick). */
+  const countdown = (iso) => `<span class="fk-when">${esc(fmtWhen(iso))} (<span data-fk-at="${esc(iso)}">${esc(left(iso))}</span>)</span>`;
+  function left(iso) {
+    const ms = Date.parse(iso || '') - Date.now();
+    return ms > 0 ? tr('fk.w.in', { left: fmtDur(ms / 1000) }) : tr('fk.w.due');
+  }
+  let ticker = null;
+  /** Les comptes à rebours visibles, une fois par seconde, tant qu'il y en a. */
+  function tick() {
+    const els = document.querySelectorAll('[data-fk-at]');
+    els.forEach((el) => { el.textContent = left(el.dataset.fkAt); });
+    if (!els.length && ticker) { clearInterval(ticker); ticker = null; }
+    else if (els.length && !ticker) ticker = setInterval(tick, 1000);
+  }
+
+  /** Les deux erreurs connues de Forklift, avec leur remède (le texte de
+   *  Forklift reste montré tel quel à côté). */
+  function errorHint(msg) {
+    if (/vddk|nbdkit/i.test(msg || '')) return tr('fk.w.hintVddk');
+    if (/VMware Tools is not running/i.test(msg || '')) return tr('fk.w.hintTools');
+    return '';
+  }
+  const errorHtml = (msg) => {
+    if (!msg) return '';
+    const hint = errorHint(msg);
+    return `<div class="res-error" data-fk-error>${esc(msg)}</div>${hint ? `<div class="form-hint" data-fk-hint>${icon('info', 12)} ${esc(hint)}</div>` : ''}`;
+  };
+
+  function waveButtons(w) {
+    const btn = (act, cls, ic, label, tip) => `<button type="button" class="btn btn-sm ${cls} tip${act === 'wave-follow' ? '' : ' needs-admin'}" data-fk="${act}" data-wave="${esc(w.name)}" data-tip="${esc(tip)}">${icon(ic)} ${esc(label)}</button>`;
+    const out = [btn('wave-follow', 'btn-secondary', 'activity', tr('fk.w.follow'), tr('fk.t.wFollow'))];
+    if (w.state === 'ready' || w.state === 'failed') out.push(btn('wave-start', 'btn-primary', 'play', tr('fk.w.start'), tr('fk.t.wStart')));
+    if (w.state === 'copying' || w.state === 'cutover-scheduled') {
+      out.push(btn('wave-cutover', 'btn-primary', 'switch', tr('fk.w.cutoverNow'), tr('fk.t.wCutoverNow')));
+      out.push(btn('wave-schedule', 'btn-secondary', 'timer', tr('fk.w.schedule'), tr('fk.t.wSchedule')));
+    }
+    if (ROLLBACK.includes(w.state)) out.push(btn('wave-rollback', 'btn-danger', 'undo', tr('fk.w.rollback'), tr('fk.t.wRollback')));
+    if (!RUNNING.includes(w.state) && w.state !== 'closed') out.push(btn('wave-close', 'btn-secondary', 'clean', tr('fk.w.close'), tr('fk.t.wClose')));
+    if (!RUNNING.includes(w.state)) out.push(btn('wave-delete', 'btn-danger', 'trash', tr('fk.w.delete'), tr('fk.t.wDelete')));
+    return out.join('');
+  }
+
+  function wavesView(d) {
+    if (!d.install.ready) {
+      return `<div class="sto-finding sev-action"><div class="sto-finding-title">${icon('warn')} ${esc(tr('fk.needInstall'))}</div>
+        <button type="button" class="btn btn-sm btn-secondary tip" data-fk="goto-prep" data-tip="${esc(tr('fk.t.gotoPrep'))}">${icon('settings')} ${esc(tr('section.fkPrep'))}</button></div>`;
+    }
+    const waves = d.waves || [];
+    cur.host.querySelector('.res-count').textContent = tr('fk.w.count', { n: waves.length });
+    if (!waves.length) {
+      return `<p class="form-hint">${esc(tr('fk.w.none'))}</p>
+        <button type="button" class="btn btn-sm btn-secondary tip" data-fk="goto-inventory" data-tip="${esc(tr('fk.t.inventory'))}">${icon('general')} ${esc(tr('section.fkInventory'))}</button>`;
+    }
+    return `<div class="fk-sources">${waves.map(w => `<div class="fk-source" data-fk-wave="${esc(w.name)}">
+        <div class="fk-step-head"><b>${esc(w.name)}</b> ${stateBadge(w)}</div>
+        <div class="form-hint">${esc(tr('fk.w.target', { ns: w.target_namespace }))} · ${esc(tr('fk.w.vms', { n: (w.vms || []).length }))}</div>
+        ${w.next_precopy ? `<div class="form-hint" data-fk="wave-next">${esc(tr('fk.w.nextCopy'))} ${countdown(w.next_precopy)}</div>` : ''}
+        ${w.state === 'cutover-scheduled' && w.cutover ? `<div class="form-hint" data-fk="wave-cutover-at">${esc(tr('fk.w.cutoverAt'))} ${countdown(w.cutover)}</div>` : ''}
+        ${w.message ? errorHtml(w.message) : ''}
+        <div class="fk-source-actions">${waveButtons(w)}</div></div>`).join('')}</div>`;
+  }
+
+  /** Les gestes d'une vague, confirmés quand ils touchent aux VMs. */
+  function waveAction(act, w, cluster) {
+    const wave = w.name;
+    if (act === 'wave-follow') return followWave(cluster, wave);
+    if (act === 'wave-start') return post('wave-start', { wave }, tr('fk.done.waveStart', { wave }), null, cluster);
+    if (act === 'wave-cutover') {
+      if (!confirm(tr('fk.confirm.cutover', { wave }))) return;
+      return post('wave-cutover', { wave }, tr('fk.done.cutover', { wave }), null, cluster);
+    }
+    if (act === 'wave-schedule') return scheduleForm(cluster, w);
+    if (act === 'wave-rollback') {
+      if (!confirm(tr('fk.confirm.rollback', { wave }))) return;
+      return post('wave-rollback', { wave }, tr('fk.done.rollback', { wave }), null, cluster);
+    }
+    if (act === 'wave-close') return closeForm(cluster, w);
+    if (act === 'wave-delete') {
+      if (!confirm(tr('fk.confirm.delete', { wave }))) return;
+      return post('wave-delete', { wave }, tr('fk.done.waveDelete', { wave }), null, cluster);
+    }
+  }
+
+  function scheduleForm(cluster, w) {
+    const wave = w.name;
+    // valeur proposée : la bascule déjà prévue, sinon dans une heure (heure locale)
+    const at = new Date(Date.parse(w.cutover || '') || Date.now() + 3600e3);
+    const local = new Date(at.getTime() - at.getTimezoneOffset() * 60e3).toISOString().slice(0, 16);
+    const form = win(cluster, `fk-wave-sched-${cluster}-${wave}`, tr('fk.w.scheduleTitle', { wave }),
+      `<p class="form-hint">${esc(tr('fk.w.scheduleHint'))}</p>
+       ${field('at', tr('fk.f.cutoverAt'), `<input name="at" type="datetime-local" required value="${esc(local)}">`, tr('fk.t.cutoverAt'))}`,
+      320, [tr('fk.w.scheduleSubmit'), tr('fk.t.wSchedule')]);
+    if (form.dataset.fkBound) return;
+    form.dataset.fkBound = '1';
+    form.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const msg = form.querySelector('.of-msg');
+      const t = Date.parse(form.querySelector('[name="at"]').value);   // heure locale du navigateur
+      if (!Number.isFinite(t)) { msg.innerHTML = `<span class="res-error">${esc(tr('fk.w.needTime'))}</span>`; return; }
+      const iso = new Date(t).toISOString().replace(/\.\d{3}Z$/, 'Z');
+      if (!confirm(tr('fk.confirm.cutoverAt', { wave, when: new Date(t).toLocaleString() }))) return;
+      await post('wave-cutover', { wave, at: iso }, tr('fk.done.cutover', { wave }), msg, cluster);
+    });
+  }
+
+  function closeForm(cluster, w) {
+    const wave = w.name;
+    const form = win(cluster, `fk-wave-close-${cluster}-${wave}`, tr('fk.w.closeTitle', { wave }),
+      `<p class="form-hint">${esc(tr('fk.w.closeHint'))}</p>
+       <label class="fk-check tip" data-tip="${esc(tr('fk.t.cleanSnapshots'))}"><input type="checkbox" name="clean_snapshots" checked> ${esc(tr('fk.w.cleanSnapshots'))}</label>`,
+      300, [tr('fk.w.closeSubmit'), tr('fk.t.wClose')]);
+    if (form.dataset.fkBound) return;
+    form.dataset.fkBound = '1';
+    form.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const clean = form.querySelector('[name="clean_snapshots"]').checked;
+      await post('wave-close', { wave, clean_snapshots: clean }, tr('fk.done.close', { wave }), form.querySelector('.of-msg'), cluster);
+    });
+  }
+
+  // -- Suivi d'une vague (fenêtre) -------------------------------------------------
+  const follows = new Map();   // `${cluster}/${wave}` -> { panel, cluster, wave, timer }
+
+  function followBody(w) {
+    if (!w) return `<p class="form-hint" data-fk-gone>${esc(tr('fk.w.gone'))}</p>`;
+    const canRollback = ROLLBACK.includes(w.state);
+    const rows = (w.vms || []).map((v) => {
+      const p = v.progress || { done: 0, total: 0 };
+      const pct = p.total ? Math.floor(100 * p.done / p.total) : 0;
+      const last = v.last_precopy && v.last_precopy.seconds != null ? fmtDur(v.last_precopy.seconds) : '–';
+      return `<tr data-fk-vm="${esc(v.id)}">
+        <td class="tip" data-tip="${esc(v.id)}">${esc(v.name || v.id)}${v.rolled_back ? ` ${badge('warn', tr('fk.w.rolledBack'))}` : ''}</td>
+        <td class="tip" data-tip="${esc(v.step_name || '')}">${esc(v.step || v.phase || '–')}</td>
+        <td><progress class="tip" max="${esc(p.total || 1)}" value="${esc(p.done)}" data-tip="${esc(`${p.done} / ${p.total}`)}"></progress> <span data-fk="vm-pct">${pct} %</span></td>
+        <td data-fk="vm-copies">${esc(v.precopies)}</td>
+        <td data-fk="vm-last">${esc(last)}</td>
+        <td data-fk="vm-next">${v.next_precopy ? countdown(v.next_precopy) : '–'}</td>
+        <td>${errorHtml(v.error)}${canRollback && !v.rolled_back
+          ? `<button type="button" class="btn btn-sm btn-danger tip needs-admin" data-fk-vm-rollback="${esc(v.id)}" data-name="${esc(v.name || v.id)}" data-tip="${esc(tr('fk.t.wRollbackVm'))}">${icon('undo')} ${esc(tr('fk.w.rollbackVm'))}</button>` : ''}</td></tr>`;
+    }).join('');
+    return `<div class="fk-step-head">${stateBadge(w)} <span class="form-hint">${esc(tr('fk.w.target', { ns: w.target_namespace }))}</span></div>
+      ${w.state === 'cutover-scheduled' && w.cutover ? `<p class="form-hint" data-fk="follow-cutover">${esc(tr('fk.w.cutoverAt'))} ${countdown(w.cutover)}</p>` : ''}
+      ${w.message ? errorHtml(w.message) : ''}
+      <table class="data-table res-table" data-fk="follow-table"><thead><tr>
+        <th>${esc(tr('fk.w.col.vm'))}</th><th>${esc(tr('fk.w.col.step'))}</th><th>${esc(tr('fk.w.col.progress'))}</th>
+        <th>${esc(tr('fk.w.col.copies'))}</th><th>${esc(tr('fk.w.col.lastCopy'))}</th><th>${esc(tr('fk.w.col.nextCopy'))}</th>
+        <th>${esc(tr('fk.w.col.error'))}</th></tr></thead><tbody>${rows}</tbody></table>`;
+  }
+
+  function paintFollow(f, d) {
+    if (!f.panel.el.isConnected) return;
+    const w = (d.waves || []).find(x => x.name === f.wave);
+    f.wave_state = w;
+    // seul le contenu se redessine : la ligne d'une action suivie reste en place
+    const box = f.panel.body.querySelector('[data-fk="follow-content"]');
+    if (box) box.innerHTML = followBody(w);
+    tick();
+  }
+
+  /** Relecture d'un onglet : les fenêtres de suivi de ce cluster en profitent. */
+  function paintFollows(cluster, d) {
+    follows.forEach((f) => { if (f.cluster === cluster) paintFollow(f, d); });
+  }
+
+  function followWave(cluster, wave) {
+    const key = `${cluster}/${wave}`;
+    const had = follows.get(key);
+    const panel = FloatingPanels.open({ id: `fk-wave-follow-${cluster}-${wave}`, icon: 'general', width: 900, height: 460,
+      title: `${tr('fk.w.followTitle', { wave })} · ${cluster}`,
+      bodyHtml: `<div data-fk="follow-content"><p class="form-hint">${esc(tr('common.loading'))}</p></div>
+        <div class="of-msg" role="status" data-fk="follow-msg"></div>`,
+      onClose: () => { const f = follows.get(key); if (f) clearInterval(f.timer); follows.delete(key); } });
+    if (had && had.panel.el.isConnected) return had;
+    const f = { panel, cluster, wave, wave_state: null };
+    follows.set(key, f);
+    panel.body.addEventListener('click', (e) => {
+      const b = e.target.closest('[data-fk-vm-rollback]');
+      if (!b) return;
+      const vm = b.dataset.name;
+      if (!confirm(tr('fk.confirm.rollbackVm', { vm, wave }))) return;
+      post('wave-rollback', { wave, vms: [b.dataset.fkVmRollback] }, tr('fk.done.rollbackVm', { vm }),
+           panel.body.querySelector('[data-fk="follow-msg"]'), cluster);
+    });
+    const refresh = async () => {
+      if (!panel.el.isConnected) { clearInterval(f.timer); follows.delete(key); return; }
+      // l'onglet de ce cluster relit déjà : il nourrit la fenêtre (paintFollows)
+      if (cur && cur.cluster === cluster && cur.kind !== 'inventory' && cur.host.isConnected
+          && !cur.host.closest('[hidden]') && cur.data) return;
+      const d = await getJSON(`/api/forklift/${enc(cluster)}`);
+      if (d && !d.error && !d.unreachable) paintFollow(f, d);
+    };
+    f.timer = setInterval(refresh, REFRESH_MS);
+    const known = cur && cur.cluster === cluster && cur.data && !cur.data.error && !cur.data.unreachable ? cur.data : null;
+    if (known) paintFollow(f, known);
+    else getJSON(`/api/forklift/${enc(cluster)}`).then((d) => { if (d && !d.error && !d.unreachable) paintFollow(f, d); });
+    return f;
+  }
+
+  // -- Composer une vague (fenêtre) ------------------------------------------------
+  const LINUX_RE = /linux|debian|ubuntu|centos|red ?hat|rhel|suse|sles|rocky|alma|fedora/i;
+  const WINDOWS_RE = /windows/i;
+
+  /** Les VMs cochées dans l'inventaire -> fenêtre de composition : réseaux
+   *  et datastores de ces VMs, chacun vers une destination du cluster. */
+  async function composeWave(vms) {
+    if (!vms || !vms.length || !cur) return;
+    const cluster = cur.cluster;
+    const { source, namespace } = vms[0];
+    const panelId = `fk-wave-new-${cluster}`;
+    const form = win(cluster, panelId, tr('fk.w.composeTitle'), `<div data-fk="compose-body"><p class="form-hint">${esc(tr('common.loading'))}</p></div>`,
+      680, [tr('fk.w.composeSubmit'), tr('fk.t.composeSubmit')]);
+    const inv = (kind) => call('GET', `/api/forklift/${enc(cluster)}/inventory/${enc(source)}/${kind}?namespace=${enc(namespace)}`)
+      .then(r => r.rows || []).catch(() => []);
+    const [targets, nets, stores] = await Promise.all([getJSON(`/api/forklift/${enc(cluster)}?targets=1`), inv('networks'), inv('datastores')]);
+    if (!form.isConnected) return;
+    const box = form.querySelector('[data-fk="compose-body"]');
+    if (!targets || targets.error || targets.unreachable) {
+      box.innerHTML = `<p class="res-error">${esc((targets && targets.error) || tr('fabric.unreachable'))}</p>`;
+      return;
+    }
+    const netName = Object.fromEntries(nets.map(n => [n.id, n.name]));
+    const stoName = Object.fromEntries(stores.map(s => [s.id, s.name]));
+    const netIds = [...new Set(vms.flatMap(v => v.networks || []))];
+    const stoIds = [...new Set(vms.flatMap(v => (v.disks || []).map(x => x.datastore).filter(Boolean)))];
+    const nads = targets.nads || [];
+    const classes = targets.classes || [];
+    const nsList = targets.namespaces || [];
+    // présélection : un réseau de VM qui porte le nom du réseau vCenter
+    const nadFor = (name) => nads.find(n => n.split('/')[1].toLowerCase() === String(name || '').toLowerCase()) || 'pod';
+    const linux = vms.every(v => LINUX_RE.test(v.guest || '') && !WINDOWS_RE.test(v.guest || ''));
+    const windows = vms.some(v => WINDOWS_RE.test(v.guest || ''));
+    const defNs = nsList.includes('default') ? 'default' : nsList[0] || '';
+    box.innerHTML = `<p class="form-hint">${esc(tr('fk.w.composeHint'))}</p>
+      ${field('name', tr('fk.f.waveName'), '<input name="name" required maxlength="40" pattern="[a-z0-9]([-a-z0-9]*[a-z0-9])?" placeholder="wave-1">', tr('fk.t.waveName'))}
+      ${field('target_namespace', tr('fk.f.targetNs'), `<select name="target_namespace">${opts(nsList, defNs)}</select>`, tr('fk.t.targetNs'))}
+      <fieldset class="fk-tls"><legend>${esc(tr('fk.w.selectedVms', { source }))}</legend>
+        <ul class="fk-wave-vms" data-fk="compose-vms">${vms.map(v => `<li data-vm-id="${esc(v.id)}">${esc(v.name)} <span class="form-hint">${esc(v.guest || '')}</span></li>`).join('')}</ul></fieldset>
+      <fieldset class="fk-tls"><legend>${esc(tr('fk.w.networks'))}</legend>
+        <p class="form-hint">${esc(tr('fk.w.networksHint'))}</p>
+        ${netIds.length ? netIds.map(id => field(`net-${id}`, netName[id] || id,
+          `<select data-fk-net="${esc(id)}"><option value="pod" ${nadFor(netName[id]) === 'pod' ? 'selected' : ''}>${esc(tr('fk.w.pod'))}</option>${opts(nads, nadFor(netName[id]))}</select>`,
+          tr('fk.t.netMap', { name: netName[id] || id }))).join('') : `<p class="form-hint">${esc(tr('fk.w.noNetwork'))}</p>`}
+      </fieldset>
+      <fieldset class="fk-tls"><legend>${esc(tr('fk.w.storages'))}</legend>
+        <p class="form-hint">${esc(tr('fk.w.storagesHint'))}</p>
+        ${stoIds.length ? stoIds.map(id => field(`sto-${id}`, stoName[id] || id,
+          `<select data-fk-sto="${esc(id)}">${opts(classes, targets.default_class || classes[0] || '')}</select>`,
+          tr('fk.t.stoMap', { name: stoName[id] || id }))).join('') : `<p class="form-hint">${esc(tr('fk.w.noStorage'))}</p>`}
+      </fieldset>
+      <fieldset class="fk-tls"><legend>${esc(tr('fk.w.options'))}</legend>
+        <label class="fk-check tip" data-tip="${esc(tr('fk.t.rawCopy'))}"><input type="checkbox" name="skip_conversion" ${linux ? 'checked' : ''}> ${esc(tr('fk.f.rawCopy'))}</label>
+        <p class="form-hint">${esc(tr('fk.w.rawCopyHint'))}</p>
+        ${linux ? `<p class="form-hint" data-fk="raw-linux">${icon('info', 12)} ${esc(tr('fk.w.rawCopyLinux'))}</p>` : ''}
+        ${windows ? `<p class="form-hint" data-fk="raw-windows">${icon('warn', 12)} ${esc(tr('fk.w.rawCopyWindows'))}</p>` : ''}
+        <label class="fk-check tip" data-tip="${esc(tr('fk.t.compatMode'))}"><input type="checkbox" name="compat_mode" ${linux ? '' : 'disabled'}> ${esc(tr('fk.f.compatMode'))}</label>
+        <label class="fk-check tip" data-tip="${esc(tr('fk.t.staticIps'))}"><input type="checkbox" name="preserve_static_ips"> ${esc(tr('fk.f.staticIps'))}</label>
+      </fieldset>`;
+    const raw = box.querySelector('[name="skip_conversion"]');
+    const compat = box.querySelector('[name="compat_mode"]');
+    raw.addEventListener('change', () => { compat.disabled = !raw.checked; if (!raw.checked) compat.checked = false; });
+    // la fenêtre rouverte avec d'autres VMs garde son écouteur : la source
+    // est relue sur le formulaire à l'envoi, jamais celle de la première ouverture
+    form.dataset.fkSource = source;
+    form.dataset.fkSourceNs = namespace;
+    if (form.dataset.fkBound) return;
+    form.dataset.fkBound = '1';
+    form.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const msg = form.querySelector('.of-msg');
+      const q = (sel) => form.querySelector(sel);
+      const spec = {
+        name: q('[name="name"]').value.trim(),
+        target_namespace: q('[name="target_namespace"]').value,
+        provider: { namespace: form.dataset.fkSourceNs, name: form.dataset.fkSource },
+        vms: [...form.querySelectorAll('[data-vm-id]')].map(li => li.dataset.vmId),
+        networks: [...form.querySelectorAll('[data-fk-net]')].map(s => ({ source: s.dataset.fkNet, destination: s.value })),
+        storages: [...form.querySelectorAll('[data-fk-sto]')].map(s => ({ source: s.dataset.fkSto, storage_class: s.value })),
+        skip_conversion: q('[name="skip_conversion"]').checked,
+        compat_mode: q('[name="compat_mode"]').checked,
+        preserve_static_ips: q('[name="preserve_static_ips"]').checked,
+      };
+      const out = await post('wave-apply', { spec }, tr('fk.done.waveApply', { wave: spec.name }), msg, cluster);
+      // des clusters injoignables n'ont pas pu dire s'ils tenaient déjà ces VMs
+      if (out && out.skipped && out.skipped.length) {
+        msg.insertAdjacentHTML('beforeend', `<div class="form-hint">${esc(tr('fk.w.skipped', { list: out.skipped.join(', ') }))}</div>`);
+      }
+    });
   }
 
   // -- Gestes -----------------------------------------------------------------
@@ -554,12 +879,15 @@ const Forklift = (() => {
     if (act === 'inv-source' && prov) return openInventory(name, prov.namespace);
     if (act === 'inv-kind') { lastInv.kind = b.dataset.kind; return render(); }
     if (act === 'inv-refresh') return render();
-    if (act === 'compose-wave') {
+    if (act === 'compose-wave' || act === 'waves-compose') {
       const vms = selectedVms();
-      if (!vms.length) return;
-      if (window.Forklift && typeof Forklift.composeWave === 'function') return Forklift.composeWave(vms);
-      return;
+      if (vms.length) return composeWave(vms);
+      // rien de coché : les VMs se choisissent dans l'inventaire
+      return Sections.open('forklift', 'inventory');
     }
+    if (act === 'goto-inventory') return Sections.open('forklift', 'inventory');
+    const wave = b.dataset.wave && (cur.data.waves || []).find(w => w.name === b.dataset.wave);
+    if (wave) return waveAction(act, wave, cur.cluster);
   }
 
   /** Une saisie dans un formulaire de la Préparation : VDDK (pas le choix
@@ -678,18 +1006,20 @@ const Forklift = (() => {
       const out = await call('POST', `/api/forklift/${enc(target)}/do/${action}`, body);
       follow(out.action_id, msg, doneText, () => { if (same()) setTimeout(load, 1500); });
       if (same()) setTimeout(load, 2500);
-      return true;
+      return out;
     } catch (err) {
       if (msg) msg.innerHTML = `<span class="res-error">${esc(err.message)}</span>`;
-      return false;
+      return null;
     }
   }
 
   // -- Fenêtres (posées ici pour U4 : sources vCenter) -------------------------
-  function win(cluster, id, title, bodyHtml, height = 640) {
+  function win(cluster, id, title, bodyHtml, height = 640, submit = null) {
+    // submit : [libellé, bulle] d'un bouton qui n'enregistre pas un objet
+    const [label, tip] = submit || [tr('na.save'), tr('bk.submitTip')];
     const panel = FloatingPanels.open({ id, icon: 'upload', width: 720, height, title: `${title} · ${cluster}`,
       bodyHtml: `<form class="of-form" autocomplete="off">${bodyHtml}
-        <div class="bk-form-actions"><button type="submit" class="btn btn-sm btn-primary tip" data-tip="${esc(tr('bk.submitTip'))}">${icon('ok')} ${esc(tr('na.save'))}</button></div>
+        <div class="bk-form-actions"><button type="submit" class="btn btn-sm btn-primary tip" data-tip="${esc(tip)}">${icon('ok')} ${esc(label)}</button></div>
         <div class="of-msg" role="status"></div></form>` });
     return panel.el.querySelector('.of-form');
   }
@@ -713,6 +1043,6 @@ const Forklift = (() => {
     });
   }
 
-  return { start, stop, openInventory, backgroundRefresh, selectedVms };
+  return { start, stop, openInventory, backgroundRefresh, selectedVms, composeWave };
 })();
 window.Forklift = Forklift;

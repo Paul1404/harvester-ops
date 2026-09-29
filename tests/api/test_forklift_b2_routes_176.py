@@ -162,6 +162,31 @@ def test_a_plan_without_the_console_labels_is_not_a_wave(world):
     assert [w["name"] for w in d["waves"]] == ["vague-a"]
 
 
+def test_the_wave_targets_are_read_only_when_asked(world):
+    """?targets=1 (onglet Vagues) : réseaux de VM, classes (hors internes),
+    classe par défaut et namespaces ; sans lui, aucune de ces lectures."""
+    objs = world["objs"]
+    objs[(KC_A, "network-attachment-definitions.k8s.cni.cncf.io", None, None)] = {"items": [
+        {"metadata": {"namespace": "mig-b2", "name": "vlan1"}},
+        {"metadata": {"namespace": "default", "name": "lab-net"}}]}
+    objs[(KC_A, "storageclasses", None, None)] = {"items": [
+        {"metadata": {"name": "harvester-longhorn",
+                      "annotations": {"storageclass.kubernetes.io/is-default-class": "true"}}},
+        {"metadata": {"name": "harv-rep1"}},
+        {"metadata": {"name": "vmstate-persistence"}, "parameters": {"harvesterhci.io/isInternalStorageClass": "true"}}]}
+    objs[(KC_A, "namespaces", None, None)] = {"items": [{"metadata": {"name": "default"}},
+                                                        {"metadata": {"name": "mig-b2"}}]}
+    with wapp.app.test_client() as c:
+        plain = c.get(f"/api/forklift/{CLUSTER_A}", headers=auth("eye")).get_json()
+        d = c.get(f"/api/forklift/{CLUSTER_A}?targets=1", headers=auth("eye")).get_json()
+    assert "nads" not in plain and "classes" not in plain and "namespaces" not in plain
+    assert d["nads"] == ["default/lab-net", "mig-b2/vlan1"]
+    assert d["classes"] == ["harv-rep1", "harvester-longhorn"]
+    assert d["default_class"] == "harvester-longhorn"
+    assert d["namespaces"] == ["default", "mig-b2"]
+    assert d["waves"][0]["name"] == "vague-a"
+
+
 # --- wave-apply : validation, provider, refus multi-cluster -----------------
 
 def test_wave_apply_validates_the_spec_before_touching_the_cluster(world):

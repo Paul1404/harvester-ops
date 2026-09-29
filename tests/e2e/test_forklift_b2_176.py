@@ -3,6 +3,10 @@ des copies incrémentales ; l'inventaire dit les outils VMware, pourquoi une
 VM ne peut pas migrer à chaud, et permet de la sélectionner."""
 
 import json
+import re
+import sys
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
 
 import pytest
 
@@ -60,7 +64,7 @@ def open_tab(context, flask_server, data, section="prep"):
     def writes(route, req):
         sent.append((req.url.split("://")[1].split("/", 1)[1], req.method, req.post_data_json if req.method == "POST" else None))
         fulfill(route, {"action_id": "fk0000000176"}, 202)
-    page.route("**/api/forklift/harv-fake", lambda r, q: fulfill(r, data() if callable(data) else data))
+    page.route(re.compile(r".*/api/forklift/harv-fake(\?.*)?$"), lambda r, q: fulfill(r, data() if callable(data) else data))
     page.route("**/api/forklift/harv-fake/do/**", writes)
     page.route("**/api/forklift-vddk", lambda r, q: fulfill(r, STORE))
     page.route("**/api/forklift/harv-fake/inventory/vmwlab/vms*", lambda r, q: fulfill(r, {"rows": VMS_ROWS}))
@@ -247,23 +251,10 @@ def test_selecting_vms_updates_the_count_and_selected_vms(context, flask_server)
     assert src == "vmwlab"
 
 
-def test_the_compose_wave_button_is_disabled_until_it_is_wired_by_the_waves_tab(context, flask_server):
-    """W5 : la fenêtre « Composer une vague » n'existe pas encore (W6). Le
-    bouton reste désactivé même avec une sélection, tant que
-    Forklift.composeWave n'est pas défini."""
-    page, _ = open_tab(context, flask_server, DATA, section="inventory")
-    page.evaluate("Forklift.openInventory('vmwlab')")
-    table = page.locator('#tab-forklift [data-fk="inv-table"]')
-    btn = page.locator('[data-fk="compose-wave"]')
-    expect(btn).to_be_disabled()
-    table.locator('tr[data-vm="vmwlab-src-1"] [data-fk="vm-select"]').check()
-    expect(btn).to_be_disabled()
-    assert "Waves" in (btn.get_attribute("data-tip") or "")
-
-
-def test_the_compose_wave_button_is_enabled_once_a_composer_exists(context, flask_server):
-    page, _ = open_tab(context, flask_server, DATA, section="inventory")
-    page.evaluate("window.Forklift.composeWave = () => { window.__composed = true; }")
+def test_the_compose_wave_button_opens_the_composer_once_a_vm_is_selected(context, flask_server):
+    """W6 : le bouton de l'inventaire ouvre la fenêtre « Composer une vague »
+    dès qu'une VM éligible est cochée."""
+    page, _ = open_tab(context, flask_server, DATA_T, section="inventory")
     page.evaluate("Forklift.openInventory('vmwlab')")
     table = page.locator('#tab-forklift [data-fk="inv-table"]')
     btn = page.locator('[data-fk="compose-wave"]')
@@ -271,8 +262,7 @@ def test_the_compose_wave_button_is_enabled_once_a_composer_exists(context, flas
     table.locator('tr[data-vm="vmwlab-src-1"] [data-fk="vm-select"]').check()
     expect(btn).to_be_enabled()
     btn.click()
-    assert page.evaluate("window.__composed") is True
-    page.evaluate("delete window.Forklift.composeWave; delete window.__composed;")
+    expect(page.locator("#fp-fk-wave-new-harv-fake [data-fk-net]")).to_have_count(1)
 
 
 def test_switching_source_resets_the_selection(context, flask_server):
@@ -285,3 +275,285 @@ def test_switching_source_resets_the_selection(context, flask_server):
     expect(page.locator('[data-fk="inv-selected-count"]')).to_contain_text("1")
     page.locator('#tab-forklift [name="source"]').select_option("forklift/vmwlab2")
     expect(page.locator('[data-fk="inv-selected-count"]')).to_contain_text("0")
+
+
+# --- W6 : onglet Vagues ------------------------------------------------------
+#
+# Les états de vague viennent de la vraie fonction (hv_forklift.wave_state)
+# appliquée aux objets relevés sur le banc (fixtures api), puis déclinés.
+
+ROOT = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(ROOT / "bin" / "lib"))
+import hv_forklift as hf  # noqa: E402
+
+_FIX = ROOT / "tests" / "api" / "fixtures"
+_PLANS = json.loads((_FIX / "forklift_b2_plans_176.json").read_text())
+_MIGS = json.loads((_FIX / "forklift_b2_migrations_176.json").read_text())
+_PLANS = _PLANS.get("items", _PLANS) if isinstance(_PLANS, dict) else _PLANS
+_MIGS = _MIGS.get("items", _MIGS) if isinstance(_MIGS, dict) else _MIGS
+REAL = {w["name"]: w for w in (hf.wave_state(p, _MIGS) for p in _PLANS)}
+SUCCEEDED = REAL["vague-1"]          # vm-16, 3 copies, la dernière de 62 s
+
+
+def iso(minutes):
+    return (datetime.now(timezone.utc) + timedelta(minutes=minutes)).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def variant(name, state, **vm):
+    w = json.loads(json.dumps(SUCCEEDED))
+    w.update(name=name, state=state)
+    w["vms"][0].update(vm)
+    return w
+
+
+def copying(name="w-copy"):
+    nxt = iso(12)
+    w = variant(name, "copying", phase="Running", step="copying disks", step_name="DiskTransfer",
+                progress={"done": 5120, "total": 10240}, next_precopy=nxt)
+    w.update(next_precopy=nxt, cutover=None)
+    return w
+
+
+def scheduled(name="w-sched", minutes=90):
+    w = copying(name)
+    w.update(state="cutover-scheduled", cutover=iso(minutes))
+    return w
+
+
+def failed(name="w-fail"):
+    w = variant(name, "failed", phase="Failed", error="Unable to connect to vddk data source")
+    w["vms"].append({**w["vms"][0], "id": "vm-20", "name": "vmwlab-src-4",
+                     "error": "Cannot complete operation because VMware Tools is not running"})
+    w["message"] = "; ".join(v["error"] for v in w["vms"])
+    return w
+
+
+READY_WAVE = variant("w-ready", "ready", phase="", step="", step_name="", progress={"done": 0, "total": 0},
+                     precopies=0, last_precopy=None)
+READY_WAVE.update(migration=None, cutover=None)
+
+TARGETS = {"nads": ["default/lab-net", "mig-b2/vlan1"], "classes": ["harv-rep1", "harvester-longhorn"],
+           "default_class": "harvester-longhorn", "namespaces": ["default", "mig-b2"]}
+DATA_T = {**DATA, **TARGETS}
+NETS = [{"id": "network-13", "name": "lab-net", "path": "/dc/network/lab-net"},
+        {"id": "network-14", "name": "VM Network", "path": "/dc/network/VM Network"}]
+STORES = [{"id": "datastore-12", "name": "datastore1", "path": "/dc/datastore/datastore1",
+           "capacity": 10 ** 12, "free": 10 ** 11}]
+WINDOWS_VM = {**VMS_ROWS[3], "id": "vm-20", "name": "win-ok", "tools": True, "networks": ["network-14"],
+              "disks": [{"datastore": "datastore-12", "capacity": 10 ** 10}]}
+
+
+def open_waves(context, flask_server, waves, section="waves"):
+    page, sent = open_tab(context, flask_server, {**DATA_T, "waves": waves}, section=section)
+    page.route("**/api/forklift/harv-fake/inventory/vmwlab/networks*", lambda r, q: fulfill(r, {"rows": NETS}))
+    page.route("**/api/forklift/harv-fake/inventory/vmwlab/datastores*", lambda r, q: fulfill(r, {"rows": STORES}))
+    dialogs = []
+    page.on("dialog", lambda d: dialogs.append(d.message))
+    return page, sent, dialogs
+
+
+def wave_box(page, name):
+    return page.locator(f'#tab-forklift [data-fk-wave="{name}"]')
+
+
+def test_the_waves_tab_is_a_sub_tab_of_vmware_migrations(context, flask_server):
+    page, _, _ = open_waves(context, flask_server, [])
+    tab = page.locator('#tab-forklift [data-section-tab="waves"]')
+    expect(tab).to_be_visible()
+    assert tab.get_attribute("data-tip") or tab.get_attribute("title")
+    expect(page.locator("#tab-forklift")).to_contain_text("No wave yet")
+
+
+def test_each_wave_shows_its_state_and_only_the_actions_it_allows(context, flask_server):
+    page, _, _ = open_waves(context, flask_server, [READY_WAVE, copying(), SUCCEEDED, scheduled()])
+    expect(page.locator("#tab-forklift [data-fk-wave]")).to_have_count(4)
+    acts = lambda n: sorted(b.get_attribute("data-fk") for b in wave_box(page, n).locator("button").all())  # noqa: E731
+    expect(wave_box(page, "w-ready").locator("[data-fk-state]")).to_have_attribute("data-fk-state", "ready")
+    assert acts("w-ready") == ["wave-close", "wave-delete", "wave-follow", "wave-start"]
+    assert acts("w-copy") == ["wave-cutover", "wave-follow", "wave-schedule"]
+    assert acts("vague-1") == ["wave-close", "wave-delete", "wave-follow", "wave-rollback"]
+    assert acts("w-sched") == ["wave-cutover", "wave-follow", "wave-schedule"]
+    expect(wave_box(page, "w-copy").locator('[data-fk="wave-next"] [data-fk-at]')).to_contain_text("in ")
+    expect(wave_box(page, "w-sched").locator('[data-fk="wave-cutover-at"] [data-fk-at]')).to_contain_text("in 1 h")
+    for b in page.locator("#tab-forklift button:visible").all():
+        assert b.get_attribute("data-tip") or b.get_attribute("title"), b.inner_text()
+
+
+def test_composing_a_wave_from_the_inventory_sends_the_maps_and_ticks_raw_copy_for_linux(context, flask_server):
+    page, sent, _ = open_waves(context, flask_server, [], section="inventory")
+    page.evaluate("Forklift.openInventory('vmwlab')")
+    table = page.locator('#tab-forklift [data-fk="inv-table"]')
+    table.locator('tr[data-vm="vmwlab-src-1"] [data-fk="vm-select"]').check()
+    table.locator('tr[data-vm="vmwlab-off"] [data-fk="vm-select"]').check()
+    page.locator('[data-fk="compose-wave"]').click()
+    win = page.locator("#fp-fk-wave-new-harv-fake")
+    # le réseau vCenter « lab-net » va vers le réseau de VM du même nom, le datastore vers la classe par défaut
+    expect(win.locator('[data-fk-net="network-13"]')).to_have_value("default/lab-net")
+    expect(win.locator('[data-fk-sto="datastore-12"]')).to_have_value("harvester-longhorn")
+    expect(win.locator('[name="skip_conversion"]')).to_be_checked()
+    expect(win.locator('[data-fk="raw-linux"]')).to_be_visible()
+    expect(win).to_contain_text("1 min 44 s")
+    win.locator('[name="name"]').fill("wave-a")
+    win.locator('[name="target_namespace"]').select_option("mig-b2")
+    win.locator('button[type="submit"]').click()
+    page.wait_for_timeout(300)
+    url, method, body = sent[-1]
+    assert url == "api/forklift/harv-fake/do/wave-apply"
+    assert body == {"spec": {"name": "wave-a", "target_namespace": "mig-b2",
+                             "provider": {"namespace": "forklift", "name": "vmwlab"},
+                             "vms": ["vm-16", "vm-17"],
+                             "networks": [{"source": "network-13", "destination": "default/lab-net"}],
+                             "storages": [{"source": "datastore-12", "storage_class": "harvester-longhorn"}],
+                             "skip_conversion": True, "compat_mode": False, "preserve_static_ips": False}}
+
+
+def test_a_windows_guest_keeps_the_conversion_and_an_unknown_network_goes_to_the_pod_network(context, flask_server):
+    page, sent, _ = open_waves(context, flask_server, [])
+    page.evaluate("vms => Forklift.composeWave(vms)",
+                  [{**VMS_ROWS[0], "namespace": "forklift", "source": "vmwlab"},
+                   {**WINDOWS_VM, "namespace": "forklift", "source": "vmwlab"}])
+    win = page.locator("#fp-fk-wave-new-harv-fake")
+    expect(win.locator('[data-fk="raw-windows"]')).to_be_visible()
+    expect(win.locator('[name="skip_conversion"]')).not_to_be_checked()
+    expect(win.locator('[name="compat_mode"]')).to_be_disabled()
+    expect(win.locator('[data-fk-net="network-14"]')).to_have_value("pod")
+    for el in win.locator("select, input:not([type=hidden]), button").all():
+        assert el.get_attribute("data-tip") or el.get_attribute("title") or el.evaluate(
+            "e => !!e.closest('.tip[data-tip]')"), el.evaluate("e => e.outerHTML")
+    win.locator('[name="name"]').fill("wave-w")
+    win.locator('[name="preserve_static_ips"]').check()
+    win.locator('button[type="submit"]').click()
+    page.wait_for_timeout(300)
+    spec = sent[-1][2]["spec"]
+    assert spec["skip_conversion"] is False and spec["compat_mode"] is False and spec["preserve_static_ips"] is True
+    assert spec["target_namespace"] == "default"
+    assert spec["networks"] == [{"source": "network-13", "destination": "default/lab-net"},
+                                {"source": "network-14", "destination": "pod"}]
+    assert spec["storages"] == [{"source": "datastore-12", "storage_class": "harvester-longhorn"}]
+
+
+def test_a_vm_taken_on_another_cluster_is_refused_with_the_server_message(context, flask_server):
+    page, _, _ = open_waves(context, flask_server, [])
+    page.route("**/api/forklift/harv-fake/do/wave-apply", lambda r, q: fulfill(
+        r, {"error": "vm-16 is already in wave vague-b on cluster harv3", "skipped": []}, 409))
+    page.evaluate("vms => Forklift.composeWave(vms)", [{**VMS_ROWS[0], "namespace": "forklift", "source": "vmwlab"}])
+    win = page.locator("#fp-fk-wave-new-harv-fake")
+    win.locator('[name="name"]').fill("wave-b")
+    win.locator('button[type="submit"]').click()
+    expect(win.locator(".of-msg .res-error")).to_have_text("vm-16 is already in wave vague-b on cluster harv3")
+
+
+def test_start_is_sent_for_the_wave(context, flask_server):
+    page, sent, _ = open_waves(context, flask_server, [READY_WAVE])
+    wave_box(page, "w-ready").locator('[data-fk="wave-start"]').click()
+    page.wait_for_timeout(300)
+    assert sent[-1] == ("api/forklift/harv-fake/do/wave-start", "POST", {"wave": "w-ready"})
+
+
+def test_switching_over_now_is_confirmed_with_the_source_shutdown(context, flask_server):
+    page, sent, dialogs = open_waves(context, flask_server, [copying()])
+    wave_box(page, "w-copy").locator('[data-fk="wave-cutover"]').click()
+    page.wait_for_timeout(300)
+    assert "VMware Tools" in dialogs[-1] and "shut down" in dialogs[-1]
+    assert sent[-1] == ("api/forklift/harv-fake/do/wave-cutover", "POST", {"wave": "w-copy"})
+
+
+def test_a_scheduled_switchover_is_sent_in_utc(context, flask_server):
+    page, sent, dialogs = open_waves(context, flask_server, [copying()])
+    wave_box(page, "w-copy").locator('[data-fk="wave-schedule"]').click()
+    win = page.locator("#fp-fk-wave-sched-harv-fake-w-copy")
+    win.locator('[name="at"]').fill("2031-01-02T03:04")
+    win.locator('button[type="submit"]').click()
+    page.wait_for_timeout(300)
+    assert "VMware Tools" in dialogs[-1]
+    url, _, body = sent[-1]
+    assert url == "api/forklift/harv-fake/do/wave-cutover"
+    expected = page.evaluate("new Date('2031-01-02T03:04').toISOString().replace(/\\.\\d{3}Z$/, 'Z')")
+    assert body == {"wave": "w-copy", "at": expected}
+
+
+def test_rolling_back_is_confirmed_with_the_loss_of_writes(context, flask_server):
+    page, sent, dialogs = open_waves(context, flask_server, [SUCCEEDED])
+    wave_box(page, "vague-1").locator('[data-fk="wave-rollback"]').click()
+    page.wait_for_timeout(300)
+    assert "since the switchover is lost" in dialogs[-1]
+    assert sent[-1] == ("api/forklift/harv-fake/do/wave-rollback", "POST", {"wave": "vague-1"})
+
+
+def test_closing_removes_forklift_snapshots_by_default(context, flask_server):
+    page, sent, _ = open_waves(context, flask_server, [SUCCEEDED])
+    wave_box(page, "vague-1").locator('[data-fk="wave-close"]').click()
+    win = page.locator("#fp-fk-wave-close-harv-fake-vague-1")
+    expect(win.locator('[name="clean_snapshots"]')).to_be_checked()
+    win.locator('button[type="submit"]').click()
+    page.wait_for_timeout(300)
+    assert sent[-1] == ("api/forklift/harv-fake/do/wave-close", "POST", {"wave": "vague-1", "clean_snapshots": True})
+    win.locator('[name="clean_snapshots"]').uncheck()
+    win.locator('button[type="submit"]').click()
+    page.wait_for_timeout(300)
+    assert sent[-1][2] == {"wave": "vague-1", "clean_snapshots": False}
+
+
+def test_deleting_is_confirmed_and_says_the_vms_stay(context, flask_server):
+    page, sent, dialogs = open_waves(context, flask_server, [SUCCEEDED])
+    wave_box(page, "vague-1").locator('[data-fk="wave-delete"]').click()
+    page.wait_for_timeout(300)
+    assert "migrated VMs stay" in dialogs[-1]
+    assert sent[-1] == ("api/forklift/harv-fake/do/wave-delete", "POST", {"wave": "vague-1"})
+
+
+def test_the_follow_window_shows_each_vm_step_progress_and_copies(context, flask_server):
+    page, _, _ = open_waves(context, flask_server, [copying(), SUCCEEDED])
+    wave_box(page, "w-copy").locator('[data-fk="wave-follow"]').click()
+    row = page.locator('#fp-fk-wave-follow-harv-fake-w-copy [data-fk-vm="vm-16"]')
+    expect(row).to_contain_text("vmwlab-src-1")
+    expect(row).to_contain_text("copying disks")
+    expect(row.locator('[data-fk="vm-pct"]')).to_have_text("50 %")
+    expect(row.locator('[data-fk="vm-copies"]')).to_have_text("3")
+    expect(row.locator('[data-fk="vm-last"]')).to_have_text("1 min 02 s")
+    expect(row.locator('[data-fk="vm-next"] [data-fk-at]')).to_contain_text("in 1")
+    # une vague réussie : étape finie, aucune prochaine copie, retour par VM possible
+    page.locator('#fp-fk-wave-follow-harv-fake-w-copy [data-action="close"]').click()
+    wave_box(page, "vague-1").locator('[data-fk="wave-follow"]').click()
+    done = page.locator('#fp-fk-wave-follow-harv-fake-vague-1 [data-fk-vm="vm-16"]')
+    expect(done.locator('[data-fk="vm-pct"]')).to_have_text("100 %")
+    expect(done.locator('[data-fk="vm-next"]')).to_have_text("–")
+    expect(done.locator("[data-fk-vm-rollback]")).to_be_visible()
+
+
+def test_the_follow_window_counts_down_to_a_scheduled_switchover(context, flask_server):
+    page, _, _ = open_waves(context, flask_server, [scheduled(minutes=3)])
+    wave_box(page, "w-sched").locator('[data-fk="wave-follow"]').click()
+    at = page.locator('#fp-fk-wave-follow-harv-fake-w-sched [data-fk="follow-cutover"] [data-fk-at]')
+    expect(at).to_contain_text(re.compile(r"in [23] min \d\d s"))
+    first = at.inner_text()
+    # le compte à rebours avance chaque seconde, sans relecture du cluster
+    expect(at).not_to_have_text(first, timeout=5000)
+
+
+def test_known_forklift_errors_are_shown_as_is_with_a_translated_hint(context, flask_server):
+    page, sent, dialogs = open_waves(context, flask_server, [failed()])
+    box = wave_box(page, "w-fail")
+    expect(box.locator("[data-fk-error]")).to_contain_text("Unable to connect to vddk data source")
+    wave_box(page, "w-fail").locator('[data-fk="wave-follow"]').click()
+    win = page.locator("#fp-fk-wave-follow-harv-fake-w-fail")
+    vddk = win.locator('[data-fk-vm="vm-16"]')
+    expect(vddk.locator("[data-fk-error]")).to_have_text("Unable to connect to vddk data source")
+    expect(vddk.locator("[data-fk-hint]")).to_contain_text("Preparation (step 2)")
+    tools = win.locator('[data-fk-vm="vm-20"]')
+    expect(tools.locator("[data-fk-error]")).to_have_text("Cannot complete operation because VMware Tools is not running")
+    expect(tools.locator("[data-fk-hint]")).to_contain_text("open-vm-tools")
+    # retour à la source d'une seule VM, confirmé
+    tools.locator("[data-fk-vm-rollback]").click()
+    page.wait_for_timeout(300)
+    assert "vmwlab-src-4" in dialogs[-1] and "lost" in dialogs[-1]
+    assert sent[-1] == ("api/forklift/harv-fake/do/wave-rollback", "POST", {"wave": "w-fail", "vms": ["vm-20"]})
+
+
+def test_the_waves_tab_asks_for_the_targets_and_the_preparation_does_not(context, flask_server):
+    urls = []
+    page, _, _ = open_waves(context, flask_server, [])
+    page.on("request", lambda r: urls.append(r.url) if "/api/forklift/harv-fake" in r.url and "/do/" not in r.url else None)
+    page.evaluate("Forklift.backgroundRefresh()")
+    page.wait_for_timeout(400)
+    assert any(u.endswith("/api/forklift/harv-fake?targets=1") for u in urls)

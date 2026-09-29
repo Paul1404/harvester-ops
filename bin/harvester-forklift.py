@@ -154,14 +154,18 @@ def cmd_install(args, kube=None, sleep=time.sleep, now=time.time):
     else:
         manifest = args.cert_manager_manifest
         tmp = None
-        if not manifest and getattr(args, "cert_manager_from_bundle", None):
-            tmp = tempfile.TemporaryDirectory(prefix="hfk-cm-")
-            manifest = bundle_cert_manager(args.cert_manager_from_bundle, tmp.name)
-        if not manifest:
-            step("cert-manager", "error", "cert-manager is missing: give --cert-manager-manifest "
-                 "(the console takes it from its Cluster API bundle)")
-            return EXIT_REFUSED
         try:
+            if not manifest and getattr(args, "cert_manager_from_bundle", None):
+                tmp = tempfile.TemporaryDirectory(prefix="hfk-cm-")
+                try:
+                    manifest = bundle_cert_manager(args.cert_manager_from_bundle, tmp.name)
+                except ValueError as e:
+                    step("cert-manager", "error", str(e))
+                    return EXIT_REFUSED
+            if not manifest:
+                step("cert-manager", "error", "cert-manager is missing: give --cert-manager-manifest "
+                     "(the console takes it from its Cluster API bundle)")
+                return EXIT_REFUSED
             step("cert-manager", "running", "installing cert-manager")
             kube.run("apply", "--server-side", "--force-conflicts", "-f", manifest, timeout=300)
         finally:

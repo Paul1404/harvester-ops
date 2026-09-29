@@ -314,7 +314,7 @@ def _registry_setting(value):
         return value
     try:
         v = json.loads(value) if value and str(value).strip() else {}
-    except ValueError:
+    except (ValueError, TypeError):
         return {}
     return v if isinstance(v, dict) else {}
 

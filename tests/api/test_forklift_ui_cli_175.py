@@ -23,6 +23,9 @@ _spec = importlib.util.spec_from_file_location("hfk_ui", ROOT / "bin" / "harvest
 hfk = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(hfk)
 
+# Import helpers from test_forklift_cli_175 for cmd_install testing
+from tests.api.test_forklift_cli_175 import FakeKube, Clock, install_args, run_install  # noqa: E402
+
 REG = json.dumps({"Mirrors": {"172.16.1.11:5005": {"Endpoints": ["http://172.16.1.11:5005"]}},
                   "Configs": {"172.16.1.11:5005": {"Auth": {"Username": "harvops", "Password": "reg-S3cret"}}}})
 B64 = lambda s: base64.b64encode(s.encode()).decode()  # noqa: E731
@@ -60,6 +63,7 @@ def test_the_registry_is_proposed_from_harvester_s_containerd_registry():
                                           "plain_http": False, "auth": False}
     for empty in ("", None, "{}", "not json"):
         assert hf.registry_hint(empty) == {"image": "", "host": "", "plain_http": False, "auth": False}
+    assert hf.registry_hint(12) == {"image": "", "host": "", "plain_http": False, "auth": False}
 
 
 def test_a_vcenter_of_vm_import_becomes_a_provider_request_without_the_browser():
@@ -164,3 +168,60 @@ def test_the_new_options_are_on_the_command_line():
     assert a.spec == "/s"
     a = ap.parse_args(["vddk-image", "--archive", "/a", "--image", "r/x:1", "--spec", "/s", "--kubeconfig", "/kc"])
     assert (a.spec, a.kubeconfig) == ("/s", "/kc")
+
+
+def test_install_cert_manager_from_bundle_success(tmp_path, monkeypatch):
+    """cert-manager absent + paquet valide = le manifeste est appliqué et le
+    répertoire temporaire est nettoyé."""
+    k = FakeKube()
+    created_dirs = []
+
+    original_tempdir = hfk.tempfile.TemporaryDirectory
+
+    class TrackingTempDir:
+        def __init__(self, prefix=""):
+            self._impl = original_tempdir(prefix=prefix)
+            created_dirs.append(self._impl.name)
+
+        def __getattr__(self, name):
+            return getattr(self._impl, name)
+
+        def cleanup(self):
+            self._impl.cleanup()
+
+    monkeypatch.setattr(hfk.tempfile, "TemporaryDirectory", TrackingTempDir)
+
+    b = bundle(tmp_path)
+    rc = run_install(k, cert_manager_from_bundle=str(b))
+    assert rc == hfk.EXIT_OK
+    assert len(created_dirs) == 1
+    assert not Path(created_dirs[0]).exists(), f"temp dir {created_dirs[0]} was not cleaned up"
+
+
+def test_install_cert_manager_from_bundle_no_manifest(tmp_path, monkeypatch, capsys):
+    """cert-manager absent + paquet sans manifeste = refus et le répertoire
+    temporaire est nettoyé malgré l'erreur."""
+    k = FakeKube()
+    created_dirs = []
+
+    original_tempdir = hfk.tempfile.TemporaryDirectory
+
+    class TrackingTempDir:
+        def __init__(self, prefix=""):
+            self._impl = original_tempdir(prefix=prefix)
+            created_dirs.append(self._impl.name)
+
+        def __getattr__(self, name):
+            return getattr(self._impl, name)
+
+        def cleanup(self):
+            self._impl.cleanup()
+
+    monkeypatch.setattr(hfk.tempfile, "TemporaryDirectory", TrackingTempDir)
+
+    b = bundle_no_cm(tmp_path)
+    rc = run_install(k, cert_manager_from_bundle=str(b))
+    assert rc == hfk.EXIT_REFUSED
+    assert "no cert-manager manifest" in capsys.readouterr().err
+    assert len(created_dirs) == 1
+    assert not Path(created_dirs[0]).exists(), f"temp dir {created_dirs[0]} was not cleaned up after error"

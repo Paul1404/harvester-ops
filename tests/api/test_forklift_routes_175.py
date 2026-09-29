@@ -91,6 +91,10 @@ def world(monkeypatch, tmp_path):
         ("secrets", "forklift", hf.secret_name("vmwlab")): {"data": {"user": B64("administrator@vsphere.local"),
                                                                       "password": B64("Old-S3cret!pw"),
                                                                       "insecureSkipVerify": B64("true")}},
+        # un fournisseur fait par la CLI, vu en réel dans `default` (hors du namespace de la console)
+        ("secrets", "default", hf.secret_name("vmwlab")): {"data": {"user": B64("administrator@vsphere.local"),
+                                                                      "password": B64("Default-S3cret!pw"),
+                                                                      "insecureSkipVerify": B64("false")}},
     }
 
     def kj(kc, verb, kind, *a, **k):
@@ -152,7 +156,7 @@ def test_a_provider_password_leaves_only_through_the_private_file(world):
                      headers=auth("adm"))
         assert bad.status_code == 400 and "N3w-S3cret" not in bad.get_data(as_text=True)
     label, cmd, sent, _ = world["actions"][0]
-    assert label == "forklift:provider-apply:vc2" and "N3w-S3cret" not in " ".join(cmd)
+    assert label == "forklift:provider-apply:forklift/vc2" and "N3w-S3cret" not in " ".join(cmd)
     assert cmd[cmd.index("--namespace") + 1] == "forklift" and cmd[cmd.index("--name") + 1] == "vc2"
     assert sent["password"] == "N3w-S3cret" and sent["url"] == "vc2.lan"
 
@@ -211,7 +215,7 @@ def test_a_provider_is_deleted_with_the_secret_the_console_made(world):
         assert c.post("/api/forklift/harvlab2/do/provider-delete", json={"name": "Bad_Name"},
                       headers=auth("adm")).status_code == 400
     label, cmd, _, _ = world["actions"][0]
-    assert label == "forklift:provider-delete:vmwlab" and cmd[-1] == "--with-secret"
+    assert label == "forklift:provider-delete:forklift/vmwlab" and cmd[-1] == "--with-secret"
 
 
 def vddk_bytes():
@@ -412,3 +416,71 @@ def test_an_explicit_insecure_wins_over_the_kept_tls_setting(world):
     assert r.status_code == 202
     _, _, sent, _ = world["actions"][0]
     assert sent["insecure"] is True and "cacert" not in sent
+
+
+# --- fix : un fournisseur peut vivre hors du namespace forklift -------------
+# Vu en réel : un fournisseur fait par la CLI dans `default`. Les trois
+# écritures et la lecture d'inventaire doivent suivre son namespace au lieu
+# de toujours agir dans `hf.NS`.
+
+def test_the_inventory_reads_a_provider_outside_forklift(world, monkeypatch):
+    calls = []
+
+    class R:
+        returncode, stdout, stderr = 0, json.dumps([]), ""
+
+    def run(cmd, **kw):
+        calls.append(cmd)
+        return R()
+    monkeypatch.setattr(wapp.subprocess, "run", run)
+    with wapp.app.test_client() as c:
+        d = c.get("/api/forklift/harvlab2/inventory/vmwlab/vms?namespace=default", headers=auth("eye")).get_json()
+    assert d["rows"] == []
+    assert calls[0][2:] == ["inventory", "--kubeconfig", "/kc", "--namespace", "default", "--name", "vmwlab", "--kind", "vms"]
+
+
+def test_the_inventory_still_defaults_to_forklift_without_the_query_param(world, monkeypatch):
+    calls = []
+
+    class R:
+        returncode, stdout, stderr = 0, json.dumps([]), ""
+
+    def run(cmd, **kw):
+        calls.append(cmd)
+        return R()
+    monkeypatch.setattr(wapp.subprocess, "run", run)
+    with wapp.app.test_client() as c:
+        c.get("/api/forklift/harvlab2/inventory/vmwlab/vms", headers=auth("eye"))
+    assert calls[0][calls[0].index("--namespace") + 1] == "forklift"
+
+
+def test_the_inventory_refuses_an_invalid_namespace(world):
+    with wapp.app.test_client() as c:
+        r = c.get("/api/forklift/harvlab2/inventory/vmwlab/vms?namespace=Bad_NS", headers=auth("eye"))
+    assert r.status_code == 400
+
+
+def test_a_provider_outside_forklift_is_deleted_in_its_own_namespace(world):
+    with wapp.app.test_client() as c:
+        r = c.post("/api/forklift/harvlab2/do/provider-delete", json={"name": "vmwlab", "namespace": "default"},
+                   headers=auth("adm"))
+    assert r.status_code == 202
+    label, cmd, _, _ = world["actions"][0]
+    assert label == "forklift:provider-delete:default/vmwlab"
+    assert cmd[cmd.index("--namespace") + 1] == "default" and cmd[-1] == "--with-secret"
+
+
+def test_editing_a_provider_outside_forklift_keeps_its_credentials_there(world):
+    """`keep_credentials` doit relire le secret du fournisseur dans SON
+    namespace (`default`), pas dans `forklift`."""
+    with wapp.app.test_client() as c:
+        r = c.post("/api/forklift/harvlab2/do/provider-apply",
+                   json={"spec": {"name": "vmwlab", "namespace": "default", "url": "https://vmwlab-vc.home.lo/sdk",
+                                  "keep_credentials": True, "vddk_image": "172.16.1.11:5005/harvops/vddk:8.0.4"}},
+                   headers=auth("adm"))
+    assert r.status_code == 202
+    label, cmd, sent, _ = world["actions"][0]
+    assert label == "forklift:provider-apply:default/vmwlab"
+    assert cmd[cmd.index("--namespace") + 1] == "default"
+    assert sent["user"] == "administrator@vsphere.local" and sent["password"] == "Default-S3cret!pw"
+    assert "Default-S3cret" not in " ".join(cmd)

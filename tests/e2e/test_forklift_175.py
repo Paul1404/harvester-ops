@@ -3,6 +3,7 @@ en trois étapes avec leur état, l'installation et la poussée de l'image
 VDDK envoyées sans secret visible, le dépôt d'une archive."""
 
 import json
+import time
 
 import pytest
 
@@ -107,7 +108,8 @@ def test_a_source_block_says_its_state_and_offers_inventory_edit_delete(context,
     expect(block.locator('[data-fk="del-source"]')).to_be_enabled()
     block.locator('[data-fk="del-source"]').click()
     page.wait_for_timeout(400)
-    assert sent[-1][0] == "api/forklift/harv-fake/do/provider-delete" and sent[-1][2] == {"name": "vmwlab"}
+    assert sent[-1][0] == "api/forklift/harv-fake/do/provider-delete"
+    assert sent[-1][2] == {"name": "vmwlab", "namespace": "forklift"}
 
 
 def test_a_source_used_by_a_plan_cannot_be_deleted(context, flask_server):
@@ -164,7 +166,7 @@ def test_editing_a_source_keeps_its_password_unless_retyped(context, flask_serve
 
 def test_the_inventory_shows_warm_capability_and_forklift_s_concerns(context, flask_server):
     page, _ = open_tab(context, flask_server, DATA)
-    page.route("**/api/forklift/harv-fake/inventory/vmwlab/vms", lambda r, q: fulfill(r, {"rows": rows_of(VMS)}))
+    page.route("**/api/forklift/harv-fake/inventory/vmwlab/vms*", lambda r, q: fulfill(r, {"rows": rows_of(VMS)}))
     page.evaluate("Forklift.openInventory('vmwlab')")
     table = page.locator('#tab-forklift [data-fk="inv-table"]')
     expect(table.locator("tbody tr")).to_have_count(4)
@@ -180,7 +182,65 @@ def test_the_inventory_shows_warm_capability_and_forklift_s_concerns(context, fl
 
 def test_an_inventory_error_is_said(context, flask_server):
     page, _ = open_tab(context, flask_server, DATA)
-    page.route("**/api/forklift/harv-fake/inventory/vmwlab/vms",
+    page.route("**/api/forklift/harv-fake/inventory/vmwlab/vms*",
                lambda r, q: fulfill(r, {"error": "the inventory service answered 503"}, 502))
     page.evaluate("Forklift.openInventory('vmwlab')")
     expect(page.locator("#tab-forklift .res-error")).to_contain_text("503")
+
+
+# --- fix : un fournisseur peut vivre hors du namespace forklift -------------
+
+def test_a_provider_outside_forklift_is_read_with_its_own_namespace(context, flask_server):
+    """Vu en réel : un fournisseur fait par la CLI, dans `default`. L'onglet
+    doit lire son inventaire dans SON namespace, pas dans `forklift`."""
+    other = {**DATA, "providers": [{**DATA["providers"][0], "namespace": "default"}]}
+    page, _ = open_tab(context, flask_server, other)
+    urls = []
+
+    def rec(route, req):
+        urls.append(route.request.url)
+        fulfill(route, {"rows": []})
+    page.route("**/api/forklift/harv-fake/inventory/vmwlab/vms*", rec)
+    page.evaluate("Sections.open('forklift', 'sources')")
+    page.locator('#tab-forklift [data-fk-source="vmwlab"] [data-fk="inv-source"]').click()
+    page.wait_for_timeout(300)
+    assert urls and "namespace=default" in urls[-1]
+
+
+# --- fix : une réponse d'inventaire plus lente ne doit jamais écraser -------
+# celle d'une source choisie ensuite (jeton de requête).
+
+def test_switching_source_ignores_a_slower_stale_answer(context, flask_server):
+    two = {**DATA, "providers": [DATA["providers"][0], {**DATA["providers"][0], "name": "vmwlab2"}]}
+    page, _ = open_tab(context, flask_server, two)
+
+    def slow(route, req):
+        time.sleep(0.6)
+        fulfill(route, {"rows": [{"name": "old-vm"}]})
+    page.route("**/api/forklift/harv-fake/inventory/vmwlab/vms*", slow)
+    page.route("**/api/forklift/harv-fake/inventory/vmwlab2/vms*", lambda r, q: fulfill(r, {"rows": [{"name": "new-vm"}]}))
+    page.evaluate("Forklift.openInventory('vmwlab')")
+    page.wait_for_timeout(100)
+    page.locator('#tab-forklift [name="source"]').select_option("forklift/vmwlab2")
+    table = page.locator('#tab-forklift [data-fk="inv-table"]')
+    expect(table).to_contain_text("new-vm", timeout=2000)
+    page.wait_for_timeout(700)                       # laisse la réponse lente arriver
+    expect(table).to_contain_text("new-vm")
+    expect(table).not_to_contain_text("old-vm")
+
+
+# --- fix : « Ajouter un vCenter » avant que Forklift soit prêt -------------
+
+def test_the_new_source_button_is_disabled_until_forklift_is_ready(context, flask_server):
+    page, _ = open_tab(context, flask_server, ABSENT)
+    page.evaluate("Sections.open('forklift', 'sources')")
+    btn = page.locator('#tab-forklift [data-fk="new-source"]')
+    expect(btn).to_be_disabled()
+    assert "not ready" in (btn.get_attribute("data-tip") or "")
+
+
+def test_the_new_source_button_is_enabled_once_forklift_is_ready(context, flask_server):
+    page, _ = open_tab(context, flask_server, DATA)
+    page.evaluate("Sections.open('forklift', 'sources')")
+    btn = page.locator('#tab-forklift [data-fk="new-source"]')
+    expect(btn).to_be_enabled()

@@ -30,8 +30,8 @@ const Forklift = (() => {
     return `${v.toFixed(v >= 10 || i === 0 ? 0 : 1)} ${u[i]}`;
   };
 
-  let cur = null;       // { cluster, host, kind, data, store, timer }
-  let lastInv = null;   // { cluster, source, kind, q, warm } : retrouvé au retour sur l'onglet (U4)
+  let cur = null;       // { cluster, host, kind, data, store, timer, invToken }
+  let lastInv = null;   // { cluster, source, namespace, kind, q, warm } : retrouvé au retour sur l'onglet (U4)
 
   async function call(method, url, body) {
     const r = await fetch(url, { method, headers: { 'Content-Type': 'application/json' },
@@ -95,6 +95,14 @@ const Forklift = (() => {
     if (!cur || !cur.host.isConnected) return;
     const body = cur.host.querySelector('[data-fk="body"]');
     const d = cur.data;
+    // (fix) « Ajouter un vCenter » n'a de sens qu'une fois Forklift prêt : le
+    // bouton du bandeau existe dès l'ouverture de l'onglet, avant les données.
+    const newBtn = cur.host.querySelector('[data-fk="new-source"]');
+    if (newBtn) {
+      const ready = !!(d && !d.error && !d.unreachable && d.install && d.install.ready);
+      newBtn.disabled = !ready;
+      newBtn.setAttribute('data-tip', ready ? tr('fk.t.newSource') : tr('fk.needInstall'));
+    }
     if (!d || d.error || d.unreachable) {
       body.innerHTML = `<div class="sto-finding sev-critical"><div class="sto-finding-title">${esc((d && d.error) || tr('fabric.unreachable'))}</div></div>`;
       return;
@@ -175,16 +183,16 @@ const Forklift = (() => {
     if (!d.providers.length) return `<p class="form-hint">${esc(tr('fk.noSource'))}</p>`;
     const state = (p) => (p.ready === true ? badge('ok', tr('fk.src.ready'), p.message)
       : p.ready === false ? badge('fail', tr('fk.src.refused'), p.message) : badge('warn', tr('fk.src.checking'), p.message));
-    return `<div class="fk-sources">${d.providers.map(p => `<div class="fk-source" data-fk-source="${esc(p.name)}">
+    return `<div class="fk-sources">${d.providers.map(p => `<div class="fk-source" data-fk-source="${esc(p.name)}" data-fk-ns="${esc(p.namespace)}">
         <div class="fk-step-head"><b>${esc(p.name)}</b> ${state(p)}</div>
         <div class="form-hint">${esc(p.url)}</div>
         ${p.ready === false ? `<div class="res-error">${esc(p.message)}</div>` : ''}
         <div class="form-hint">${esc(tr('fk.src.vddk', { image: p.vddk_image || tr('fk.src.noVddk') }))}</div>
         <div class="form-hint">${esc(tr('fk.src.plans', { n: p.plans.length }))}</div>
         <div class="fk-source-actions">
-          <button type="button" class="btn btn-sm btn-secondary tip" data-fk="inv-source" data-name="${esc(p.name)}" ${p.ready === true ? '' : 'disabled'} data-tip="${esc(tr('fk.t.inventory'))}">${icon('general')} ${esc(tr('section.fkInventory'))}</button>
-          <button type="button" class="btn btn-sm btn-secondary tip needs-admin" data-fk="edit-source" data-name="${esc(p.name)}" ${p.managed ? '' : 'disabled'} data-tip="${esc(p.managed ? tr('fk.t.edit') : tr('fk.t.notManaged'))}">${icon('edit')} ${esc(tr('fk.edit'))}</button>
-          <button type="button" class="btn btn-sm btn-danger tip needs-admin" data-fk="del-source" data-name="${esc(p.name)}" ${p.plans.length ? 'disabled' : ''} data-tip="${esc(p.plans.length ? tr('fk.t.delUsed', { plans: p.plans.join(', ') }) : tr('fk.t.del'))}">${icon('trash')} ${esc(tr('fk.del'))}</button>
+          <button type="button" class="btn btn-sm btn-secondary tip" data-fk="inv-source" data-name="${esc(p.name)}" data-ns="${esc(p.namespace)}" ${p.ready === true ? '' : 'disabled'} data-tip="${esc(tr('fk.t.inventory'))}">${icon('general')} ${esc(tr('section.fkInventory'))}</button>
+          <button type="button" class="btn btn-sm btn-secondary tip needs-admin" data-fk="edit-source" data-name="${esc(p.name)}" data-ns="${esc(p.namespace)}" ${p.managed ? '' : 'disabled'} data-tip="${esc(p.managed ? tr('fk.t.edit') : tr('fk.t.notManaged'))}">${icon('edit')} ${esc(tr('fk.edit'))}</button>
+          <button type="button" class="btn btn-sm btn-danger tip needs-admin" data-fk="del-source" data-name="${esc(p.name)}" data-ns="${esc(p.namespace)}" ${p.plans.length ? 'disabled' : ''} data-tip="${esc(p.plans.length ? tr('fk.t.delUsed', { plans: p.plans.join(', ') }) : tr('fk.t.del'))}">${icon('trash')} ${esc(tr('fk.del'))}</button>
         </div></div>`).join('')}</div>`;
   }
 
@@ -226,6 +234,9 @@ const Forklift = (() => {
     submitWith(form, (f) => {
       const v = (n) => { const x = f.querySelector(`[name="${n}"]`); return x ? x.value.trim() : ''; };
       const spec = { name: v('name') };
+      // un fournisseur peut vivre hors de « forklift » (fait par la CLI) :
+      // une modification le garde là où il est, jamais recréé ailleurs
+      if (edit) spec.namespace = p.namespace;
       const from = v('from');
       if (from) {
         const [namespace, sname] = from.split('/');
@@ -266,8 +277,9 @@ const Forklift = (() => {
   const INV_LABEL = { vms: () => tr('fk.inv.vms'), networks: () => tr('fk.inv.networks'), datastores: () => tr('fk.inv.datastores') };
   const INV_TIP = { vms: () => tr('fk.t.inv.vms'), networks: () => tr('fk.t.inv.networks'), datastores: () => tr('fk.t.inv.datastores') };
 
-  function openInventory(name) {
-    lastInv = { cluster: cur ? cur.cluster : (window.App && App.getCurrentCluster()), source: name, kind: 'vms', q: '', warm: false };
+  function openInventory(name, namespace) {
+    lastInv = { cluster: cur ? cur.cluster : (window.App && App.getCurrentCluster()), source: name,
+               namespace: namespace || 'forklift', kind: 'vms', q: '', warm: false };
     Sections.open('forklift', 'inventory');
   }
 
@@ -277,22 +289,33 @@ const Forklift = (() => {
       body.innerHTML = `<p class="form-hint">${esc(tr('fk.inv.noSource'))}</p>`;
       return;
     }
-    if (!lastInv || lastInv.cluster !== cur.cluster || !ready.some(p => p.name === lastInv.source)) {
-      lastInv = { cluster: cur.cluster, source: ready[0].name, kind: 'vms', q: '', warm: false };
+    if (!lastInv || lastInv.cluster !== cur.cluster
+        || !ready.some(p => p.name === lastInv.source && p.namespace === lastInv.namespace)) {
+      lastInv = { cluster: cur.cluster, source: ready[0].name, namespace: ready[0].namespace, kind: 'vms', q: '', warm: false };
     }
     const s = lastInv;
+    // une source hors « forklift » se distingue dans la liste (deux vCenters
+    // peuvent porter le même nom dans des namespaces différents)
+    const srcOpts = ready.map(p => [`${p.namespace}/${p.name}`, p.namespace === 'forklift' ? p.name : `${p.name} (${p.namespace})`]);
     body.innerHTML = `<div class="fk-inv-tools">
-        ${field('source', tr('fk.inv.source'), `<select name="source">${opts(ready.map(p => p.name), s.source)}</select>`, tr('fk.t.invSource'))}
+        ${field('source', tr('fk.inv.source'), `<select name="source">${opts(srcOpts, `${s.namespace}/${s.source}`)}</select>`, tr('fk.t.invSource'))}
         <div class="sub-tabs sub-tabs-inline">${INV_KINDS.map(k => `<button type="button" class="sub-tab tip ${k === s.kind ? 'active' : ''}" data-fk="inv-kind" data-kind="${k}" data-tip="${esc(INV_TIP[k]())}">${esc(INV_LABEL[k]())}</button>`).join('')}</div>
         <input name="q" class="tip" data-tip="${esc(tr('fk.t.search'))}" placeholder="${esc(tr('fk.search'))}" value="${esc(s.q)}">
         ${s.kind === 'vms' ? `<label class="fk-check tip" data-tip="${esc(tr('fk.t.warmOnly'))}"><input type="checkbox" name="warm_only" ${s.warm ? 'checked' : ''}> ${esc(tr('fk.warmOnly'))}</label>` : ''}
         <button type="button" class="btn btn-sm btn-secondary tip" data-fk="inv-refresh" data-tip="${esc(tr('fk.t.invRefresh'))}">${icon('refresh')}</button>
       </div><div data-fk="inv-out"><p class="form-hint">${esc(tr('common.loading'))}</p></div>`;
     const c = cur;
+    // jeton de requête : changer de source ou de sorte pendant qu'une
+    // réponse plus lente est en vol ne doit jamais l'écraser après coup
+    const token = cur.invToken = (cur.invToken || 0) + 1;
     let res;
-    try { res = await call('GET', `/api/forklift/${enc(c.cluster)}/inventory/${enc(s.source)}/${s.kind}`); }
-    catch (err) { if (c === cur) body.querySelector('[data-fk="inv-out"]').innerHTML = `<p class="res-error">${esc(err.message)}</p>`; return; }
-    if (c !== cur) return;
+    try { res = await call('GET', `/api/forklift/${enc(c.cluster)}/inventory/${enc(s.source)}/${s.kind}?namespace=${enc(s.namespace)}`); }
+    catch (err) {
+      if (c !== cur || token !== cur.invToken) return;
+      body.querySelector('[data-fk="inv-out"]').innerHTML = `<p class="res-error">${esc(err.message)}</p>`;
+      return;
+    }
+    if (c !== cur || token !== cur.invToken) return;
     c.invRows = res.rows || [];
     paintInventory();
   }
@@ -360,13 +383,16 @@ const Forklift = (() => {
     }
     if (act === 'new-source') return sourceForm(null);
     const name = b.dataset.name;
-    const prov = name && (cur.data.providers || []).find(p => p.name === name);
+    const ns = b.dataset.ns;
+    // deux fournisseurs peuvent porter le même nom dans des namespaces
+    // différents (un fait par la CLI, hors « forklift ») : les deux comptent
+    const prov = name && (cur.data.providers || []).find(p => p.name === name && p.namespace === ns);
     if (act === 'edit-source' && prov) return sourceForm(prov);
     if (act === 'del-source' && prov) {
       if (!confirm(tr('fk.confirm.del', { name }))) return;
-      return post('provider-delete', { name }, tr('ml.done.delete', { name }));
+      return post('provider-delete', { name, namespace: prov.namespace }, tr('ml.done.delete', { name }));
     }
-    if (act === 'inv-source' && prov) return openInventory(name);
+    if (act === 'inv-source' && prov) return openInventory(name, prov.namespace);
     if (act === 'inv-kind') { lastInv.kind = b.dataset.kind; return render(); }
     if (act === 'inv-refresh') return render();
   }
@@ -380,7 +406,9 @@ const Forklift = (() => {
     } else if (t.dataset.fk === 'upload-file' && t.files[0]) {
       upload(t.files[0]);
     } else if (t.name === 'source' && lastInv) {
-      lastInv.source = t.value;
+      const i = t.value.indexOf('/');
+      lastInv.namespace = t.value.slice(0, i);
+      lastInv.source = t.value.slice(i + 1);
       render();
     } else if (t.name === 'warm_only' && lastInv) {
       lastInv.warm = t.checked;

@@ -13646,20 +13646,23 @@ def _fk_vmimport_source(kc, cluster, ns, name):
 def _fk_provider_spec(kc, cluster, b):
     """La demande de fournisseur complète. Trois formes : tout saisi ; repris
     d'une source VM Import ; modifié sans ressaisir le mot de passe (repris du
-    secret du fournisseur). Rend (nom, demande) ; LookupError si l'objet cité
-    n'existe pas."""
+    secret du fournisseur). Le fournisseur peut vivre hors du namespace
+    `forklift` (vu en réel : un fournisseur fait par la CLI, dans `default`) ;
+    `spec.namespace` le précise, sinon `hf.NS`. Rend (namespace, nom,
+    demande) ; LookupError si l'objet cité n'existe pas."""
     name = _hf.check_name(str(b.get("name") or ""), "provider")
+    ns = _hf.check_name(b.get("namespace") or _hf.NS, "namespace")
     vddk = str(b.get("vddk_image") or "").strip()
     src = b.get("from_vmimport")
     if isinstance(src, dict):
-        ns, sname = _hf.check_name(src.get("namespace"), "namespace"), _hf.check_name(src.get("name"), "source")
-        source = _fk_vmimport_source(kc, cluster, ns, sname)
+        vns, sname = _hf.check_name(src.get("namespace"), "namespace"), _hf.check_name(src.get("name"), "source")
+        source = _fk_vmimport_source(kc, cluster, vns, sname)
         cred = ((source or {}).get("spec") or {}).get("credentials") or {}
         secret = _kubectl_json(kc, "get", "secrets", _hf.check_name(cred.get("name"), "secret"),
-                               "-n", _hf.check_name(cred.get("namespace") or ns, "namespace"),
+                               "-n", _hf.check_name(cred.get("namespace") or vns, "namespace"),
                                timeout=30, cluster=cluster) if source else None
         if not source or not secret:
-            raise LookupError(f"no VM Import source {ns}/{sname} with credentials")
+            raise LookupError(f"no VM Import source {vns}/{sname} with credentials")
         spec = _hf.spec_from_vmimport(source, secret, vddk)
     else:
         spec = {"url": b.get("url"), "user": str(b.get("user") or "").strip(), "password": str(b.get("password") or "")}
@@ -13673,7 +13676,7 @@ def _fk_provider_spec(kc, cluster, b):
         need_password = bool(b.get("keep_credentials")) and not spec["password"]
         need_tls = bool(b.get("keep_credentials")) and not has_tls_input
         if need_password or need_tls:
-            secret = _kubectl_json(kc, "get", "secrets", _hf.secret_name(name), "-n", _hf.NS, timeout=30, cluster=cluster)
+            secret = _kubectl_json(kc, "get", "secrets", _hf.secret_name(name), "-n", ns, timeout=30, cluster=cluster)
             kept = _hf.secret_values(secret, "user", "password", "cacert", "insecureSkipVerify")
             if need_password:
                 if not kept.get("password"):
@@ -13689,9 +13692,9 @@ def _fk_provider_spec(kc, cluster, b):
                 else:
                     spec["insecure"] = kept.get("insecureSkipVerify") == "true"
     # refuse avant d'écrire, sans jamais citer d'identifiant
-    _hf.provider_secret(_hf.NS, name, spec)
-    _hf.provider_manifest(_hf.NS, name, spec)
-    return name, spec
+    _hf.provider_secret(ns, name, spec)
+    _hf.provider_manifest(ns, name, spec)
+    return ns, name, spec
 
 
 @app.route("/api/forklift/<cluster>/do/<action>", methods=["POST"])
@@ -13740,13 +13743,14 @@ def api_forklift_do(cluster, action):
                     raise ValueError("registry: the user and the password go together")
             label = "forklift:vddk-image"
         elif action == "provider-apply":
-            name, spec = _fk_provider_spec(kc, cluster, b.get("spec") if isinstance(b.get("spec"), dict) else {})
-            cmd += ["--namespace", _hf.NS, "--name", name]
-            label = f"forklift:provider-apply:{name}"
+            ns, name, spec = _fk_provider_spec(kc, cluster, b.get("spec") if isinstance(b.get("spec"), dict) else {})
+            cmd += ["--namespace", ns, "--name", name]
+            label = f"forklift:provider-apply:{ns}/{name}"
         else:
             name = _hf.check_name(str(b.get("name") or ""), "provider")
-            cmd += ["--namespace", _hf.NS, "--name", name, "--with-secret"]
-            label = f"forklift:provider-delete:{name}"
+            ns = _hf.check_name(b.get("namespace") or _hf.NS, "namespace")
+            cmd += ["--namespace", ns, "--name", name, "--with-secret"]
+            label = f"forklift:provider-delete:{ns}/{name}"
     except LookupError as e:
         return jsonify({"error": str(e)}), 404
     except (ValueError, TypeError) as e:
@@ -13762,18 +13766,24 @@ def api_forklift_do(cluster, action):
 def api_forklift_inventory(cluster, name, kind):
     """Ce que Forklift voit d'un vCenter, par l'outil (jeton court et
     port-forward) ; gardé 20 s par personne pour ne pas rouvrir un tunnel à
-    chaque clic."""
+    chaque clic. Le fournisseur peut vivre hors de `forklift` (`?namespace=`,
+    lu par la console dans les données de l'onglet) ; sans elle, `hf.NS`."""
     if kind not in _FK_KINDS:
         return jsonify({"error": "kind: " + ", ".join(_FK_KINDS)}), 400
     kc = _kubectl_for_cluster(cluster)
     if not kc:
         return jsonify({"error": f"unknown cluster: {cluster}"}), 404
-    key = (cluster, (current_cluster_identity() or {}).get("user"), name, kind)
+    ns_raw = request.args.get("namespace")
+    try:
+        ns = _hf.check_name(ns_raw, "namespace") if ns_raw else _hf.NS
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
+    key = (cluster, (current_cluster_identity() or {}).get("user"), ns, name, kind)
     hit = _FK_INVENTORY_CACHE.get(key)
     if hit and time.time() - hit[0] < _FK_INVENTORY_TTL:
         return jsonify({"rows": hit[1]})
     try:
-        r = subprocess.run(_fk_cmd("inventory", kc) + ["--namespace", _hf.NS, "--name", name, "--kind", kind],
+        r = subprocess.run(_fk_cmd("inventory", kc) + ["--namespace", ns, "--name", name, "--kind", kind],
                            capture_output=True, text=True, timeout=120)
     except subprocess.TimeoutExpired:
         return jsonify({"error": "the inventory did not answer in time"}), 502

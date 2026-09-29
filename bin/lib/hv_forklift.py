@@ -25,6 +25,8 @@ docs/design/2026-09-28-forklift-b1-plan.md.
 import base64
 import json
 import re
+from datetime import datetime, timedelta, timezone
+from urllib.parse import urlparse
 
 G = "forklift.konveyor.io"
 API = f"{G}/v1beta1"
@@ -435,7 +437,8 @@ def spec_from_vmimport(source, secret, vddk_image=""):
 # --- inventaire (service forklift-inventory) --------------------------------
 
 def inventory_rows(kind, items):
-    """Lignes utiles d'un inventaire vSphere de Forklift (détail=1)."""
+    """Lignes utiles d'un inventaire vSphere de Forklift (détail=1, ou 4 pour
+    les outils VMware, l'instantané courant et l'uuid)."""
     items = items or []
     if kind == "vms":
         out = []
@@ -449,6 +452,11 @@ def inventory_rows(kind, items):
                           for d in v.get("disks") or []],
                 "networks": [n.get("id") for n in v.get("networks") or []],
                 "concerns": [{"category": c.get("category"), "label": c.get("label")} for c in v.get("concerns") or []],
+                # détail=4 (v1.76.0) : outils VMware en marche, instantané courant, uuid ;
+                # absents au détail=1, lus comme faux / vides
+                "tools": bool(v.get("guestNameFromVmwareTools") or v.get("ipAddress")),
+                "snapshot": str(((v.get("snapshot") or {}).get("id")) or ""),
+                "uuid": str(v.get("uuid") or ""),
             })
         return out
     if kind == "networks":
@@ -457,3 +465,428 @@ def inventory_rows(kind, items):
         return [{"id": d.get("id"), "name": d.get("name"), "path": d.get("path"),
                  "capacity": d.get("capacity"), "free": d.get("free")} for d in items]
     raise ValueError(f"inventory kind: vms, networks or datastores ({kind!r})")
+
+
+# --- vagues à chaud (v1.76.0) ------------------------------------------------
+#
+# Relevé sur le banc le 29/09/2026 (harvlab2 + vmwlab, deux vraies vagues) :
+# - une VM en échec garde `phase: Completed` : l'échec se lit dans sa
+#   condition Failed et dans error.reasons ;
+# - pipeline : Initialize, DiskTransfer, Cutover, ImageConversion (absente en
+#   copie brute), VirtualMachineCreation ; une étape finie peut garder 0/1 ;
+# - la dernière copie (celle de la bascule) n'a jamais de fin ;
+# - warm.nextPrecopyAt reste posé après la bascule : il ne vaut que pendant
+#   la copie.
+
+L_WAVE = "harvester-ops.io/wave"
+A_ROLLED_BACK = "harvester-ops.io/rolled-back"
+A_CLOSED = "harvester-ops.io/closed"
+A_ORIGINAL_IMPORTER = "harvester-ops.io/original-importer-image"
+K_MIGRATION = f"migrations.{G}"
+K_NETWORKMAP = f"networkmaps.{G}"
+K_STORAGEMAP = f"storagemaps.{G}"
+DEST_PROVIDER = "host"
+WAVE_NAME_MAX = 40
+CDI_OPERATOR = ("harvester-system", "cdi-operator")
+CDI_IMAGE_ENVS = ("IMPORTER_IMAGE", "OVIRT_POPULATOR_IMAGE")
+PRECOPY_DEFAULT, PRECOPY_MIN, PRECOPY_MAX = 60, 5, 1440
+CUTOVER_GRACE = timedelta(minutes=5)
+VM_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
+SUBDOMAIN_RE = re.compile(r"^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$")
+RFC3339_RE = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?(Z|[+-]\d{2}:\d{2})$")
+STEP_LABELS = {"Initialize": "initializing", "DiskTransfer": "copying disks", "Cutover": "final copy",
+               "ImageConversion": "converting guest", "DiskAllocation": "allocating disks",
+               "VirtualMachineCreation": "creating VM"}
+WARM_BLOCKERS = {"cbt": "Changed Block Tracking is off",
+                 "tools": "VMware Tools are not running: the switchover cannot shut the source down"}
+
+
+def check_wave_name(name):
+    """RFC 1123, 40 caractères au plus : les objets dérivés ajoutent -net,
+    -sto, -m<n>."""
+    n = str(name or "").strip()
+    if len(n) > WAVE_NAME_MAX or not NAME_RE.match(n):
+        raise ValueError(f"wave name: lowercase letters, digits and '-', {WAVE_NAME_MAX} characters at most ({n!r})")
+    return n
+
+
+def _wave_meta(name, wave):
+    return {"name": name, "namespace": NS, "labels": {L_MANAGED: "true", L_WAVE: wave}}
+
+
+def _unique(ids, what):
+    seen = set()
+    for i in ids:
+        if i in seen:
+            raise ValueError(f"{what} {i!r} is listed twice")
+        seen.add(i)
+
+
+def _source_id(value, what):
+    v = str(value or "").strip()
+    if not VM_ID_RE.match(v):
+        raise ValueError(f"{what}: {v!r} is not an inventory id")
+    return v
+
+
+def _network_destination(dest):
+    d = str(dest or "").strip()
+    if d == "pod":
+        return {"type": "pod"}
+    ns, _, nad = d.partition("/")
+    if not nad or not NAME_RE.match(ns) or not NAME_RE.match(nad):
+        raise ValueError(f"network destination: 'pod' or '<namespace>/<network>' ({d!r})")
+    return {"type": "multus", "namespace": ns, "name": nad}
+
+
+def wave_manifests(spec):
+    """[NetworkMap, StorageMap, Plan] d'une vague, dans le namespace forklift,
+    étiquetés console et vague. Que chaque réseau et chaque datastore des VMs
+    soit mappé ne se vérifie qu'avec l'inventaire (outil)."""
+    wave = check_wave_name(spec.get("name"))
+    target = check_name(spec.get("target_namespace"), "target namespace")
+    prov = spec.get("provider") or {}
+    source = {"namespace": check_name(prov.get("namespace"), "provider namespace"),
+              "name": check_name(prov.get("name"), "provider")}
+    vms = [str(v or "").strip() for v in spec.get("vms") or []]
+    if not vms:
+        raise ValueError("a wave needs at least one VM")
+    for v in vms:
+        if not VM_ID_RE.match(v):
+            raise ValueError(f"VM id: {v!r} is not an inventory id")
+    _unique(vms, "VM")
+    nets = [(_source_id(n.get("source"), "network source"), _network_destination(n.get("destination")))
+            for n in spec.get("networks") or []]
+    _unique([s for s, _ in nets], "network")
+    stos = []
+    for s in spec.get("storages") or []:
+        sc = str(s.get("storage_class") or "").strip()
+        if not sc or len(sc) > 253 or not SUBDOMAIN_RE.match(sc):
+            raise ValueError(f"storage class: {sc!r} is not a storage class name")
+        stos.append((_source_id(s.get("source"), "storage source"), sc))
+    _unique([s for s, _ in stos], "datastore")
+    providers = {"source": source, "destination": {"namespace": NS, "name": DEST_PROVIDER}}
+    netmap = {"apiVersion": API, "kind": "NetworkMap", "metadata": _wave_meta(f"{wave}-net", wave),
+              "spec": {"provider": providers,
+                       "map": [{"source": {"id": s}, "destination": d} for s, d in nets]}}
+    stomap = {"apiVersion": API, "kind": "StorageMap", "metadata": _wave_meta(f"{wave}-sto", wave),
+              "spec": {"provider": providers,
+                       "map": [{"source": {"id": s}, "destination": {"storageClass": sc}} for s, sc in stos]}}
+    pspec = {"warm": True, "targetNamespace": target, "provider": providers,
+             "map": {"network": {"namespace": NS, "name": f"{wave}-net"},
+                     "storage": {"namespace": NS, "name": f"{wave}-sto"}},
+             "vms": [{"id": v} for v in vms],
+             "skipGuestConversion": bool(spec.get("skip_conversion")),
+             "preserveStaticIPs": bool(spec.get("preserve_static_ips"))}
+    if spec.get("skip_conversion"):
+        # vu en réel (vague-2) : copie brute sans mode de compatibilité =
+        # disques virtio ; avec conversion, Forklift garde son défaut
+        pspec["useCompatibilityMode"] = bool(spec.get("compat_mode"))
+    plan = {"apiVersion": API, "kind": "Plan", "metadata": _wave_meta(wave, wave), "spec": pspec}
+    return [netmap, stomap, plan]
+
+
+def migration_manifest(wave, n):
+    wave = check_wave_name(wave)
+    if isinstance(n, bool) or not isinstance(n, int) or n < 1:
+        raise ValueError(f"migration number: a positive integer ({n!r})")
+    return {"apiVersion": API, "kind": "Migration", "metadata": _wave_meta(f"{wave}-m{n}", wave),
+            "spec": {"plan": {"namespace": NS, "name": wave}}}
+
+
+def _now(now=None):
+    return now or datetime.now(timezone.utc)
+
+
+def _parse_ts(value):
+    """Horodatage RFC 3339 (fuseau obligatoire) -> datetime UTC, ou None."""
+    if isinstance(value, datetime):
+        return value.astimezone(timezone.utc) if value.tzinfo else None
+    s = str(value or "").strip()
+    if not RFC3339_RE.match(s):
+        return None
+    try:
+        return datetime.fromisoformat(s.replace("Z", "+00:00")).astimezone(timezone.utc)
+    except ValueError:
+        return None
+
+
+def _fmt_ts(dt):
+    return dt.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def cutover_patch(when=None, now=None):
+    """Patch de fusion d'une Migration : bascule à `when` (RFC 3339, None =
+    maintenant). Plus de 5 min dans le passé : sans doute une erreur de
+    fuseau, refusé."""
+    now = _now(now)
+    if when is None or when == "":
+        at = now
+    else:
+        at = _parse_ts(when)
+        if at is None:
+            raise ValueError(f"cutover time: RFC 3339 with a time zone expected ({when!r})")
+        if at < now - CUTOVER_GRACE:
+            raise ValueError("cutover time: more than 5 minutes in the past")
+    return {"spec": {"cutover": _fmt_ts(at.replace(microsecond=0))}}
+
+
+def _cond(obj, ctype):
+    """La condition `ctype` vraie d'un objet Forklift, ou None."""
+    for c in ((obj or {}).get("status") or {}).get("conditions") or []:
+        if c.get("type") == ctype and str(c.get("status")) == "True":
+            return c
+    return None
+
+
+def _ann(obj):
+    return ((obj or {}).get("metadata") or {}).get("annotations") or {}
+
+
+def _id_list(value):
+    return {x.strip() for x in str(value or "").split(",") if x.strip()}
+
+
+def _mig_order(m):
+    md = m.get("metadata") or {}
+    ts = _parse_ts(md.get("creationTimestamp"))
+    num = re.search(r"-m(\d+)$", md.get("name") or "")
+    return (ts or datetime.min.replace(tzinfo=timezone.utc), int(num.group(1)) if num else 0)
+
+
+def current_migration(plan, migrations):
+    """La Migration la plus récente de ce plan (date de création, puis numéro)."""
+    md = plan.get("metadata") or {}
+    mine = [m for m in migrations or []
+            if ((m.get("spec") or {}).get("plan") or {}).get("name") == md.get("name")
+            and ((m.get("spec") or {}).get("plan") or {}).get("namespace", md.get("namespace")) == md.get("namespace")]
+    return max(mine, key=_mig_order) if mine else None
+
+
+def _vm_error(vm):
+    reasons = list(((vm.get("error") or {}).get("reasons")) or [])
+    if not reasons:
+        for step in vm.get("pipeline") or []:
+            reasons += ((step.get("error") or {}).get("reasons")) or []
+    return "; ".join(str(r) for r in reasons)
+
+
+def _vm_phase(vm):
+    if not vm:
+        return ""
+    for ctype, phase in (("Failed", "Failed"), ("Canceled", "Canceled"), ("Succeeded", "Succeeded")):
+        if _cond({"status": vm}, ctype):
+            return phase
+    if vm.get("error") and vm.get("completed"):
+        return "Failed"
+    return vm.get("phase") or ""
+
+
+def _current_step(pipeline):
+    """L'étape en cours : celle en erreur, sinon la première non finie qui a
+    commencé, sinon la dernière finie, sinon la première."""
+    if not pipeline:
+        return None
+    for s in pipeline:
+        if s.get("error"):
+            return s
+    for s in pipeline:
+        if s.get("phase") != "Completed" and (s.get("started") or s.get("phase") == "Running"):
+            return s
+    done = [s for s in pipeline if s.get("phase") == "Completed"]
+    if done and len(done) == len(pipeline):
+        return done[-1]
+    return next((s for s in pipeline if s.get("phase") != "Completed"), pipeline[0])
+
+
+def _precopy(p):
+    start, end = _parse_ts(p.get("start")), _parse_ts(p.get("end"))
+    return {"start": p.get("start") or "", "end": p.get("end") or "",
+            "seconds": int((end - start).total_seconds()) if start and end else None}
+
+
+def _vm_row(vm_id, vm, rolled):
+    vm = vm or {}
+    step = _current_step(vm.get("pipeline") or [])
+    prog = (step or {}).get("progress") or {}
+    done, total = int(prog.get("completed") or 0), int(prog.get("total") or 0)
+    if step and step.get("phase") == "Completed":
+        done = total           # vu en réel : VirtualMachineCreation finie à 0/1
+    warm = vm.get("warm") or {}
+    pre = warm.get("precopies") or []
+    finished = [p for p in pre if p.get("end")]
+    last = _precopy(finished[-1]) if finished else (_precopy(pre[-1]) if pre else None)
+    cutover_started = any(s.get("name") == "Cutover"
+                          and (s.get("started") or s.get("error") or s.get("phase") not in (None, "", "Pending"))
+                          for s in vm.get("pipeline") or [])
+    copying = not vm.get("completed") and not vm.get("error") and not cutover_started
+    name = (step or {}).get("name") or ""
+    return {"id": vm_id, "name": vm.get("name") or "", "phase": _vm_phase(vm),
+            "step": STEP_LABELS.get(name, name), "step_name": name,
+            "progress": {"done": done, "total": total}, "precopies": len(pre), "last_precopy": last,
+            "next_precopy": (warm.get("nextPrecopyAt") or None) if copying else None,
+            "error": _vm_error(vm), "rolled_back": vm_id in rolled}
+
+
+def wave_state(plan, migrations, now=None):
+    """L'état d'une vague lu dans son Plan et ses Migrations.
+
+    Ordre : close (annotation ou spec.archived), revenue à la source (toutes
+    ses VMs dans l'annotation), refusée (condition Critical), puis la
+    Migration courante (la plus récente) : réussie, en échec (Failed ou
+    Canceled), bascule en cours (date passée), bascule prévue, copie. Sans
+    Migration (vue globale), le statut du plan décide. `pending` : plan en
+    cours de validation."""
+    md = plan.get("metadata") or {}
+    spec = plan.get("spec") or {}
+    st = plan.get("status") or {}
+    ann = _ann(plan)
+    rolled = _id_list(ann.get(A_ROLLED_BACK))
+    ids = [v.get("id") for v in spec.get("vms") or [] if v.get("id")]
+    status_vms = {v.get("id"): v for v in ((st.get("migration") or {}).get("vms") or [])}
+    cur = current_migration(plan, migrations)
+    if cur is not None and not status_vms:
+        status_vms = {v.get("id"): v for v in ((cur.get("status") or {}).get("vms") or [])}
+    vms = [_vm_row(i, status_vms.get(i), rolled) for i in ids]
+    cutover = ((cur or {}).get("spec") or {}).get("cutover") or None
+    message = ""
+    errors = "; ".join(v["error"] for v in vms if v["error"])
+    critical = [c for c in st.get("conditions") or []
+                if c.get("category") == "Critical" and str(c.get("status")) == "True"]
+    running = (st.get("migration") or {}).get("started") and not (st.get("migration") or {}).get("completed")
+    if ann.get(A_CLOSED) or spec.get("archived"):
+        state = "closed"
+    elif ids and all(i in rolled for i in ids):
+        state = "rolled-back"
+    elif critical:
+        state = "invalid"
+        message = "; ".join(c.get("message") or c.get("type") or "refused" for c in critical)
+    else:
+        src = cur if cur is not None else plan
+        end = _cond(src, "Succeeded"), _cond(src, "Failed") or _cond(src, "Canceled")
+        if end[0]:
+            state = "succeeded"
+        elif end[1]:
+            state = "failed"
+            message = errors or end[1].get("message") or ""
+        elif cur is not None or running or _cond(plan, "Executing"):
+            at = _parse_ts(cutover)
+            if at is None:
+                state = "copying"
+            elif at > _now(now):
+                state = "cutover-scheduled"
+            else:
+                state = "cutting-over"
+        elif _cond(plan, "Ready"):
+            state = "ready"
+        else:
+            state = "pending"
+    nexts = [v["next_precopy"] for v in vms if v["next_precopy"]]
+    return {"name": md.get("name"), "target_namespace": spec.get("targetNamespace") or "",
+            "state": state, "message": message, "migration": ((cur or {}).get("metadata") or {}).get("name"),
+            "vms": vms, "cutover": cutover,
+            "next_precopy": min(nexts) if nexts and state in ("copying", "cutover-scheduled") else None}
+
+
+def vm_warm_blockers(row):
+    """Pourquoi une VM (ligne de inventory_rows) ne peut pas entrer dans une
+    vague à chaud. Vu en réel : sans outils VMware, la bascule n'arrête pas
+    la source (« VMware Tools is not running ») ; éteinte, rien à arrêter."""
+    out = []
+    if not row.get("cbt"):
+        out.append(WARM_BLOCKERS["cbt"])
+    if row.get("power") == "poweredOn" and not row.get("tools"):
+        out.append(WARM_BLOCKERS["tools"])
+    return out
+
+
+def provider_host(provider):
+    """L'hôte du vCenter d'un fournisseur, en minuscules : avec l'identifiant
+    vm-NN, l'identité d'une VM source dans toute la console."""
+    url = str((((provider or {}).get("spec") or {}).get("url")) or "")
+    try:
+        return (urlparse(url).hostname or "").lower()
+    except ValueError:
+        return ""
+
+
+def taken_vms(plans, provider_hosts, migrations=()):
+    """{(hôte, vm-NN): {"wave", "state"}} des vagues de la console non closes.
+    `provider_hosts` : {(namespace, nom): hôte}. Un plan dont le fournisseur
+    est inconnu est ignoré (rien à comparer). Une VM revenue à la source
+    reste listée, à l'état rolled-back."""
+    out = {}
+    for p in plans or []:
+        labels = (p.get("metadata") or {}).get("labels") or {}
+        if labels.get(L_MANAGED) != "true" or not labels.get(L_WAVE):
+            continue
+        src = ((p.get("spec") or {}).get("provider") or {}).get("source") or {}
+        host = provider_hosts.get((src.get("namespace"), src.get("name")))
+        if not host:
+            continue
+        st = wave_state(p, migrations)
+        if st["state"] == "closed":
+            continue
+        for vm in st["vms"]:
+            out[(host, vm["id"])] = {"wave": st["name"], "state": "rolled-back" if vm["rolled_back"] else st["state"]}
+    return out
+
+
+# --- importeur CDI (Préparation) ---------------------------------------------
+# L'importeur CDI de Harvester (SUSE, 1.65.0) n'a pas le greffon nbdkit VDDK :
+# aucune copie VDDK possible. Contournement vérifié en réel : les variables
+# IMPORTER_IMAGE et OVIRT_POPULATOR_IMAGE du cdi-operator sur l'image amont.
+
+def _cdi_env(deploy):
+    for c in ((((deploy or {}).get("spec") or {}).get("template") or {}).get("spec") or {}).get("containers") or []:
+        for e in c.get("env") or []:
+            if e.get("name") == "IMPORTER_IMAGE":
+                return c.get("name"), str(e.get("value") or "")
+    return CDI_OPERATOR[1], ""
+
+
+def cdi_importer_state(operator_deploy):
+    _, image = _cdi_env(operator_deploy)
+    repo = image.rsplit(":", 1)[0] if ":" in image.rsplit("/", 1)[-1] else image
+    if repo.startswith("registry.suse.com/") and repo.endswith("/cdi-importer"):
+        kind = "suse-no-vddk"
+    elif repo == "quay.io/kubevirt/cdi-importer":
+        kind = "upstream"
+    else:
+        kind = "other"
+    return {"image": image, "kind": kind, "original": str(_ann(operator_deploy).get(A_ORIGINAL_IMPORTER) or "")}
+
+
+def cdi_importer_patch(image, keep_original):
+    """Patch stratégique du Deployment cdi-operator. `keep_original` : l'état
+    courant (cdi_importer_state) ; l'image d'origine n'est gardée en
+    annotation qu'une fois, jamais réécrite, et pas quand on y revient."""
+    image = check_image(image, "importer image")
+    patch = {"spec": {"template": {"spec": {"containers": [
+        {"name": CDI_OPERATOR[1], "env": [{"name": n, "value": image} for n in CDI_IMAGE_ENVS]}]}}}}
+    cur = keep_original or {}
+    if cur.get("image") and not cur.get("original") and cur["image"] != image:
+        patch["metadata"] = {"annotations": {A_ORIGINAL_IMPORTER: cur["image"]}}
+    return patch
+
+
+# --- intervalle des copies (réglage global du ForkliftController) -------------
+
+def precopy_interval(controller):
+    v = (((controller or {}).get("spec") or {}).get("controller_precopy_interval"))
+    try:
+        return int(v) if v is not None and not isinstance(v, bool) else PRECOPY_DEFAULT
+    except (TypeError, ValueError):
+        return PRECOPY_DEFAULT
+
+
+def precopy_patch(minutes):
+    """Minutes entre deux copies (5 à 1440). Vu en réel : le changement
+    redémarre le contrôleur et ne replanifie pas une copie déjà prévue."""
+    try:
+        m = int(minutes) if not isinstance(minutes, bool) else None
+    except (TypeError, ValueError):
+        m = None
+    if m is None or not PRECOPY_MIN <= m <= PRECOPY_MAX:
+        raise ValueError(f"precopy interval: {PRECOPY_MIN} to {PRECOPY_MAX} minutes ({minutes!r})")
+    return {"spec": {"controller_precopy_interval": m}}

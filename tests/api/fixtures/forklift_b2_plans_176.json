@@ -1,0 +1,715 @@
+{
+ "apiVersion": "v1",
+ "items": [
+  {
+   "apiVersion": "forklift.konveyor.io/v1beta1",
+   "kind": "Plan",
+   "metadata": {
+    "annotations": {
+     "kubectl.kubernetes.io/last-applied-configuration": "{\"apiVersion\":\"forklift.konveyor.io/v1beta1\",\"kind\":\"Plan\",\"metadata\":{\"annotations\":{},\"name\":\"vague-1\",\"namespace\":\"mig-b2\"},\"spec\":{\"map\":{\"network\":{\"name\":\"vmwlab-net\",\"namespace\":\"mig-b2\"},\"storage\":{\"name\":\"vmwlab-sto\",\"namespace\":\"mig-b2\"}},\"provider\":{\"destination\":{\"name\":\"host\",\"namespace\":\"forklift\"},\"source\":{\"name\":\"vmwlab\",\"namespace\":\"default\"}},\"targetNamespace\":\"mig-b2\",\"vms\":[{\"id\":\"vm-16\"}],\"warm\":true}}\n",
+     "populatorLabels": "True"
+    },
+    "creationTimestamp": "2026-09-29T18:50:56Z",
+    "generation": 1,
+    "name": "vague-1",
+    "namespace": "mig-b2",
+    "resourceVersion": "2048658",
+    "uid": "b034ac35-d74d-40de-9ed7-6abdf201f9f9"
+   },
+   "spec": {
+    "map": {
+     "network": {
+      "name": "vmwlab-net",
+      "namespace": "mig-b2"
+     },
+     "storage": {
+      "name": "vmwlab-sto",
+      "namespace": "mig-b2"
+     }
+    },
+    "migrateSharedDisks": true,
+    "provider": {
+     "destination": {
+      "name": "host",
+      "namespace": "forklift"
+     },
+     "source": {
+      "name": "vmwlab",
+      "namespace": "default"
+     }
+    },
+    "pvcNameTemplateUseGenerateName": true,
+    "skipGuestConversion": false,
+    "targetNamespace": "mig-b2",
+    "useCompatibilityMode": true,
+    "vms": [
+     {
+      "id": "vm-16"
+     }
+    ],
+    "warm": true
+   },
+   "status": {
+    "conditions": [
+     {
+      "category": "Required",
+      "lastTransitionTime": "2026-09-29T19:20:04Z",
+      "message": "The migration plan is ready.",
+      "status": "True",
+      "type": "Ready"
+     },
+     {
+      "category": "Advisory",
+      "durable": true,
+      "lastTransitionTime": "2026-09-29T19:38:21Z",
+      "message": "The plan execution has SUCCEEDED.",
+      "status": "True",
+      "type": "Succeeded"
+     }
+    ],
+    "migration": {
+     "completed": "2026-09-29T19:38:21Z",
+     "history": [
+      {
+       "conditions": [
+        {
+         "category": "Advisory",
+         "durable": true,
+         "lastTransitionTime": "2026-09-29T18:55:12Z",
+         "message": "The plan execution has FAILED.",
+         "status": "True",
+         "type": "Failed"
+        }
+       ],
+       "map": {
+        "network": {
+         "generation": 1,
+         "name": "vmwlab-net",
+         "namespace": "mig-b2",
+         "uid": "f97e0d9d-3804-4438-9292-0f67a8fd1a0a"
+        },
+        "storage": {
+         "generation": 1,
+         "name": "vmwlab-sto",
+         "namespace": "mig-b2",
+         "uid": "cb44abe2-d5f5-416d-87f6-8e7d7a8ee4c3"
+        }
+       },
+       "migration": {
+        "generation": 1,
+        "name": "vague-1-m1",
+        "namespace": "mig-b2",
+        "uid": "cdffa0c8-6d1a-4e16-bb31-a6d86e442cfd"
+       },
+       "plan": {
+        "generation": 1,
+        "name": "vague-1",
+        "namespace": "mig-b2",
+        "uid": "b034ac35-d74d-40de-9ed7-6abdf201f9f9"
+       },
+       "provider": {
+        "destination": {
+         "generation": 1,
+         "name": "host",
+         "namespace": "forklift",
+         "uid": "430dc442-d877-49e4-869b-911c2b7db638"
+        },
+        "source": {
+         "generation": 1,
+         "name": "vmwlab",
+         "namespace": "default",
+         "uid": "cfd82645-0af0-44a4-ab8c-297d3a7a839b"
+        }
+       }
+      },
+      {
+       "conditions": [
+        {
+         "category": "Advisory",
+         "durable": true,
+         "lastTransitionTime": "2026-09-29T19:05:15Z",
+         "message": "The plan execution has FAILED.",
+         "status": "True",
+         "type": "Failed"
+        }
+       ],
+       "map": {
+        "network": {
+         "generation": 1,
+         "name": "vmwlab-net",
+         "namespace": "mig-b2",
+         "uid": "f97e0d9d-3804-4438-9292-0f67a8fd1a0a"
+        },
+        "storage": {
+         "generation": 1,
+         "name": "vmwlab-sto",
+         "namespace": "mig-b2",
+         "uid": "cb44abe2-d5f5-416d-87f6-8e7d7a8ee4c3"
+        }
+       },
+       "migration": {
+        "generation": 1,
+        "name": "vague-1-m2",
+        "namespace": "mig-b2",
+        "uid": "d22f4150-de90-4aa2-8ef6-d889e8a555b8"
+       },
+       "plan": {
+        "generation": 1,
+        "name": "vague-1",
+        "namespace": "mig-b2",
+        "uid": "b034ac35-d74d-40de-9ed7-6abdf201f9f9"
+       },
+       "provider": {
+        "destination": {
+         "generation": 1,
+         "name": "host",
+         "namespace": "forklift",
+         "uid": "430dc442-d877-49e4-869b-911c2b7db638"
+        },
+        "source": {
+         "generation": 1,
+         "name": "vmwlab",
+         "namespace": "default",
+         "uid": "cfd82645-0af0-44a4-ab8c-297d3a7a839b"
+        }
+       }
+      },
+      {
+       "conditions": [
+        {
+         "category": "Advisory",
+         "durable": true,
+         "lastTransitionTime": "2026-09-29T19:20:34Z",
+         "message": "The plan execution has FAILED.",
+         "status": "True",
+         "type": "Failed"
+        }
+       ],
+       "map": {
+        "network": {
+         "generation": 1,
+         "name": "vmwlab-net",
+         "namespace": "mig-b2",
+         "uid": "f97e0d9d-3804-4438-9292-0f67a8fd1a0a"
+        },
+        "storage": {
+         "generation": 1,
+         "name": "vmwlab-sto",
+         "namespace": "mig-b2",
+         "uid": "cb44abe2-d5f5-416d-87f6-8e7d7a8ee4c3"
+        }
+       },
+       "migration": {
+        "generation": 1,
+        "name": "vague-1-m3",
+        "namespace": "mig-b2",
+        "uid": "98ac6745-9538-4c3f-8c58-37846d958aef"
+       },
+       "plan": {
+        "generation": 1,
+        "name": "vague-1",
+        "namespace": "mig-b2",
+        "uid": "b034ac35-d74d-40de-9ed7-6abdf201f9f9"
+       },
+       "provider": {
+        "destination": {
+         "generation": 1,
+         "name": "host",
+         "namespace": "forklift",
+         "uid": "430dc442-d877-49e4-869b-911c2b7db638"
+        },
+        "source": {
+         "generation": 1,
+         "name": "vmwlab",
+         "namespace": "default",
+         "uid": "cfd82645-0af0-44a4-ab8c-297d3a7a839b"
+        }
+       }
+      },
+      {
+       "conditions": [
+        {
+         "category": "Advisory",
+         "durable": true,
+         "lastTransitionTime": "2026-09-29T19:38:21Z",
+         "message": "The plan execution has SUCCEEDED.",
+         "status": "True",
+         "type": "Succeeded"
+        }
+       ],
+       "map": {
+        "network": {
+         "generation": 1,
+         "name": "vmwlab-net",
+         "namespace": "mig-b2",
+         "uid": "f97e0d9d-3804-4438-9292-0f67a8fd1a0a"
+        },
+        "storage": {
+         "generation": 1,
+         "name": "vmwlab-sto",
+         "namespace": "mig-b2",
+         "uid": "cb44abe2-d5f5-416d-87f6-8e7d7a8ee4c3"
+        }
+       },
+       "migration": {
+        "generation": 1,
+        "name": "vague-1-m4",
+        "namespace": "mig-b2",
+        "uid": "8ed7e5fe-4950-41cc-ab1b-05767406a17f"
+       },
+       "plan": {
+        "generation": 1,
+        "name": "vague-1",
+        "namespace": "mig-b2",
+        "uid": "b034ac35-d74d-40de-9ed7-6abdf201f9f9"
+       },
+       "provider": {
+        "destination": {
+         "generation": 1,
+         "name": "host",
+         "namespace": "forklift",
+         "uid": "430dc442-d877-49e4-869b-911c2b7db638"
+        },
+        "source": {
+         "generation": 1,
+         "name": "vmwlab",
+         "namespace": "default",
+         "uid": "cfd82645-0af0-44a4-ab8c-297d3a7a839b"
+        }
+       }
+      }
+     ],
+     "started": "2026-09-29T19:23:45Z",
+     "vms": [
+      {
+       "completed": "2026-09-29T19:38:21Z",
+       "conditions": [
+        {
+         "category": "Advisory",
+         "durable": true,
+         "lastTransitionTime": "2026-09-29T19:38:21Z",
+         "message": "The VM migration has SUCCEEDED.",
+         "status": "True",
+         "type": "Succeeded"
+        }
+       ],
+       "id": "vm-16",
+       "luks": {},
+       "name": "vmwlab-src-1",
+       "operatingSystem": "debian12_64Guest",
+       "phase": "Completed",
+       "pipeline": [
+        {
+         "completed": "2026-09-29T19:23:58Z",
+         "description": "Initialize migration.",
+         "name": "Initialize",
+         "phase": "Completed",
+         "progress": {
+          "completed": 0,
+          "total": 1
+         },
+         "started": "2026-09-29T19:23:45Z"
+        },
+        {
+         "annotations": {
+          "dvStatusCheckRetries": "1",
+          "unit": "MB"
+         },
+         "completed": "2026-09-29T19:32:04Z",
+         "description": "Transfer disks.",
+         "name": "DiskTransfer",
+         "phase": "Completed",
+         "progress": {
+          "completed": 10240,
+          "total": 10240
+         },
+         "started": "2026-09-29T19:24:04Z",
+         "tasks": [
+          {
+           "annotations": {
+            "Precopy": "2",
+            "unit": "MB"
+           },
+           "completed": "2026-09-29T19:32:04Z",
+           "name": "[datastore1] vmwlab-src-1/vmwlab-src-1.vmdk",
+           "phase": "Completed",
+           "progress": {
+            "completed": 10240,
+            "total": 10240
+           },
+           "reason": "Transfer completed.",
+           "started": "2026-09-29T19:31:02Z"
+          }
+         ]
+        },
+        {
+         "annotations": {
+          "dvStatusCheckRetries": "1",
+          "unit": "MB"
+         },
+         "completed": "2026-09-29T19:33:28Z",
+         "description": "Finalize disk transfer.",
+         "name": "Cutover",
+         "phase": "Completed",
+         "progress": {
+          "completed": 10240,
+          "total": 10240
+         },
+         "started": "2026-09-29T19:33:03Z",
+         "tasks": [
+          {
+           "annotations": {
+            "Precopy": "3",
+            "unit": "MB"
+           },
+           "completed": "2026-09-29T19:33:28Z",
+           "name": "[datastore1] vmwlab-src-1/vmwlab-src-1.vmdk",
+           "phase": "Completed",
+           "progress": {
+            "completed": 10240,
+            "total": 10240
+           },
+           "reason": "Transfer completed.",
+           "started": "2026-09-29T19:32:53Z"
+          }
+         ]
+        },
+        {
+         "completed": "2026-09-29T19:38:17Z",
+         "description": "Convert image to kubevirt.",
+         "name": "ImageConversion",
+         "phase": "Completed",
+         "progress": {
+          "completed": 1,
+          "total": 1
+         },
+         "started": "2026-09-29T19:33:35Z"
+        },
+        {
+         "completed": "2026-09-29T19:38:21Z",
+         "description": "Create VM.",
+         "name": "VirtualMachineCreation",
+         "phase": "Completed",
+         "progress": {
+          "completed": 0,
+          "total": 1
+         },
+         "started": "2026-09-29T19:38:21Z"
+        }
+       ],
+       "restorePowerState": "On",
+       "started": "2026-09-29T19:23:45Z",
+       "warm": {
+        "consecutiveFailures": 0,
+        "failures": 0,
+        "nextPrecopyAt": "2026-09-29T19:37:04Z",
+        "precopies": [
+         {
+          "createTaskId": "task-3017",
+          "deltas": [
+           {
+            "deltaId": "52 7f 84 f7 e0 dc 3a cc-84 13 00 44 ab a3 af 80/11",
+            "disk": "[datastore1] vmwlab-src-1/vmwlab-src-1.vmdk"
+           }
+          ],
+          "end": "2026-09-29T19:25:37Z",
+          "removeTaskId": "task-3018",
+          "snapshot": "snapshot-2002",
+          "start": "2026-09-29T19:23:48Z"
+         },
+         {
+          "createTaskId": "task-3019",
+          "deltas": [
+           {
+            "deltaId": "52 7f 84 f7 e0 dc 3a cc-84 13 00 44 ab a3 af 80/15",
+            "disk": "[datastore1] vmwlab-src-1/vmwlab-src-1.vmdk"
+           }
+          ],
+          "end": "2026-09-29T19:32:04Z",
+          "removeTaskId": "task-3021",
+          "snapshot": "snapshot-2003",
+          "start": "2026-09-29T19:31:02Z"
+         },
+         {
+          "createTaskId": "task-3022",
+          "removeTaskId": "task-3023",
+          "snapshot": "snapshot-2004",
+          "start": "2026-09-29T19:32:53Z"
+         }
+        ],
+        "successes": 2
+       }
+      }
+     ]
+    },
+    "observedGeneration": 1
+   }
+  },
+  {
+   "apiVersion": "forklift.konveyor.io/v1beta1",
+   "kind": "Plan",
+   "metadata": {
+    "annotations": {
+     "kubectl.kubernetes.io/last-applied-configuration": "{\"apiVersion\":\"forklift.konveyor.io/v1beta1\",\"kind\":\"Plan\",\"metadata\":{\"annotations\":{},\"name\":\"vague-2\",\"namespace\":\"mig-b2\"},\"spec\":{\"map\":{\"network\":{\"name\":\"vmwlab-net\",\"namespace\":\"mig-b2\"},\"storage\":{\"name\":\"vmwlab-sto\",\"namespace\":\"mig-b2\"}},\"provider\":{\"destination\":{\"name\":\"host\",\"namespace\":\"forklift\"},\"source\":{\"name\":\"vmwlab\",\"namespace\":\"default\"}},\"skipGuestConversion\":true,\"targetNamespace\":\"mig-b2\",\"useCompatibilityMode\":false,\"vms\":[{\"id\":\"vm-18\"}],\"warm\":true}}\n",
+     "populatorLabels": "True"
+    },
+    "creationTimestamp": "2026-09-29T19:45:47Z",
+    "generation": 1,
+    "name": "vague-2",
+    "namespace": "mig-b2",
+    "resourceVersion": "2057019",
+    "uid": "02e47bbb-4d23-4852-a7ec-278d6c0c5d7a"
+   },
+   "spec": {
+    "map": {
+     "network": {
+      "name": "vmwlab-net",
+      "namespace": "mig-b2"
+     },
+     "storage": {
+      "name": "vmwlab-sto",
+      "namespace": "mig-b2"
+     }
+    },
+    "migrateSharedDisks": true,
+    "provider": {
+     "destination": {
+      "name": "host",
+      "namespace": "forklift"
+     },
+     "source": {
+      "name": "vmwlab",
+      "namespace": "default"
+     }
+    },
+    "pvcNameTemplateUseGenerateName": true,
+    "skipGuestConversion": true,
+    "targetNamespace": "mig-b2",
+    "useCompatibilityMode": false,
+    "vms": [
+     {
+      "id": "vm-18"
+     }
+    ],
+    "warm": true
+   },
+   "status": {
+    "conditions": [
+     {
+      "category": "Required",
+      "lastTransitionTime": "2026-09-29T19:45:54Z",
+      "message": "The migration plan is ready.",
+      "status": "True",
+      "type": "Ready"
+     },
+     {
+      "category": "Advisory",
+      "durable": true,
+      "lastTransitionTime": "2026-09-29T19:48:22Z",
+      "message": "The plan execution has SUCCEEDED.",
+      "status": "True",
+      "type": "Succeeded"
+     }
+    ],
+    "migration": {
+     "completed": "2026-09-29T19:48:22Z",
+     "history": [
+      {
+       "conditions": [
+        {
+         "category": "Advisory",
+         "durable": true,
+         "lastTransitionTime": "2026-09-29T19:48:22Z",
+         "message": "The plan execution has SUCCEEDED.",
+         "status": "True",
+         "type": "Succeeded"
+        }
+       ],
+       "map": {
+        "network": {
+         "generation": 1,
+         "name": "vmwlab-net",
+         "namespace": "mig-b2",
+         "uid": "f97e0d9d-3804-4438-9292-0f67a8fd1a0a"
+        },
+        "storage": {
+         "generation": 1,
+         "name": "vmwlab-sto",
+         "namespace": "mig-b2",
+         "uid": "cb44abe2-d5f5-416d-87f6-8e7d7a8ee4c3"
+        }
+       },
+       "migration": {
+        "generation": 1,
+        "name": "vague-2-m1",
+        "namespace": "mig-b2",
+        "uid": "c6805b51-aa50-45de-981e-3ab27e2ee93e"
+       },
+       "plan": {
+        "generation": 1,
+        "name": "vague-2",
+        "namespace": "mig-b2",
+        "uid": "02e47bbb-4d23-4852-a7ec-278d6c0c5d7a"
+       },
+       "provider": {
+        "destination": {
+         "generation": 1,
+         "name": "host",
+         "namespace": "forklift",
+         "uid": "430dc442-d877-49e4-869b-911c2b7db638"
+        },
+        "source": {
+         "generation": 1,
+         "name": "vmwlab",
+         "namespace": "default",
+         "uid": "cfd82645-0af0-44a4-ab8c-297d3a7a839b"
+        }
+       }
+      }
+     ],
+     "started": "2026-09-29T19:45:55Z",
+     "vms": [
+      {
+       "completed": "2026-09-29T19:48:22Z",
+       "conditions": [
+        {
+         "category": "Advisory",
+         "durable": true,
+         "lastTransitionTime": "2026-09-29T19:48:22Z",
+         "message": "The VM migration has SUCCEEDED.",
+         "status": "True",
+         "type": "Succeeded"
+        }
+       ],
+       "id": "vm-18",
+       "luks": {},
+       "name": "vmwlab-src-2",
+       "phase": "Completed",
+       "pipeline": [
+        {
+         "completed": "2026-09-29T19:46:08Z",
+         "description": "Initialize migration.",
+         "name": "Initialize",
+         "phase": "Completed",
+         "progress": {
+          "completed": 0,
+          "total": 1
+         },
+         "started": "2026-09-29T19:45:55Z"
+        },
+        {
+         "annotations": {
+          "dvStatusCheckRetries": "1",
+          "unit": "MB"
+         },
+         "completed": "2026-09-29T19:47:04Z",
+         "description": "Transfer disks.",
+         "name": "DiskTransfer",
+         "phase": "Completed",
+         "progress": {
+          "completed": 10240,
+          "total": 10240
+         },
+         "started": "2026-09-29T19:46:14Z",
+         "tasks": [
+          {
+           "annotations": {
+            "unit": "MB"
+           },
+           "completed": "2026-09-29T19:47:04Z",
+           "name": "[datastore1] vmwlab-src-2/vmwlab-src-2.vmdk",
+           "phase": "Completed",
+           "progress": {
+            "completed": 10240,
+            "total": 10240
+           },
+           "reason": "Transfer completed.",
+           "started": "2026-09-29T19:46:24Z"
+          }
+         ]
+        },
+        {
+         "annotations": {
+          "dvStatusCheckRetries": "1",
+          "unit": "MB"
+         },
+         "completed": "2026-09-29T19:48:14Z",
+         "description": "Finalize disk transfer.",
+         "name": "Cutover",
+         "phase": "Completed",
+         "progress": {
+          "completed": 10240,
+          "total": 10240
+         },
+         "started": "2026-09-29T19:47:54Z",
+         "tasks": [
+          {
+           "annotations": {
+            "Precopy": "2",
+            "unit": "MB"
+           },
+           "completed": "2026-09-29T19:48:14Z",
+           "name": "[datastore1] vmwlab-src-2/vmwlab-src-2.vmdk",
+           "phase": "Completed",
+           "progress": {
+            "completed": 10240,
+            "total": 10240
+           },
+           "reason": "Transfer completed.",
+           "started": "2026-09-29T19:47:43Z"
+          }
+         ]
+        },
+        {
+         "completed": "2026-09-29T19:48:22Z",
+         "description": "Create VM.",
+         "name": "VirtualMachineCreation",
+         "phase": "Completed",
+         "progress": {
+          "completed": 0,
+          "total": 1
+         },
+         "started": "2026-09-29T19:48:21Z"
+        }
+       ],
+       "restorePowerState": "On",
+       "started": "2026-09-29T19:45:55Z",
+       "warm": {
+        "consecutiveFailures": 0,
+        "failures": 0,
+        "nextPrecopyAt": "2026-09-29T19:52:04Z",
+        "precopies": [
+         {
+          "createTaskId": "task-3025",
+          "deltas": [
+           {
+            "deltaId": "52 80 4b 24 3b b1 ee ac-f9 69 47 fb 65 7d 7d 90/4",
+            "disk": "[datastore1] vmwlab-src-2/vmwlab-src-2.vmdk"
+           }
+          ],
+          "end": "2026-09-29T19:47:04Z",
+          "removeTaskId": "task-3027",
+          "snapshot": "snapshot-2005",
+          "start": "2026-09-29T19:45:58Z"
+         },
+         {
+          "createTaskId": "task-3028",
+          "removeTaskId": "task-3029",
+          "snapshot": "snapshot-2006",
+          "start": "2026-09-29T19:47:43Z"
+         }
+        ],
+        "successes": 1
+       }
+      }
+     ]
+    },
+    "observedGeneration": 1
+   }
+  }
+ ],
+ "kind": "List",
+ "metadata": {
+  "resourceVersion": ""
+ }
+}

@@ -1,0 +1,66 @@
+{
+ "apiVersion": "v1",
+ "items": [
+  {
+   "apiVersion": "forklift.konveyor.io/v1beta1",
+   "kind": "NetworkMap",
+   "metadata": {
+    "annotations": {
+     "kubectl.kubernetes.io/last-applied-configuration": "{\"apiVersion\":\"forklift.konveyor.io/v1beta1\",\"kind\":\"NetworkMap\",\"metadata\":{\"annotations\":{},\"name\":\"vmwlab-net\",\"namespace\":\"mig-b2\"},\"spec\":{\"map\":[{\"destination\":{\"name\":\"lab-net\",\"namespace\":\"default\",\"type\":\"multus\"},\"source\":{\"id\":\"network-13\"}}],\"provider\":{\"destination\":{\"name\":\"host\",\"namespace\":\"forklift\"},\"source\":{\"name\":\"vmwlab\",\"namespace\":\"default\"}}}}\n"
+    },
+    "creationTimestamp": "2026-09-29T18:50:56Z",
+    "generation": 1,
+    "name": "vmwlab-net",
+    "namespace": "mig-b2",
+    "resourceVersion": "2033850",
+    "uid": "f97e0d9d-3804-4438-9292-0f67a8fd1a0a"
+   },
+   "spec": {
+    "map": [
+     {
+      "destination": {
+       "name": "lab-net",
+       "namespace": "default",
+       "type": "multus"
+      },
+      "source": {
+       "id": "network-13"
+      }
+     }
+    ],
+    "provider": {
+     "destination": {
+      "name": "host",
+      "namespace": "forklift"
+     },
+     "source": {
+      "name": "vmwlab",
+      "namespace": "default"
+     }
+    }
+   },
+   "status": {
+    "conditions": [
+     {
+      "category": "Required",
+      "lastTransitionTime": "2026-09-29T19:20:04Z",
+      "message": "The network map is ready.",
+      "status": "True",
+      "type": "Ready"
+     }
+    ],
+    "observedGeneration": 1,
+    "references": [
+     {
+      "id": "network-13",
+      "name": "VM Network"
+     }
+    ]
+   }
+  }
+ ],
+ "kind": "List",
+ "metadata": {
+  "resourceVersion": ""
+ }
+}

@@ -1,0 +1,599 @@
+{
+ "apiVersion": "v1",
+ "items": [
+  {
+   "apiVersion": "forklift.konveyor.io/v1beta1",
+   "kind": "Migration",
+   "metadata": {
+    "annotations": {
+     "kubectl.kubernetes.io/last-applied-configuration": "{\"apiVersion\":\"forklift.konveyor.io/v1beta1\",\"kind\":\"Migration\",\"metadata\":{\"annotations\":{},\"name\":\"vague-1-m3\",\"namespace\":\"mig-b2\"},\"spec\":{\"plan\":{\"name\":\"vague-1\",\"namespace\":\"mig-b2\"}}}\n"
+    },
+    "creationTimestamp": "2026-09-29T19:18:02Z",
+    "generation": 2,
+    "name": "vague-1-m3",
+    "namespace": "mig-b2",
+    "ownerReferences": [
+     {
+      "apiVersion": "forklift.konveyor.io/v1beta1",
+      "kind": "Plan",
+      "name": "vague-1",
+      "uid": "b034ac35-d74d-40de-9ed7-6abdf201f9f9"
+     }
+    ],
+    "resourceVersion": "2034249",
+    "uid": "98ac6745-9538-4c3f-8c58-37846d958aef"
+   },
+   "spec": {
+    "cutover": "2026-09-29T19:20:21Z",
+    "plan": {
+     "name": "vague-1",
+     "namespace": "mig-b2"
+    }
+   },
+   "status": {
+    "completed": "2026-09-29T19:20:34Z",
+    "conditions": [
+     {
+      "category": "Required",
+      "lastTransitionTime": "2026-09-29T19:20:04Z",
+      "message": "The migration is ready.",
+      "status": "True",
+      "type": "Ready"
+     },
+     {
+      "category": "Advisory",
+      "durable": true,
+      "lastTransitionTime": "2026-09-29T19:20:34Z",
+      "message": "The migration has FAILED.",
+      "status": "True",
+      "type": "Failed"
+     }
+    ],
+    "observedGeneration": 2,
+    "started": "2026-09-29T19:18:03Z",
+    "vms": [
+     {
+      "completed": "2026-09-29T19:20:34Z",
+      "conditions": [
+       {
+        "category": "Advisory",
+        "durable": true,
+        "lastTransitionTime": "2026-09-29T19:20:32Z",
+        "message": "The VM migration has FAILED.",
+        "status": "True",
+        "type": "Failed"
+       }
+      ],
+      "error": {
+       "phase": "PowerOffSource",
+       "reasons": [
+        "ServerFaultCode: Cannot complete operation because VMware Tools is not running in this virtual machine."
+       ]
+      },
+      "id": "vm-16",
+      "luks": {},
+      "name": "vmwlab-src-1",
+      "phase": "Completed",
+      "pipeline": [
+       {
+        "completed": "2026-09-29T19:18:19Z",
+        "description": "Initialize migration.",
+        "name": "Initialize",
+        "phase": "Completed",
+        "progress": {
+         "completed": 0,
+         "total": 1
+        },
+        "started": "2026-09-29T19:18:03Z"
+       },
+       {
+        "annotations": {
+         "dvStatusCheckRetries": "1",
+         "unit": "MB"
+        },
+        "completed": "2026-09-29T19:19:34Z",
+        "description": "Transfer disks.",
+        "name": "DiskTransfer",
+        "phase": "Completed",
+        "progress": {
+         "completed": 10240,
+         "total": 10240
+        },
+        "started": "2026-09-29T19:18:28Z",
+        "tasks": [
+         {
+          "annotations": {
+           "unit": "MB"
+          },
+          "completed": "2026-09-29T19:19:34Z",
+          "name": "[datastore1] vmwlab-src-1/vmwlab-src-1.vmdk",
+          "phase": "Completed",
+          "progress": {
+           "completed": 10240,
+           "total": 10240
+          },
+          "reason": "Transfer completed.",
+          "started": "2026-09-29T19:18:36Z"
+         }
+        ]
+       },
+       {
+        "annotations": {
+         "unit": "MB"
+        },
+        "description": "Finalize disk transfer.",
+        "error": {
+         "phase": "",
+         "reasons": [
+          "ServerFaultCode: Cannot complete operation because VMware Tools is not running in this virtual machine."
+         ]
+        },
+        "name": "Cutover",
+        "progress": {
+         "completed": 0,
+         "total": 10240
+        },
+        "tasks": [
+         {
+          "annotations": {
+           "unit": "MB"
+          },
+          "name": "[datastore1] vmwlab-src-1/vmwlab-src-1.vmdk",
+          "progress": {
+           "completed": 0,
+           "total": 10240
+          }
+         }
+        ]
+       },
+       {
+        "description": "Convert image to kubevirt.",
+        "name": "ImageConversion",
+        "phase": "Pending",
+        "progress": {
+         "completed": 0,
+         "total": 1
+        }
+       },
+       {
+        "description": "Create VM.",
+        "name": "VirtualMachineCreation",
+        "phase": "Pending",
+        "progress": {
+         "completed": 0,
+         "total": 1
+        }
+       }
+      ],
+      "restorePowerState": "On",
+      "started": "2026-09-29T19:18:03Z",
+      "warm": {
+       "consecutiveFailures": 0,
+       "failures": 0,
+       "nextPrecopyAt": "2026-09-29T20:19:34Z",
+       "precopies": [
+        {
+         "createTaskId": "task-3008",
+         "deltas": [
+          {
+           "deltaId": "52 7f 84 f7 e0 dc 3a cc-84 13 00 44 ab a3 af 80/9",
+           "disk": "[datastore1] vmwlab-src-1/vmwlab-src-1.vmdk"
+          }
+         ],
+         "end": "2026-09-29T19:19:34Z",
+         "snapshot": "snapshot-2001",
+         "start": "2026-09-29T19:18:07Z"
+        }
+       ],
+       "successes": 1
+      }
+     }
+    ]
+   }
+  },
+  {
+   "apiVersion": "forklift.konveyor.io/v1beta1",
+   "kind": "Migration",
+   "metadata": {
+    "annotations": {
+     "kubectl.kubernetes.io/last-applied-configuration": "{\"apiVersion\":\"forklift.konveyor.io/v1beta1\",\"kind\":\"Migration\",\"metadata\":{\"annotations\":{},\"name\":\"vague-1-m4\",\"namespace\":\"mig-b2\"},\"spec\":{\"plan\":{\"name\":\"vague-1\",\"namespace\":\"mig-b2\"}}}\n"
+    },
+    "creationTimestamp": "2026-09-29T19:23:45Z",
+    "generation": 2,
+    "name": "vague-1-m4",
+    "namespace": "mig-b2",
+    "ownerReferences": [
+     {
+      "apiVersion": "forklift.konveyor.io/v1beta1",
+      "kind": "Plan",
+      "name": "vague-1",
+      "uid": "b034ac35-d74d-40de-9ed7-6abdf201f9f9"
+     }
+    ],
+    "resourceVersion": "2048668",
+    "uid": "8ed7e5fe-4950-41cc-ab1b-05767406a17f"
+   },
+   "spec": {
+    "cutover": "2026-09-29T19:32:27Z",
+    "plan": {
+     "name": "vague-1",
+     "namespace": "mig-b2"
+    }
+   },
+   "status": {
+    "completed": "2026-09-29T19:38:21Z",
+    "conditions": [
+     {
+      "category": "Required",
+      "lastTransitionTime": "2026-09-29T19:23:45Z",
+      "message": "The migration is ready.",
+      "status": "True",
+      "type": "Ready"
+     },
+     {
+      "category": "Advisory",
+      "durable": true,
+      "lastTransitionTime": "2026-09-29T19:38:21Z",
+      "message": "The migration has SUCCEEDED.",
+      "status": "True",
+      "type": "Succeeded"
+     }
+    ],
+    "observedGeneration": 2,
+    "started": "2026-09-29T19:23:46Z",
+    "vms": [
+     {
+      "completed": "2026-09-29T19:38:21Z",
+      "conditions": [
+       {
+        "category": "Advisory",
+        "durable": true,
+        "lastTransitionTime": "2026-09-29T19:38:21Z",
+        "message": "The VM migration has SUCCEEDED.",
+        "status": "True",
+        "type": "Succeeded"
+       }
+      ],
+      "id": "vm-16",
+      "luks": {},
+      "name": "vmwlab-src-1",
+      "operatingSystem": "debian12_64Guest",
+      "phase": "Completed",
+      "pipeline": [
+       {
+        "completed": "2026-09-29T19:23:58Z",
+        "description": "Initialize migration.",
+        "name": "Initialize",
+        "phase": "Completed",
+        "progress": {
+         "completed": 0,
+         "total": 1
+        },
+        "started": "2026-09-29T19:23:45Z"
+       },
+       {
+        "annotations": {
+         "dvStatusCheckRetries": "1",
+         "unit": "MB"
+        },
+        "completed": "2026-09-29T19:32:04Z",
+        "description": "Transfer disks.",
+        "name": "DiskTransfer",
+        "phase": "Completed",
+        "progress": {
+         "completed": 10240,
+         "total": 10240
+        },
+        "started": "2026-09-29T19:24:04Z",
+        "tasks": [
+         {
+          "annotations": {
+           "Precopy": "2",
+           "unit": "MB"
+          },
+          "completed": "2026-09-29T19:32:04Z",
+          "name": "[datastore1] vmwlab-src-1/vmwlab-src-1.vmdk",
+          "phase": "Completed",
+          "progress": {
+           "completed": 10240,
+           "total": 10240
+          },
+          "reason": "Transfer completed.",
+          "started": "2026-09-29T19:31:02Z"
+         }
+        ]
+       },
+       {
+        "annotations": {
+         "dvStatusCheckRetries": "1",
+         "unit": "MB"
+        },
+        "completed": "2026-09-29T19:33:28Z",
+        "description": "Finalize disk transfer.",
+        "name": "Cutover",
+        "phase": "Completed",
+        "progress": {
+         "completed": 10240,
+         "total": 10240
+        },
+        "started": "2026-09-29T19:33:03Z",
+        "tasks": [
+         {
+          "annotations": {
+           "Precopy": "3",
+           "unit": "MB"
+          },
+          "completed": "2026-09-29T19:33:28Z",
+          "name": "[datastore1] vmwlab-src-1/vmwlab-src-1.vmdk",
+          "phase": "Completed",
+          "progress": {
+           "completed": 10240,
+           "total": 10240
+          },
+          "reason": "Transfer completed.",
+          "started": "2026-09-29T19:32:53Z"
+         }
+        ]
+       },
+       {
+        "completed": "2026-09-29T19:38:17Z",
+        "description": "Convert image to kubevirt.",
+        "name": "ImageConversion",
+        "phase": "Completed",
+        "progress": {
+         "completed": 1,
+         "total": 1
+        },
+        "started": "2026-09-29T19:33:35Z"
+       },
+       {
+        "completed": "2026-09-29T19:38:21Z",
+        "description": "Create VM.",
+        "name": "VirtualMachineCreation",
+        "phase": "Completed",
+        "progress": {
+         "completed": 0,
+         "total": 1
+        },
+        "started": "2026-09-29T19:38:21Z"
+       }
+      ],
+      "restorePowerState": "On",
+      "started": "2026-09-29T19:23:45Z",
+      "warm": {
+       "consecutiveFailures": 0,
+       "failures": 0,
+       "nextPrecopyAt": "2026-09-29T19:37:04Z",
+       "precopies": [
+        {
+         "createTaskId": "task-3017",
+         "deltas": [
+          {
+           "deltaId": "52 7f 84 f7 e0 dc 3a cc-84 13 00 44 ab a3 af 80/11",
+           "disk": "[datastore1] vmwlab-src-1/vmwlab-src-1.vmdk"
+          }
+         ],
+         "end": "2026-09-29T19:25:37Z",
+         "removeTaskId": "task-3018",
+         "snapshot": "snapshot-2002",
+         "start": "2026-09-29T19:23:48Z"
+        },
+        {
+         "createTaskId": "task-3019",
+         "deltas": [
+          {
+           "deltaId": "52 7f 84 f7 e0 dc 3a cc-84 13 00 44 ab a3 af 80/15",
+           "disk": "[datastore1] vmwlab-src-1/vmwlab-src-1.vmdk"
+          }
+         ],
+         "end": "2026-09-29T19:32:04Z",
+         "removeTaskId": "task-3021",
+         "snapshot": "snapshot-2003",
+         "start": "2026-09-29T19:31:02Z"
+        },
+        {
+         "createTaskId": "task-3022",
+         "removeTaskId": "task-3023",
+         "snapshot": "snapshot-2004",
+         "start": "2026-09-29T19:32:53Z"
+        }
+       ],
+       "successes": 2
+      }
+     }
+    ]
+   }
+  },
+  {
+   "apiVersion": "forklift.konveyor.io/v1beta1",
+   "kind": "Migration",
+   "metadata": {
+    "annotations": {
+     "kubectl.kubernetes.io/last-applied-configuration": "{\"apiVersion\":\"forklift.konveyor.io/v1beta1\",\"kind\":\"Migration\",\"metadata\":{\"annotations\":{},\"name\":\"vague-2-m1\",\"namespace\":\"mig-b2\"},\"spec\":{\"plan\":{\"name\":\"vague-2\",\"namespace\":\"mig-b2\"}}}\n"
+    },
+    "creationTimestamp": "2026-09-29T19:45:47Z",
+    "generation": 2,
+    "name": "vague-2-m1",
+    "namespace": "mig-b2",
+    "ownerReferences": [
+     {
+      "apiVersion": "forklift.konveyor.io/v1beta1",
+      "kind": "Plan",
+      "name": "vague-2",
+      "uid": "02e47bbb-4d23-4852-a7ec-278d6c0c5d7a"
+     }
+    ],
+    "resourceVersion": "2057025",
+    "uid": "c6805b51-aa50-45de-981e-3ab27e2ee93e"
+   },
+   "spec": {
+    "cutover": "2026-09-29T19:47:13Z",
+    "plan": {
+     "name": "vague-2",
+     "namespace": "mig-b2"
+    }
+   },
+   "status": {
+    "completed": "2026-09-29T19:48:22Z",
+    "conditions": [
+     {
+      "category": "Required",
+      "lastTransitionTime": "2026-09-29T19:45:54Z",
+      "message": "The migration is ready.",
+      "status": "True",
+      "type": "Ready"
+     },
+     {
+      "category": "Advisory",
+      "durable": true,
+      "lastTransitionTime": "2026-09-29T19:48:22Z",
+      "message": "The migration has SUCCEEDED.",
+      "status": "True",
+      "type": "Succeeded"
+     }
+    ],
+    "observedGeneration": 2,
+    "started": "2026-09-29T19:45:56Z",
+    "vms": [
+     {
+      "completed": "2026-09-29T19:48:22Z",
+      "conditions": [
+       {
+        "category": "Advisory",
+        "durable": true,
+        "lastTransitionTime": "2026-09-29T19:48:22Z",
+        "message": "The VM migration has SUCCEEDED.",
+        "status": "True",
+        "type": "Succeeded"
+       }
+      ],
+      "id": "vm-18",
+      "luks": {},
+      "name": "vmwlab-src-2",
+      "phase": "Completed",
+      "pipeline": [
+       {
+        "completed": "2026-09-29T19:46:08Z",
+        "description": "Initialize migration.",
+        "name": "Initialize",
+        "phase": "Completed",
+        "progress": {
+         "completed": 0,
+         "total": 1
+        },
+        "started": "2026-09-29T19:45:55Z"
+       },
+       {
+        "annotations": {
+         "dvStatusCheckRetries": "1",
+         "unit": "MB"
+        },
+        "completed": "2026-09-29T19:47:04Z",
+        "description": "Transfer disks.",
+        "name": "DiskTransfer",
+        "phase": "Completed",
+        "progress": {
+         "completed": 10240,
+         "total": 10240
+        },
+        "started": "2026-09-29T19:46:14Z",
+        "tasks": [
+         {
+          "annotations": {
+           "unit": "MB"
+          },
+          "completed": "2026-09-29T19:47:04Z",
+          "name": "[datastore1] vmwlab-src-2/vmwlab-src-2.vmdk",
+          "phase": "Completed",
+          "progress": {
+           "completed": 10240,
+           "total": 10240
+          },
+          "reason": "Transfer completed.",
+          "started": "2026-09-29T19:46:24Z"
+         }
+        ]
+       },
+       {
+        "annotations": {
+         "dvStatusCheckRetries": "1",
+         "unit": "MB"
+        },
+        "completed": "2026-09-29T19:48:14Z",
+        "description": "Finalize disk transfer.",
+        "name": "Cutover",
+        "phase": "Completed",
+        "progress": {
+         "completed": 10240,
+         "total": 10240
+        },
+        "started": "2026-09-29T19:47:54Z",
+        "tasks": [
+         {
+          "annotations": {
+           "Precopy": "2",
+           "unit": "MB"
+          },
+          "completed": "2026-09-29T19:48:14Z",
+          "name": "[datastore1] vmwlab-src-2/vmwlab-src-2.vmdk",
+          "phase": "Completed",
+          "progress": {
+           "completed": 10240,
+           "total": 10240
+          },
+          "reason": "Transfer completed.",
+          "started": "2026-09-29T19:47:43Z"
+         }
+        ]
+       },
+       {
+        "completed": "2026-09-29T19:48:22Z",
+        "description": "Create VM.",
+        "name": "VirtualMachineCreation",
+        "phase": "Completed",
+        "progress": {
+         "completed": 0,
+         "total": 1
+        },
+        "started": "2026-09-29T19:48:21Z"
+       }
+      ],
+      "restorePowerState": "On",
+      "started": "2026-09-29T19:45:55Z",
+      "warm": {
+       "consecutiveFailures": 0,
+       "failures": 0,
+       "nextPrecopyAt": "2026-09-29T19:52:04Z",
+       "precopies": [
+        {
+         "createTaskId": "task-3025",
+         "deltas": [
+          {
+           "deltaId": "52 80 4b 24 3b b1 ee ac-f9 69 47 fb 65 7d 7d 90/4",
+           "disk": "[datastore1] vmwlab-src-2/vmwlab-src-2.vmdk"
+          }
+         ],
+         "end": "2026-09-29T19:47:04Z",
+         "removeTaskId": "task-3027",
+         "snapshot": "snapshot-2005",
+         "start": "2026-09-29T19:45:58Z"
+        },
+        {
+         "createTaskId": "task-3028",
+         "removeTaskId": "task-3029",
+         "snapshot": "snapshot-2006",
+         "start": "2026-09-29T19:47:43Z"
+        }
+       ],
+       "successes": 1
+      }
+     }
+    ]
+   }
+  }
+ ],
+ "kind": "List",
+ "metadata": {
+  "resourceVersion": ""
+ }
+}

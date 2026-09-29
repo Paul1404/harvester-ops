@@ -1,0 +1,51 @@
+{
+ "apiVersion": "forklift.konveyor.io/v1beta1",
+ "kind": "ForkliftController",
+ "metadata": {
+  "creationTimestamp": "2026-09-28T08:37:39Z",
+  "finalizers": [
+   "forklift.konveyor.io/finalizer"
+  ],
+  "generation": 2,
+  "name": "forklift-controller",
+  "namespace": "forklift",
+  "resourceVersion": "2034712",
+  "uid": "d3eb1513-b8ce-4544-a60d-1de475285837"
+ },
+ "spec": {
+  "controller_precopy_interval": 5,
+  "feature_ui_plugin": "false"
+ },
+ "status": {
+  "conditions": [
+   {
+    "ansibleResult": {
+     "changed": 0,
+     "completion": "2026-09-29T19:21:11.477565+00:00",
+     "failures": 0,
+     "ok": 33,
+     "skipped": 19
+    },
+    "lastTransitionTime": "2026-09-28T08:37:40Z",
+    "message": "Awaiting next reconciliation",
+    "reason": "Successful",
+    "status": "True",
+    "type": "Running"
+   },
+   {
+    "lastTransitionTime": "2026-09-29T19:21:11Z",
+    "message": "Last reconciliation succeeded",
+    "reason": "Successful",
+    "status": "True",
+    "type": "Successful"
+   },
+   {
+    "lastTransitionTime": "2026-09-28T08:38:23Z",
+    "message": "",
+    "reason": "",
+    "status": "False",
+    "type": "Failure"
+   }
+  ]
+ }
+}

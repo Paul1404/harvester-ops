@@ -1,0 +1,234 @@
+{
+ "apiVersion": "apps/v1",
+ "kind": "Deployment",
+ "metadata": {
+  "annotations": {
+   "deployment.kubernetes.io/revision": "3",
+   "meta.helm.sh/release-name": "harvester",
+   "meta.helm.sh/release-namespace": "harvester-system",
+   "objectset.rio.cattle.io/id": "default-mcc-harvester-cattle-fleet-local-system"
+  },
+  "creationTimestamp": "2026-09-24T22:12:21Z",
+  "generation": 3,
+  "labels": {
+   "app.kubernetes.io/managed-by": "Helm",
+   "cdi.kubevirt.io": "cdi-operator",
+   "name": "cdi-operator",
+   "np.kubevirt.io/allow-access-cluster-services": "true",
+   "objectset.rio.cattle.io/hash": "e852fa897f5eae59a44b4bfe186aad80b10b94b3",
+   "operator.cdi.kubevirt.io": "",
+   "prometheus.cdi.kubevirt.io": "true"
+  },
+  "name": "cdi-operator",
+  "namespace": "harvester-system",
+  "resourceVersion": "2014813",
+  "uid": "fb492ebe-2e05-4f1a-8162-3d17413d81bb"
+ },
+ "spec": {
+  "progressDeadlineSeconds": 600,
+  "replicas": 1,
+  "revisionHistoryLimit": 10,
+  "selector": {
+   "matchLabels": {
+    "name": "cdi-operator",
+    "operator.cdi.kubevirt.io": ""
+   }
+  },
+  "strategy": {
+   "rollingUpdate": {
+    "maxSurge": "25%",
+    "maxUnavailable": "25%"
+   },
+   "type": "RollingUpdate"
+  },
+  "template": {
+   "metadata": {
+    "annotations": {
+     "openshift.io/required-scc": "restricted-v2"
+    },
+    "labels": {
+     "cdi.kubevirt.io": "cdi-operator",
+     "name": "cdi-operator",
+     "np.kubevirt.io/allow-access-cluster-services": "true",
+     "operator.cdi.kubevirt.io": "",
+     "prometheus.cdi.kubevirt.io": "true"
+    }
+   },
+   "spec": {
+    "affinity": {
+     "podAffinity": {
+      "preferredDuringSchedulingIgnoredDuringExecution": [
+       {
+        "podAffinityTerm": {
+         "labelSelector": {
+          "matchExpressions": [
+           {
+            "key": "cdi.kubevirt.io",
+            "operator": "In",
+            "values": [
+             "cdi-operator"
+            ]
+           }
+          ]
+         },
+         "topologyKey": "kubernetes.io/hostname"
+        },
+        "weight": 1
+       }
+      ]
+     }
+    },
+    "containers": [
+     {
+      "env": [
+       {
+        "name": "DEPLOY_CLUSTER_RESOURCES",
+        "value": "true"
+       },
+       {
+        "name": "OPERATOR_VERSION",
+        "value": "1.65.0"
+       },
+       {
+        "name": "CONTROLLER_IMAGE",
+        "value": "registry.suse.com/suse/sles/16.0/cdi-controller:1.65.0"
+       },
+       {
+        "name": "IMPORTER_IMAGE",
+        "value": "quay.io/kubevirt/cdi-importer:v1.65.0"
+       },
+       {
+        "name": "CLONER_IMAGE",
+        "value": "registry.suse.com/suse/sles/16.0/cdi-cloner:1.65.0"
+       },
+       {
+        "name": "OVIRT_POPULATOR_IMAGE",
+        "value": "quay.io/kubevirt/cdi-importer:v1.65.0"
+       },
+       {
+        "name": "APISERVER_IMAGE",
+        "value": "registry.suse.com/suse/sles/16.0/cdi-apiserver:1.65.0"
+       },
+       {
+        "name": "UPLOAD_SERVER_IMAGE",
+        "value": "registry.suse.com/suse/sles/16.0/cdi-uploadserver:1.65.0"
+       },
+       {
+        "name": "UPLOAD_PROXY_IMAGE",
+        "value": "registry.suse.com/suse/sles/16.0/cdi-uploadproxy:1.65.0"
+       },
+       {
+        "name": "VERBOSITY",
+        "value": "1"
+       },
+       {
+        "name": "PULL_POLICY",
+        "value": "IfNotPresent"
+       },
+       {
+        "name": "MONITORING_NAMESPACE"
+       }
+      ],
+      "image": "registry.suse.com/suse/sles/16.0/cdi-operator:1.65.0",
+      "imagePullPolicy": "IfNotPresent",
+      "livenessProbe": {
+       "failureThreshold": 3,
+       "httpGet": {
+        "path": "/healthz",
+        "port": 8444,
+        "scheme": "HTTP"
+       },
+       "initialDelaySeconds": 5,
+       "periodSeconds": 10,
+       "successThreshold": 1,
+       "timeoutSeconds": 10
+      },
+      "name": "cdi-operator",
+      "ports": [
+       {
+        "containerPort": 8443,
+        "name": "metrics",
+        "protocol": "TCP"
+       },
+       {
+        "containerPort": 8444,
+        "name": "health",
+        "protocol": "TCP"
+       }
+      ],
+      "readinessProbe": {
+       "failureThreshold": 3,
+       "httpGet": {
+        "path": "/readyz",
+        "port": 8444,
+        "scheme": "HTTP"
+       },
+       "initialDelaySeconds": 5,
+       "periodSeconds": 10,
+       "successThreshold": 1,
+       "timeoutSeconds": 10
+      },
+      "resources": {
+       "requests": {
+        "cpu": "100m",
+        "memory": "150Mi"
+       }
+      },
+      "securityContext": {
+       "allowPrivilegeEscalation": false,
+       "capabilities": {
+        "drop": [
+         "ALL"
+        ]
+       },
+       "runAsNonRoot": true,
+       "seccompProfile": {
+        "type": "RuntimeDefault"
+       }
+      },
+      "terminationMessagePath": "/dev/termination-log",
+      "terminationMessagePolicy": "FallbackToLogsOnError"
+     }
+    ],
+    "dnsPolicy": "ClusterFirst",
+    "nodeSelector": {
+     "kubernetes.io/os": "linux"
+    },
+    "restartPolicy": "Always",
+    "schedulerName": "default-scheduler",
+    "securityContext": {
+     "runAsNonRoot": true
+    },
+    "serviceAccount": "cdi-operator",
+    "serviceAccountName": "cdi-operator",
+    "terminationGracePeriodSeconds": 30
+   }
+  }
+ },
+ "status": {
+  "availableReplicas": 1,
+  "conditions": [
+   {
+    "lastTransitionTime": "2026-09-28T07:29:46Z",
+    "lastUpdateTime": "2026-09-28T07:29:46Z",
+    "message": "Deployment has minimum availability.",
+    "reason": "MinimumReplicasAvailable",
+    "status": "True",
+    "type": "Available"
+   },
+   {
+    "lastTransitionTime": "2026-09-24T22:12:21Z",
+    "lastUpdateTime": "2026-09-29T18:56:38Z",
+    "message": "ReplicaSet \"cdi-operator-9b88d786c\" has successfully progressed.",
+    "reason": "NewReplicaSetAvailable",
+    "status": "True",
+    "type": "Progressing"
+   }
+  ],
+  "observedGeneration": 3,
+  "readyReplicas": 1,
+  "replicas": 1,
+  "terminatingReplicas": 0,
+  "updatedReplicas": 1
+ }
+}

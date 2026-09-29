@@ -2157,7 +2157,8 @@ Nouvelle section « VMware migrations with Forklift: installation, VDDK image, v
 - Harvester 1.9 ne livre pas Forklift ; `harvester-forklift install` pose cert-manager (manifeste du paquet Cluster API de la console), l'add-on expérimental forklift-operator (chart 1.9.0, images `v1.8.2` par défaut, `--image-tag` pour un autre) et le ForkliftController ; images tirées de `registry.rancher.com/harvester` (miroir à prévoir en airgap) ;
 - `vddk-image` construit l'image d'amorçage depuis l'archive VDDK de VMware (jamais fournie avec la console) et la pousse dans le registre de l'exploitant, identifiants sur l'entrée standard ; le cluster doit pouvoir tirer de ce registre (réglage `containerd-registry`, section Advanced) ;
 - `provider-apply` (JSON sur l'entrée standard : `url`, `user`, `password`, `insecure` ou `cacert`, `vddk_image`), `provider-delete` (refusé tant qu'un plan l'utilise), `inventory` (`vms`, `networks`, `datastores`) ;
-- les vagues à chaud, la bascule et le retour arrière arrivent avec l'étape suivante (B2), l'écran avec C.
+- l'onglet de cluster « VMware migrations » / « Migrations VMware » (plan `2026-09-29-forklift-ui-plan.md`) : Préparation (Forklift, image VDDK depuis une archive déposée une fois dans la console, registre proposé d'après `containerd-registry`, identifiants de Harvester réutilisables), Sources vCenter (ajout, reprise d'un vCenter de VM Import sans ressaisir le mot de passe, modification sans le ressaisir, suppression refusée tant qu'une vague s'en sert), Inventaire en lecture seule (CBT, points d'attention de Forklift traduits) ; un lien depuis VM Import > VMware ;
+- les vagues à chaud, la bascule, le retour arrière et la vue globale « Migrations (tous clusters) » arrivent avec l'étape suivante (B2).
 
 Relire les deux textes : ni tiret cadratin, ni flèche Unicode.
 
@@ -2166,7 +2167,7 @@ Relire les deux textes : ni tiret cadratin, ni flèche Unicode.
 `tools/parity/data.py` ligne 231 :
 
 ```python
-r("part", "1.75", "Migration par forklift-operator", "Migration through forklift-operator", "installé et relié au vCenter par la console (outil harvester-forklift) ; vagues à chaud et écran à venir", "installed and connected to the vCenter by the console (harvester-forklift tool); warm waves and screen to come")
+r("part", "1.75", "Migration par forklift-operator", "Migration through forklift-operator", "onglet Migrations VMware : Forklift installé, image VDDK, sources vCenter, inventaire ; vagues à chaud à venir", "VMware migrations tab: Forklift installed, VDDK image, vCenter sources, inventory; warm waves to come")
 ```
 
 Run: `python3 tools/parity/gen.py --docs`
@@ -2177,18 +2178,19 @@ Expected: `docs/en/harvester-parity.md` et `docs/fr/parite-harvester.md` régén
 `VERSION` : `1.75.0`. En tête de `CHANGELOG.md` :
 
 ```markdown
-## [1.75.0] - 2026-09-28 - Forklift installed and connected to a vCenter
+## [1.75.0] - 2026-09-29 - VMware migrations tab: Forklift, VDDK image, vCenter sources
 
 ### Added
+- A "VMware migrations" tab in each cluster: Preparation (Forklift, the VDDK image, vCenter sources, in order, each with its state and its button), vCenter sources (add, take a vCenter of VM Import without retyping its password, change without retyping it, delete refused while a wave uses it) and a read-only Inventory (Changed Block Tracking, Forklift's concerns, filter on VMs that can move warm). VMware's VDDK archive is given once to the console and serves every cluster; the registry is proposed from Harvester's containerd-registry setting, whose credentials can be reused without being shown.
 - `harvester-forklift`, a new tool: `install` puts cert-manager, the experimental forklift-operator add-on (images named, v1.8.2 by default) and the ForkliftController on a Harvester cluster, in that order; `status` reads it all back.
 - `harvester-forklift vddk-image` builds Forklift's VDDK init image from VMware's archive and pushes it to the operator's registry through the registry API, without podman or buildah; the VDDK never ships with the console.
 - `harvester-forklift provider-apply`, `provider-delete` and `inventory`: a vCenter declared as a Forklift provider (password on stdin), followed until Forklift reaches it or says why not, and its VMs, networks and datastores as Forklift sees them (CBT, size, disks, concerns).
 
 ### Internal
-- `bin/lib/hv_forklift.py`, `bin/lib/oci_push.py`, `Kube.port_forward()`.
+- `bin/lib/hv_forklift.py`, `bin/lib/oci_push.py`, `Kube.port_forward()`; `harvester-forklift` reads secrets from a private file (`--spec`), remembers the pushed VDDK image in the cluster and takes cert-manager from the console's Cluster API bundle.
 
 ### Tests
-- `test_forklift_175.py`, `test_oci_push_175.py` (two simulated registries, Bearer auth, redirected blobs), `test_forklift_cli_175.py`; checked for real on the harvlab2 bench against the nested vCenter of vmwlab.
+- `test_forklift_175.py`, `test_oci_push_175.py` (two simulated registries, Bearer auth, redirected blobs), `test_forklift_cli_175.py`, `test_forklift_ui_cli_175.py`, `test_forklift_routes_175.py`, `tests/e2e/test_forklift_175.py`; checked for real on the harvlab2 bench against the nested vCenter of vmwlab, from the tab.
 ```
 
 - [ ] **Step 4: suite complète, commit, push Gitea**
@@ -2199,7 +2201,7 @@ Expected: tout vert
 ```bash
 git add VERSION CHANGELOG.md docs/en/capabilities.md docs/fr/capabilites.md tools/parity/data.py \
         docs/en/harvester-parity.md docs/fr/parite-harvester.md
-git commit -m "feat(1.75.0): Forklift installed and connected to a vCenter"
+git commit -m "feat(1.75.0): VMware migrations tab, Forklift installed and connected to a vCenter"
 git tag v1.75.0
 git push gitea HEAD:main --tags
 ```

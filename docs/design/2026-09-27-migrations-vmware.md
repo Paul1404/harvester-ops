@@ -106,6 +106,15 @@ Chacun est vérifié en réel avant le suivant.
 
 ### C. La console des migrations VMware
 
+Décidé sur maquettes le 29/09/2026 : un onglet « Migrations VMware » dans
+chaque cluster (sous Cluster, après VM Import) et, avec B2, une entrée
+globale « Migrations (tous clusters) » à côté d'Activity, qui dit quelles
+VMs VMware sont prises en charge, par quel cluster et à quelle étape ; une
+VM déjà prise en charge par un cluster est refusée par un autre. La 1.75.0
+livre la partie de B1 : Préparation (Forklift, image VDDK, sources),
+Sources vCenter et Inventaire en lecture seule
+(`2026-09-29-forklift-ui-plan.md`).
+
 - Une vue par cluster de destination : couloirs par vague sur un axe de
   temps commun (maintenant, les bascules planifiées, la fenêtre de
   maintenance).

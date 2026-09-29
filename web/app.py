@@ -13566,7 +13566,10 @@ import oci_push as _op  # noqa: E402
 FORKLIFT_SCRIPT = "harvester-forklift.py"
 VDDK_DIR = Path(os.environ.get(
     "HARVESTER_OPS_VDDK_DIR", str(Path.home() / ".local/share/harvester-ops/vddk")))
-_FORKLIFT_DO = ("install", "vddk-image", "provider-apply", "provider-delete")
+_FORKLIFT_DO = ("install", "vddk-image", "provider-apply", "provider-delete",
+                # v1.76.0 : vagues à chaud, Préparation étendue (importeur CDI, intervalle)
+                "wave-apply", "wave-start", "wave-cutover", "wave-rollback", "wave-close",
+                "wave-delete", "cdi-importer", "precopy-interval")
 _FK_INVENTORY_CACHE = {}        # (cluster, identité, fournisseur, sorte) -> (horodatage, lignes)
 _FK_INVENTORY_TTL = 20
 _FK_INVENTORY_TIMEOUT = 120       # secondes : au-delà, l'outil et son port-forward sont tués
@@ -13575,6 +13578,9 @@ _VM_SOURCE_KIND = "vmwaresources.migration.harvesterhci.io"
 _VDDK_UPLOADS = set()
 _VDDK_LOCK = threading.Lock()
 _PATH_RE = re.compile(r"(?:/[^\s/:'\"()]+)+")
+_FK_GLOBAL_CACHE = {}           # (cluster_user, console_user) -> (horodatage, réponse)
+_FK_GLOBAL_TTL = 15
+_FK_TAKEN_TIMEOUT = 15          # secondes : lecture des plans d'un autre cluster, avant wave-apply
 
 
 def _vddk_dir():
@@ -13612,7 +13618,10 @@ def api_forklift(cluster):
              "inv_sa": ("serviceaccounts", _hf.INVENTORY_SA, "-n", _hf.NS),
              "registry": ("settings.harvesterhci.io", "containerd-registry"),
              "prov": (_hf.PROV_CLUSTER[0], _hf.PROV_CLUSTER[2], "-n", _hf.PROV_CLUSTER[1]),
-             "sources": (_VM_SOURCE_KIND, "-A")}
+             "sources": (_VM_SOURCE_KIND, "-A"),
+             # v1.76.0 : vagues à chaud (Préparation étendue, onglet Vagues)
+             "cdi_deploy": (_hf.K_DEPLOY, _hf.CDI_OPERATOR[1], "-n", _hf.CDI_OPERATOR[0]),
+             "migrations": (_hf.K_MIGRATION, "-A")}
     with ThreadPoolExecutor(max_workers=len(reads)) as pool:
         futs = {k: pool.submit(_kubectl_json, kc, "get", *a, timeout=30, cluster=cluster) for k, a in reads.items()}
         got = {k: f.result() for k, f in futs.items()}
@@ -13632,6 +13641,8 @@ def api_forklift(cluster):
                           "vddk_image": (spec.get("settings") or {}).get("vddkInitImage", ""),
                           "plans": _hf.plans_using(m.get("namespace"), m.get("name"), items("plans")),
                           "managed": (m.get("labels") or {}).get(_hf.L_MANAGED) == "true"})
+    waves = sorted((_hf.wave_state(p, items("migrations")) for p in items("plans") if _fk_is_wave(p)),
+                   key=lambda w: w["name"] or "")
     return jsonify({
         "cluster": cluster,
         "install": _hf.install_state(addon, by_name("deploys"), got["controller"], by_name("cm_deploys"),
@@ -13646,7 +13657,19 @@ def api_forklift(cluster):
                                      "name": (s.get("metadata") or {}).get("name"),
                                      "endpoint": (s.get("spec") or {}).get("endpoint")} for s in items("sources")),
                                    key=lambda r: (r["namespace"] or "", r["name"] or "")),
+        # v1.76.0 : Préparation étendue (importeur CDI, intervalle) et vagues à chaud
+        "cdi_importer": _hf.cdi_importer_state(got["cdi_deploy"]),
+        "precopy_interval": _hf.precopy_interval(got["controller"]),
+        "waves": waves,
     })
+
+
+def _fk_is_wave(plan):
+    """True si ce Plan est une vague gérée par la console (étiquetée managed
+    + wave) : distingue une vague de tout autre Plan Forklift sur le
+    cluster."""
+    labels = (plan.get("metadata") or {}).get("labels") or {}
+    return labels.get(_hf.L_MANAGED) == "true" and bool(labels.get(_hf.L_WAVE))
 
 
 def _fk_vmimport_source(kc, cluster, ns, name):
@@ -13732,6 +13755,42 @@ def _fk_registry_auth(kc, cluster, host):
     return vals if vals.get("username") and vals.get("password") else None
 
 
+def _fk_taken_across_clusters():
+    """VMs déjà prises dans une vague Forklift ouverte, sur TOUS les clusters
+    déclarés qui répondent (v1.76.0, refus avant `wave-apply`, et vue
+    globale). Rend ({(hôte vCenter, vm-NN): {"wave", "state", "cluster"}},
+    [clusters injoignables ou dont la lecture a échoué])."""
+    cfg = load_config()
+    clusters = [(c["name"], _kubectl_for_cluster(c["name"])) for c in cfg.get("clusters", [])]
+
+    def scan(name, kc):
+        if not kc or _cluster_reachable(kc) is False:
+            return None
+        providers = _kubectl_json(kc, "get", _hf.K_PROVIDER, "-A", timeout=_FK_TAKEN_TIMEOUT, cluster=name)
+        plans = _kubectl_json(kc, "get", _hf.K_PLAN, "-A", timeout=_FK_TAKEN_TIMEOUT, cluster=name)
+        if providers is None or plans is None:
+            return None
+        migrations = _kubectl_json(kc, "get", _hf.K_MIGRATION, "-A", timeout=_FK_TAKEN_TIMEOUT, cluster=name) or {}
+        hosts = {}
+        for p in providers.get("items") or []:
+            m = p.get("metadata") or {}
+            hosts[(m.get("namespace"), m.get("name"))] = _hf.provider_host(p)
+        return _hf.taken_vms(plans.get("items") or [], hosts, migrations.get("items") or [])
+
+    taken, skipped = {}, []
+    from concurrent.futures import ThreadPoolExecutor
+    with ThreadPoolExecutor(max_workers=max(1, len(clusters))) as pool:
+        futs = {name: pool.submit(scan, name, kc) for name, kc in clusters}
+        for name, fut in futs.items():
+            r = fut.result()
+            if r is None:
+                skipped.append(name)
+                continue
+            for key, info in r.items():
+                taken.setdefault(key, {**info, "cluster": name})
+    return taken, sorted(skipped)
+
+
 @app.route("/api/forklift/<cluster>/do/<action>", methods=["POST"])
 @requires_auth
 @_rate_limit("30/minute")
@@ -13742,7 +13801,7 @@ def api_forklift_do(cluster, action):
     if not kc:
         return jsonify({"error": f"unknown cluster: {cluster}"}), 404
     b = request.get_json(silent=True) or {}
-    cmd, spec = _fk_cmd(action, kc), None
+    cmd, spec, extra_reply = _fk_cmd(action, kc), None, {}
     try:
         if action == "install":
             bundle = _capi_bundle_active_path()
@@ -13794,18 +13853,158 @@ def api_forklift_do(cluster, action):
                                          "pick another name, or change that source instead"}), 409
             cmd += ["--namespace", ns, "--name", name]
             label = f"forklift:provider-apply:{ns}/{name}"
-        else:
+        elif action == "provider-delete":
             name = _hf.check_name(str(b.get("name") or ""), "provider")
             ns = _hf.check_name(b.get("namespace") or _hf.NS, "namespace")
             cmd += ["--namespace", ns, "--name", name, "--with-secret"]
             label = f"forklift:provider-delete:{ns}/{name}"
+        elif action == "wave-apply":
+            sp = b.get("spec") if isinstance(b.get("spec"), dict) else {}
+            manifests = _hf.wave_manifests(sp)          # ValueError -> 400 (même contrôle que l'outil)
+            plan = manifests[2]
+            wave = plan["metadata"]["name"]
+            prov_src = plan["spec"]["provider"]["source"]
+            provider = _kubectl_json(kc, "get", _hf.K_PROVIDER, prov_src["name"], "-n", prov_src["namespace"],
+                                     timeout=30, cluster=cluster)
+            if not provider:
+                return jsonify({"error": f"no provider {prov_src['namespace']}/{prov_src['name']} "
+                                         "on this cluster"}), 404
+            host = _hf.provider_host(provider)
+            taken, skipped = _fk_taken_across_clusters()
+            extra_reply["skipped"] = skipped
+            if host:
+                for v in plan["spec"]["vms"]:
+                    info = taken.get((host, v["id"]))
+                    if info and info["cluster"] != cluster:
+                        return jsonify({"error": f"{v['id']} is already in wave {info['wave']} "
+                                                 f"on cluster {info['cluster']}",
+                                        "skipped": skipped}), 409
+            spec = sp
+            label = f"forklift:wave-apply:{wave}"
+        elif action == "wave-start":
+            wave = _hf.check_wave_name(str(b.get("wave") or ""))
+            cmd += ["--wave", wave]
+            label = f"forklift:wave-start:{wave}"
+        elif action == "wave-cutover":
+            wave = _hf.check_wave_name(str(b.get("wave") or ""))
+            at = str(b.get("at") or "").strip()
+            if at:
+                _hf.cutover_patch(at)              # RFC 3339, pas trop dans le passé : ValueError -> 400
+                cmd += ["--wave", wave, "--at", at]
+            else:
+                cmd += ["--wave", wave]
+            label = f"forklift:wave-cutover:{wave}"
+        elif action == "wave-rollback":
+            wave = _hf.check_wave_name(str(b.get("wave") or ""))
+            cmd += ["--wave", wave]
+            vms = b.get("vms") or []
+            if not isinstance(vms, list):
+                raise ValueError("vms: a list of VM ids")
+            for v in vms:
+                v = str(v or "").strip()
+                if not _hf.VM_ID_RE.match(v):
+                    raise ValueError(f"VM id: {v!r} is not an inventory id")
+                cmd += ["--vm", v]
+            label = f"forklift:wave-rollback:{wave}"
+        elif action == "wave-close":
+            wave = _hf.check_wave_name(str(b.get("wave") or ""))
+            cmd += ["--wave", wave]
+            if b.get("clean_snapshots"):
+                cmd.append("--clean-snapshots")
+            label = f"forklift:wave-close:{wave}"
+        elif action == "wave-delete":
+            wave = _hf.check_wave_name(str(b.get("wave") or ""))
+            cmd += ["--wave", wave]
+            label = f"forklift:wave-delete:{wave}"
+        elif action == "cdi-importer":
+            mode = str(b.get("mode") or "").strip()
+            if mode == "upstream":
+                cmd.append("--upstream")
+                image = str(b.get("image") or "").strip()
+                if image:
+                    cmd += ["--image", _hf.check_image(image, "importer image")]
+            elif mode == "original":
+                cmd.append("--original")
+            else:
+                raise ValueError("mode: upstream or original")
+            label = "forklift:cdi-importer"
+        else:
+            # precopy-interval : validé par la bibliothèque, un seul chiffre en argument positionnel
+            patch = _hf.precopy_patch(b.get("minutes"))
+            cmd.append(str(patch["spec"]["controller_precopy_interval"]))
+            label = "forklift:precopy-interval"
     except LookupError as e:
         return jsonify({"error": str(e)}), 404
     except (ValueError, TypeError) as e:
         return jsonify({"error": str(e)}), 400
     run, err = _cli_action(cluster, label, cmd, "harvester-forklift", spec=spec,
                            after=lambda: _invalidate_cluster_caches(cluster))
-    return _res_reply(run, err, action=action)
+    return _res_reply(run, err, action=action, **extra_reply)
+
+
+def _fk_provider_row(p):
+    ready, msg = _hf.provider_state(p)
+    m = p.get("metadata") or {}
+    return {"name": m.get("name"), "namespace": m.get("namespace"), "url": (p.get("spec") or {}).get("url"),
+            "ready": ready, "message": msg}
+
+
+def _fk_global_cluster(name, kc):
+    """L'état Forklift d'un cluster pour la vue globale : injoignable ou en
+    échec de lecture -> `reachable: False`, sans bloquer les autres."""
+    empty = {"cluster": name, "reachable": False, "forklift_ready": False,
+             "cdi_importer_kind": None, "providers": [], "waves": []}
+    if not kc or _cluster_reachable(kc) is False:
+        return empty
+    from concurrent.futures import ThreadPoolExecutor
+    reads = {"addons": (_hf.K_ADDON, "-A"), "deploys": (_hf.K_DEPLOY, "-n", _hf.NS),
+             "cm_deploys": (_hf.K_DEPLOY, "-n", _hf.CERT_MANAGER[0]),
+             "controller": (_hf.K_CONTROLLER, _hf.CONTROLLER_NAME, "-n", _hf.NS),
+             "inv_sa": ("serviceaccounts", _hf.INVENTORY_SA, "-n", _hf.NS),
+             "providers": (_hf.K_PROVIDER, "-A"), "plans": (_hf.K_PLAN, "-A"),
+             "migrations": (_hf.K_MIGRATION, "-A"),
+             "cdi_deploy": (_hf.K_DEPLOY, _hf.CDI_OPERATOR[1], "-n", _hf.CDI_OPERATOR[0])}
+    with ThreadPoolExecutor(max_workers=len(reads)) as pool:
+        futs = {k: pool.submit(_kubectl_json, kc, "get", *a, timeout=_FK_TAKEN_TIMEOUT, cluster=name)
+                for k, a in reads.items()}
+        got = {k: f.result() for k, f in futs.items()}
+    if got["providers"] is None and got["plans"] is None:
+        # le cluster répond, mais Forklift n'est pas lisible (non installé, ou lecture refusée)
+        return {**empty, "reachable": True}
+    items = lambda k: (got[k] or {}).get("items") or []  # noqa: E731
+    by_name = lambda k: {(d.get("metadata") or {}).get("name"): d for d in items(k)}  # noqa: E731
+    addon, _theirs = _hf.pick_addon(items("addons"))
+    install = _hf.install_state(addon, by_name("deploys"), got["controller"], by_name("cm_deploys"), got["inv_sa"])
+    providers = sorted((_fk_provider_row(p) for p in items("providers")
+                        if (p.get("spec") or {}).get("type") == "vsphere"),
+                       key=lambda r: r["name"] or "")
+    waves = sorted((_hf.wave_state(p, items("migrations")) for p in items("plans") if _fk_is_wave(p)),
+                   key=lambda w: w["name"] or "")
+    return {"cluster": name, "reachable": True, "forklift_ready": install["ready"],
+            "cdi_importer_kind": _hf.cdi_importer_state(got["cdi_deploy"])["kind"],
+            "providers": providers, "waves": waves}
+
+
+@app.route("/api/forklift-global")
+@requires_auth
+def api_forklift_global():
+    """Toutes les vagues, sur tous les clusters déclarés : une VM prise sur
+    l'un d'eux ne doit pas se recomposer en vague sur un autre (v1.76.0).
+    Lecture seule (viewer) ; un cluster injoignable est signalé, sans
+    bloquer les autres. Gardée 15 s par personne."""
+    key = ((current_cluster_identity() or {}).get("user"), current_user())
+    now = time.time()
+    hit = _FK_GLOBAL_CACHE.get(key)
+    if hit and now - hit[0] < _FK_GLOBAL_TTL:
+        return jsonify(hit[1])
+    cfg = load_config()
+    clusters = [(c["name"], _kubectl_for_cluster(c["name"])) for c in cfg.get("clusters", [])]
+    from concurrent.futures import ThreadPoolExecutor
+    with ThreadPoolExecutor(max_workers=max(1, len(clusters))) as pool:
+        rows = list(pool.map(lambda nk: _fk_global_cluster(*nk), clusters))
+    body = {"clusters": sorted(rows, key=lambda r: r["cluster"] or "")}
+    _FK_GLOBAL_CACHE[key] = (now, body)
+    return jsonify(body)
 
 
 _FK_NO_INVENTORY_SA = re.compile(r'serviceaccounts? "?' + re.escape(_hf.INVENTORY_SA) + r'"? not found')

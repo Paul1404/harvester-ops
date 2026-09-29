@@ -290,7 +290,11 @@ cmd_install() {
         && echo 0 | sudo tee /sys/module/kvm/parameters/report_ignored_msrs >/dev/null"
     say "installation de $ESX ($ESX_IP), ~15 min"
     # host-passthrough : l'ESXi fait lui-même tourner des VMs (le vCenter).
-    # vmxnet3 : ESXi 7 ne reconnaît plus les e1000/rtl8139 émulées.
+    # e1000e : ESXi 7 ne reconnaît plus les e1000/rtl8139 émulées, et la vmxnet3
+    # de QEMU ne complète pas les trames courtes : le vmkernel ignore alors les
+    # trames de moins de 60 octets du pont local (ARP de node2 et des bancs
+    # Harvester sans réponse, VDDK injoignable ; vu le 29/09/2026). L'e1000e de
+    # QEMU les complète.
     # qxl : avec la carte vidéo par défaut, l'écran d'installation boucle.
     # Carte mère i440fx (pc) et lecteur CD en IDE : ESXi 7.0 ne lit pas le
     # lecteur ATAPI d'un contrôleur SATA de QEMU (exceptions vmw_ahci, le
@@ -305,7 +309,7 @@ cmd_install() {
         --disk path=$DIR/$ESX.qcow2,size=$DISK_GB,format=qcow2,bus=sata,cache=unsafe,discard=unmap \
         --check disk_size=off \
         --cdrom $DIR/esxi-ks.iso \
-        --network bridge=br0,model=vmxnet3,mac=$MAC,target.dev=$LAB-esx1 \
+        --network bridge=br0,model=e1000e,mac=$MAC,target.dev=$LAB-esx1 \
         --video qxl --graphics vnc,listen=127.0.0.1 \
         --noautoconsole --wait -1 >/dev/null"
 }

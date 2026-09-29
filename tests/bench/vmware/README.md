@@ -176,7 +176,10 @@ la VM sans le filtre.
   lit toute la sortie (`grep ... >/dev/null`).
 - **`ignore_msrs`** sur node2 (`/etc/modprobe.d/vmwlab-kvm.conf`, posé aussi
   à chaud) : ESXi lit des MSR que KVM n'émule pas.
-- Carte **vmxnet3** (ESXi 7 ne reconnaît plus e1000 ni rtl8139), vidéo
+- Carte **e1000e** pour l'ESXi : ESXi 7 ne reconnaît plus e1000 ni rtl8139, et la vmxnet3 de QEMU ne
+  complète pas les trames courtes. Le vmkernel ignore alors les trames de moins de 60 octets venues du
+  pont local : l'ARP de node2 et des bancs Harvester restait sans réponse (node1, derrière le switch
+  physique qui complète les trames, passait), et VDDK ne joignait pas l'hôte sur le port 902. Vidéo
   **qxl** (l'écran d'installation boucle sinon), CPU **host-passthrough**
   (l'ESXi fait tourner le vCenter).
 - **SELinux est appliqué sur node2** : `/srv/vmware-lab` porte le type

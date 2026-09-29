@@ -312,6 +312,73 @@ def test_an_upload_in_progress_survives_a_background_refresh(context, flask_serv
     expect(line).to_contain_text("kept by the console")
 
 
+def test_a_completed_upload_only_refreshes_the_archive_choice(context, flask_server):
+    """La fin d'un envoi ne doit jamais effacer l'image ou l'utilisateur du
+    registre en cours de saisie : seuls les choix de l'archive changent."""
+    new_archive = "VMware-vix-disklib-8.0.4-23960000.x86_64.tar.gz"
+    page, _ = open_tab(context, flask_server, DATA)
+    form = page.locator('#tab-forklift [data-fk-step="vddk"]')
+    form.locator('[name="image"]').fill("reg.lan/harvops/vddk:9.9.9")
+    form.locator('[name="use_cluster_auth"]').uncheck()
+    form.locator('[name="username"]').fill("pusher")
+    updated_store = {"archives": STORE["archives"] + [
+        {"name": new_archive, "version": "8.0.4", "size": 4096, "mtime": 1790000100}], "free": 10 ** 11}
+    page.route("**/api/forklift-vddk", lambda r, q: fulfill(r, updated_store))
+    pending = []
+    page.route(f"**/api/forklift-vddk/{new_archive}", lambda r, q: pending.append(r))
+    form.locator('[data-fk="upload-file"]').set_input_files(
+        {"name": new_archive, "mimeType": "application/gzip", "buffer": b"x" * 2048})
+    page.wait_for_timeout(200)
+    assert pending, "the upload was not sent"
+    pending[0].fulfill(status=201, content_type="application/json",
+                       body=json.dumps({"action_id": "fk0000000175", "archive": new_archive, "size": 2048}))
+    line = form.locator('[data-fk="upload-line"]')
+    expect(line).to_contain_text("kept by the console")
+    expect(form.locator('[name="archive"]')).to_have_value(new_archive)
+    expect(form.locator('[name="image"]')).to_have_value("reg.lan/harvops/vddk:9.9.9")
+    expect(form.locator('[name="username"]')).to_have_value("pusher")
+    expect(form.locator('[name="use_cluster_auth"]')).not_to_be_checked()
+
+
+def test_a_failed_background_read_does_not_wipe_the_form(context, flask_server):
+    """Un aléa de la relecture de fond (10 s), pendant une saisie en cours,
+    ne doit jamais remplacer le formulaire par un message d'erreur."""
+    state = {"ok": True}
+
+    def read(route, req):
+        if state["ok"]:
+            fulfill(route, DATA)
+        else:
+            route.fulfill(status=500, content_type="application/json", body="{}")
+    page, _ = open_tab(context, flask_server, DATA)
+    page.route("**/api/forklift/harv-fake", read)
+    form = page.locator('#tab-forklift [data-fk-step="vddk"]')
+    form.locator('[name="image"]').fill("reg.lan/harvops/vddk:9.9.9")
+    state["ok"] = False
+    page.evaluate("Forklift.backgroundRefresh()")
+    page.wait_for_timeout(300)
+    expect(form.locator('[name="image"]')).to_have_value("reg.lan/harvops/vddk:9.9.9")
+    expect(page.locator('#tab-forklift .sto-finding')).to_have_count(0)
+
+
+def test_reopening_a_source_window_does_not_double_submit(context, flask_server):
+    """FloatingPanels.open rend le même panneau tant qu'il n'a pas été fermé
+    par la croix : reprendre l'édition ne doit jamais poser un second
+    écouteur de soumission."""
+    page, sent = open_tab(context, flask_server, DATA)
+    page.evaluate("Sections.open('forklift', 'sources')")
+    edit = page.locator('#tab-forklift [data-fk-source="vmwlab"] [data-fk="edit-source"]')
+    edit.click()
+    panel = page.locator(".floating-panel").last
+    panel.locator('[data-action="min"]').click()
+    edit.click()   # reprend la même fenêtre (encore dans la carte de FloatingPanels)
+    form = page.locator(".floating-panel .of-form").last
+    form.locator('button[type="submit"]').click()
+    page.wait_for_timeout(400)
+    posts = [s for s in sent if s[0] == "api/forklift/harv-fake/do/provider-apply"]
+    assert len(posts) == 1, posts
+
+
 def test_the_inventory_access_is_a_part_and_resume_is_offered_without_it(context, flask_server):
     no_sa = {**DATA, "install": {**READY, "ready": False, "running": True, "inventory_access": False}}
     page, sent = open_tab(context, flask_server, no_sa)

@@ -1325,13 +1325,17 @@ or `datastores` as Forklift sees them.
 **Airgap.** The console pulls the VDDK base image
 (`registry.suse.com/bci/bci-busybox:16.0`) itself, from its own host: in
 airgap, set `HARVESTER_OPS_VDDK_BASE` in `/etc/harvester-ops/env` to a
-mirror of it (`--base` on the command line). The target registry is
-trusted through the system certificate authorities of the console's image:
-a registry signed by an internal authority is not supported yet (plain
-HTTP works). Only the cert-manager manifest comes from the console's
-Cluster API bundle; its images, like Forklift's, are pulled by the
-cluster: mirror them. The cluster must also be able to pull from the
-registry the VDDK image is pushed to (Advanced > containerd-registry).
+mirror of it (`--base` on the command line). That base image, or its
+mirror, is always pulled anonymously over HTTPS, trusted through the
+system certificate authorities of the console's image: a mirror served
+in plain HTTP, or one that needs credentials, is not supported yet. The
+target registry (where the built VDDK image is pushed) is trusted the
+same way through those authorities: a registry signed by an internal one
+is not supported yet, but plain HTTP and credentials both work there.
+Only the cert-manager manifest comes from the console's Cluster API
+bundle; its images, like Forklift's, are pulled by the cluster: mirror
+them. The cluster must also be able to pull from the registry the VDDK
+image is pushed to (Advanced > containerd-registry).
 
 Checked for real on the harvlab2 bench, against the nested vCenter of
 vmwlab, from the tab: this was also the first real check of a VM Import

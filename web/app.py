@@ -13783,11 +13783,12 @@ def api_forklift_do(cluster, action):
         elif action == "provider-apply":
             sp = b.get("spec") if isinstance(b.get("spec"), dict) else {}
             ns, name, spec = _fk_provider_spec(kc, cluster, sp)
-            # une NOUVELLE source (ni modification ni namespace d'un
-            # fournisseur existant) ne remplace jamais en silence un
-            # fournisseur du même nom : « Ajouter » depuis VM Import
+            # une NOUVELLE source (jamais une modification, qui envoie
+            # toujours keep_credentials) ne remplace jamais en silence un
+            # fournisseur du même nom dans le namespace visé (celui donné,
+            # ou « forklift » par défaut) : « Ajouter » depuis VM Import
             # préremplit le nom de la source reprise
-            if not sp.get("keep_credentials") and not sp.get("namespace") and \
+            if not sp.get("keep_credentials") and \
                     _kubectl_json(kc, "get", _hf.K_PROVIDER, name, "-n", ns, timeout=30, cluster=cluster):
                 return jsonify({"error": f"a provider named {name} already exists in {ns}: "
                                          "pick another name, or change that source instead"}), 409

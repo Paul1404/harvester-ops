@@ -266,7 +266,8 @@ def cmd_provider_apply(args, kube=None, sleep=time.sleep, now=time.time):
     secret, prov = hf.provider_secret(ns, name, spec), hf.provider_manifest(ns, name, spec)
     # Forklift doit tourner ; l'accès à l'inventaire, lui, est posé ici s'il
     # manque (installation arrêtée avant sa fin, Forklift posé autrement)
-    if not install_state(kube)["running"]:
+    st = install_state(kube)
+    if not st["running"]:
         step("provider", "error", "Forklift is not installed and running on this cluster: run install first")
         return EXIT_REFUSED
     # un fournisseur de ce nom fait par un autre outil (ou le `host` de
@@ -276,7 +277,9 @@ def cmd_provider_apply(args, kube=None, sleep=time.sleep, now=time.time):
     if foreign:
         step("provider", "error", foreign)
         return EXIT_REFUSED
-    kube.apply(hf.inventory_rbac())
+    # déjà posé : ne pas le réappliquer à chaque fournisseur (lu juste avant)
+    if not st["inventory_access"]:
+        kube.apply(hf.inventory_rbac())
     try:
         kube.apply([secret])
     except KubeError as e:

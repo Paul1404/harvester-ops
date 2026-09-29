@@ -1478,14 +1478,19 @@ que Forklift les voit.
 **Airgap.** La console tire elle-même l'image de base VDDK
 (`registry.suse.com/bci/bci-busybox:16.0`), depuis son propre hôte : en
 airgap, `HARVESTER_OPS_VDDK_BASE`, posée dans `/etc/harvester-ops/env`,
-désigne un miroir de cette image (`--base` en ligne de commande). Le registre
-cible est reconnu par les autorités de certification système de l'image
-de la console : un registre signé par une autorité interne n'est pas
-encore pris en charge (le HTTP simple fonctionne). Seul le manifeste de
-cert-manager vient du paquet Cluster API de la console ; ses images,
-comme celles de Forklift, sont tirées par le cluster : les mettre en
-miroir. Le cluster doit aussi pouvoir tirer depuis le registre où l'image
-VDDK est poussée (Advanced > containerd-registry).
+désigne un miroir de cette image (`--base` en ligne de commande). Cette
+image de base, ou son miroir, est toujours tirée de façon anonyme en
+HTTPS, reconnue par les autorités de certification système de l'image de
+la console : un miroir servi en HTTP simple, ou qui exigerait des
+identifiants, n'est pas encore pris en charge. Le registre cible (où
+l'image VDDK construite est poussée) est reconnu de la même façon par ces
+autorités : un registre signé par une autorité interne n'est pas encore
+pris en charge, mais le HTTP simple et des identifiants y fonctionnent
+tous les deux. Seul le manifeste de cert-manager vient du paquet Cluster
+API de la console ; ses images, comme celles de Forklift, sont tirées par
+le cluster : les mettre en miroir. Le cluster doit aussi pouvoir tirer
+depuis le registre où l'image VDDK est poussée (Advanced >
+containerd-registry).
 
 Vérifié en réel sur le banc harvlab2, contre le vCenter imbriqué de
 vmwlab, depuis l'onglet : c'était aussi la première vérification réelle

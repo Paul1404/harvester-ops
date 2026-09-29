@@ -183,11 +183,18 @@ def test_a_new_source_with_a_name_already_taken_is_refused(world):
         assert vmi.status_code == 409
     assert world["actions"] == []
     with wapp.app.test_client() as c:
-        # une modification (keep_credentials, ou le namespace du fournisseur) reste permise
+        # une modification (keep_credentials) reste permise, y compris avec
+        # le namespace du fournisseur donné explicitement
         assert c.post("/api/forklift/harvlab2/do/provider-apply",
                       json={"spec": {**spec, "keep_credentials": True}}, headers=auth("adm")).status_code == 202
         assert c.post("/api/forklift/harvlab2/do/provider-apply",
-                      json={"spec": {**spec, "namespace": "forklift"}}, headers=auth("adm")).status_code == 202
+                      json={"spec": {**spec, "namespace": "forklift", "keep_credentials": True}},
+                      headers=auth("adm")).status_code == 202
+        # donner explicitement le namespace où le nom est déjà pris ne
+        # contourne pas le refus pour une NOUVELLE source
+        assert c.post("/api/forklift/harvlab2/do/provider-apply",
+                      json={"spec": {**spec, "namespace": "forklift"}},
+                      headers=auth("adm")).status_code == 409
 
 
 # --- 4. cache d'inventaire par personne --------------------------------------

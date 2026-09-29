@@ -266,6 +266,11 @@ const VMImport = (() => {
   /** `cluster` : celui de la fenêtre, figé à son ouverture (l'onglet peut
    *  passer à un autre cluster avant l'envoi). */
   function submitWith(form, build, action, doneText, cluster) {
+    // FloatingPanels.open rend le même formulaire tant que la fenêtre n'a
+    // pas été fermée : la reprendre (édition rouverte) ne doit jamais
+    // poser un second écouteur, sous peine d'un Save qui envoie deux POST.
+    if (form.dataset.viBound) return;
+    form.dataset.viBound = '1';
     form.addEventListener('submit', async (e) => {
       e.preventDefault();
       const msg = form.querySelector('.of-msg');

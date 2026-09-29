@@ -12,6 +12,10 @@ This file summarises each minor release; per-patch detail lives in `git log`.
 - `harvester-forklift vddk-image` builds Forklift's VDDK init image from VMware's archive and pushes it to the operator's registry through the registry API, without podman or buildah; the VDDK never ships with the console.
 - `harvester-forklift provider-apply`, `provider-delete` and `inventory`: a vCenter declared as a Forklift provider (password on stdin), followed until Forklift reaches it or says why not, and its VMs, networks and datastores as Forklift sees them (CBT, size, disks, concerns).
 - The Preparation lists the inventory access (service account `harvester-ops-inventory`) as one more part and offers Resume when it is missing; a new vCenter source whose name is already taken is refused (409) instead of replacing that provider, and `provider-apply` never takes over a provider made by another tool; `HARVESTER_OPS_VDDK_BASE` points the VDDK base image at a mirror for airgap.
+- `provider-delete` refuses to delete a provider that is not a vCenter, and `provider-apply` refuses to take over a provider made by another tool.
+
+### Fixed
+- VM Import windows now apply to the cluster they were opened for, even if the tab has switched cluster since, and a window reopened twice no longer sends its form twice.
 
 ### Internal
 - `bin/lib/hv_forklift.py`, `bin/lib/oci_push.py`, `Kube.port_forward()`; `harvester-forklift` reads secrets from a private file (`--spec`), remembers the pushed VDDK image in the cluster and takes cert-manager from the console's Cluster API bundle.

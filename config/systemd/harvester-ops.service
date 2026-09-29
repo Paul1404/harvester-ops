@@ -44,6 +44,7 @@ ExecStart=/bin/sh -c 'u=$$(id -u harvester-ops); g=$$(id -g harvester-ops); \
     -e HARVESTER_OPS_VDDK_DIR=/var/lib/harvester-ops/vddk \
     -e HARVESTER_OPS_CAPI_BUNDLE=/var/lib/harvester-ops/capi-bundles/capi-bundle.tar.gz \
     -e HARVESTER_OPS_IMAGE_UPLOAD_PORT=$${HARVESTER_OPS_IMAGE_UPLOAD_PORT:-8092} \
+    -e HARVESTER_OPS_VDDK_BASE=$${HARVESTER_OPS_VDDK_BASE:-} \
     localhost/harvester-ops:latest serve'
 
 ExecStop=/usr/bin/podman stop -t 10 harvester-ops

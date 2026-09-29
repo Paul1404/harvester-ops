@@ -241,10 +241,8 @@ def test_provider_apply_writes_the_secret_and_the_provider_and_waits(monkeypatch
     monkeypatch.setattr(sys, "stdin", io.StringIO(json.dumps(SPEC)))
     c = Clock()
     assert hfk.cmd_provider_apply(prov_args(), kube=k, sleep=c.sleep, now=c.now) == hfk.EXIT_OK
-    # l'accès à l'inventaire est reposé (sans effet s'il est là) avant le secret et le fournisseur
-    assert [x[:2] for x in k.calls if x[0] == "apply"] == [
-        ("apply", "ServiceAccount"), ("apply", "ClusterRole"), ("apply", "ClusterRoleBinding"),
-        ("apply", "Secret"), ("apply", "Provider")]
+    # l'accès à l'inventaire est déjà posé (install l'a fait) : pas reposé ici
+    assert [x[:2] for x in k.calls if x[0] == "apply"] == [("apply", "Secret"), ("apply", "Provider")]
     sec = k.objs[("secrets", "default", "vmwlab-vsphere")]
     assert sec["stringData"]["password"] == "Very-S3cret!pw"
     prov = k.objs[(hf.K_PROVIDER, "default", "vmwlab")]

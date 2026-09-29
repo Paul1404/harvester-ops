@@ -94,6 +94,9 @@ const Forklift = (() => {
     const [d, store] = await Promise.all([getJSON(`/api/forklift/${enc(c.cluster)}`),
                                           c.kind === 'prep' ? getJSON('/api/forklift-vddk') : Promise.resolve(c.store)]);
     if (c !== cur) return;
+    // une saisie ou un envoi en cours : un aléa de la relecture de fond
+    // (réseau, cluster injoignable) ne doit jamais effacer le formulaire
+    if ((c.dirty || c.uploading) && (!d || d.error || d.unreachable)) return;
     c.data = d;
     c.store = store;
     render();
@@ -476,14 +479,13 @@ const Forklift = (() => {
       line(c.uploadNote);
       return;
     }
-    // fin de l'envoi : la note reste dite, le formulaire est relu (la
-    // nouvelle archive apparaît dans la liste)
+    // fin de l'envoi : la note reste dite, une saisie en cours n'est
+    // jamais effacée ; seule la liste des archives se rafraîchit, et
+    // seulement en cas de réussite (la nouvelle archive doit y apparaître)
     const done = (html) => {
       c.uploading = false;
-      c.dirty = false;
       c.uploadNote = html;
       line(html);
-      if (c === cur) load();
     };
     c.uploading = true;
     c.uploadNote = '';
@@ -497,12 +499,34 @@ const Forklift = (() => {
       let d = {};
       try { d = JSON.parse(xhr.responseText); } catch { /* sans corps */ }
       if (window.Dock && Dock.poll) Dock.poll();
-      done(xhr.status === 201 ? `${icon('ok')} ${esc(tr('fk.uploaded', { name: file.name }))}`
-                              : `<span class="res-error">${esc(d.error || `HTTP ${xhr.status}`)}</span>`);
+      if (xhr.status === 201) {
+        done(`${icon('ok')} ${esc(tr('fk.uploaded', { name: file.name }))}`);
+        if (c === cur) refreshArchives(file.name);
+      } else {
+        done(`<span class="res-error">${esc(d.error || `HTTP ${xhr.status}`)}</span>`);
+      }
     };
     xhr.onerror = () => done(`<span class="res-error">${esc(tr('fk.uploadFailed'))}</span>`);
     xhr.onabort = xhr.onerror;
     xhr.send(file);
+  }
+
+  /** Fin d'un envoi réussi : seuls les choix de l'archive (et sa sélection)
+   *  sont rafraîchis, jamais le reste du formulaire en cours de saisie. */
+  async function refreshArchives(pick) {
+    const c = cur;
+    const store = await getJSON('/api/forklift-vddk');
+    if (!c || c !== cur) return;
+    c.store = store;
+    const archives = (store && store.archives) || [];
+    const box = c.host.querySelector('[data-fk-step="vddk"]');
+    const sel = box && box.querySelector('[name="archive"]');
+    if (!sel) return;
+    const value = archives.some(a => a.name === pick) ? pick : (archives[0] && archives[0].name) || '';
+    sel.innerHTML = archives.length ? opts(archives.map(a => [a.name, `${a.name} (${size(a.size)})`]), value)
+                                    : `<option value="">${esc(tr('fk.noArchive'))}</option>`;
+    const pushBtn = box.querySelector('[data-fk="push-vddk"]');
+    if (pushBtn) pushBtn.disabled = !archives.length;
   }
 
   // -- Actions ------------------------------------------------------------
@@ -538,6 +562,11 @@ const Forklift = (() => {
     .map(([v, l]) => `<option value="${esc(v)}" ${String(v) === String(sel) ? 'selected' : ''}>${esc(l)}</option>`).join('');
 
   function submitWith(form, build, action, doneText, cluster) {
+    // FloatingPanels.open rend le même formulaire tant que la fenêtre n'a
+    // pas été fermée : la reprendre (édition rouverte) ne doit jamais
+    // poser un second écouteur, sous peine d'un Save qui envoie deux POST.
+    if (form.dataset.fkBound) return;
+    form.dataset.fkBound = '1';
     form.addEventListener('submit', async (e) => {
       e.preventDefault();
       const msg = form.querySelector('.of-msg');

@@ -285,8 +285,12 @@ ARCHIVE_RE = re.compile(r"^VMware-vix-disklib-(\d+\.\d+\.\d+)-\d+\.x86_64\.tar\.
 
 
 def check_archive_name(name):
-    """Le nom que VMware donne à l'archive VDDK ; rend sa version (8.0.3)."""
-    m = ARCHIVE_RE.match(str(name or ""))
+    """Le nom que VMware donne à l'archive VDDK ; rend sa version (8.0.3).
+
+    `fullmatch`, pas `match` : avec `match`, le `$` de fin de motif laisse
+    passer un saut de ligne final (nom collé depuis un terminal, par
+    exemple), ce qui aurait accepté une archive au nom invalide."""
+    m = ARCHIVE_RE.fullmatch(str(name or ""))
     if not m:
         raise ValueError("VDDK archive: VMware-vix-disklib-<version>-<build>.x86_64.tar.gz expected")
     return m.group(1)

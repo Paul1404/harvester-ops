@@ -82,6 +82,10 @@ def world(monkeypatch, tmp_path):
             {"metadata": {"namespace": "mig", "name": "vc"},
              "spec": {"endpoint": "https://vmwlab-vc.home.lo/sdk", "dc": "vmwlab-dc",
                       "credentials": {"name": "vc-creds", "namespace": "mig"}}}]},
+        ("vmwaresources.migration.harvesterhci.io", "mig", "vc"): {
+            "metadata": {"namespace": "mig", "name": "vc"},
+            "spec": {"endpoint": "https://vmwlab-vc.home.lo/sdk", "dc": "vmwlab-dc",
+                     "credentials": {"name": "vc-creds", "namespace": "mig"}}},
         ("secrets", "mig", "vc-creds"): {"data": {"username": B64("administrator@vsphere.local"),
                                                   "password": B64("Very-S3cret!pw")}},
         ("secrets", "forklift", hf.secret_name("vmwlab")): {"data": {"user": B64("administrator@vsphere.local"),
@@ -169,6 +173,25 @@ def test_a_vcenter_of_vm_import_is_reused_with_its_password_read_by_the_server(w
     assert "Very-S3cret" not in " ".join(cmd)
 
 
+def test_the_vmimport_source_lookup_is_a_named_get(world, monkeypatch):
+    """La source VM Import est lue par son nom (`get <kind> <name> -n <ns>`),
+    pas listée en entier (`-A`) puis filtrée côté serveur."""
+    calls = []
+    orig = wapp._kubectl_json
+
+    def kj(kc, verb, kind, *a, **k):
+        if kind == wapp._VM_SOURCE_KIND:
+            calls.append(a)
+        return orig(kc, verb, kind, *a, **k)
+    monkeypatch.setattr(wapp, "_kubectl_json", kj)
+    with wapp.app.test_client() as c:
+        r = c.post("/api/forklift/harvlab2/do/provider-apply",
+                   json={"spec": {"name": "vmwlab2", "from_vmimport": {"namespace": "mig", "name": "vc"},
+                                  "vddk_image": "172.16.1.11:5005/harvops/vddk:8.0.3"}}, headers=auth("adm"))
+    assert r.status_code == 202
+    assert calls == [("vc", "-n", "mig")]
+
+
 def test_changing_a_provider_without_retyping_its_password_keeps_it(world):
     with wapp.app.test_client() as c:
         r = c.post("/api/forklift/harvlab2/do/provider-apply",
@@ -227,6 +250,28 @@ def test_the_vddk_archive_is_kept_by_the_console_and_pushed_from_its_store(world
     assert cmd[cmd.index("--kubeconfig") + 1] == "/kc" and "reg-S3cret" not in " ".join(cmd)
 
 
+def test_vddk_image_reads_the_registry_setting_from_its_default_too(world, monkeypatch):
+    """Le réglage containerd-registry peut n'avoir qu'un `default` (jamais
+    modifié à la main) : l'action vddk-image doit le lire comme la lecture
+    de l'onglet le fait déjà (`value or default`)."""
+    orig = wapp._kubectl_json
+
+    def kj(kc, verb, kind, *a, **k):
+        if kind == "settings.harvesterhci.io":
+            return {"default": REG}
+        return orig(kc, verb, kind, *a, **k)
+    monkeypatch.setattr(wapp, "_kubectl_json", kj)
+    data = vddk_bytes()
+    with wapp.app.test_client() as c:
+        assert c.put(f"/api/forklift-vddk/{ARCHIVE}", data=data, headers=auth("adm")).status_code == 201
+        r = c.post("/api/forklift/harvlab2/do/vddk-image",
+                   json={"archive": ARCHIVE, "image": "172.16.1.11:5005/harvops/vddk:8.0.3",
+                         "use_cluster_auth": True}, headers=auth("adm"))
+    assert r.status_code == 202
+    _, _, sent, _ = world["actions"][0]
+    assert sent == {"username": "harvops", "password": "reg-S3cret"}
+
+
 def test_the_inventory_comes_from_the_tool_and_is_kept_briefly(world, monkeypatch):
     calls = []
 
@@ -254,3 +299,116 @@ def test_an_inventory_failure_is_said_without_paths(world, monkeypatch):
     with wapp.app.test_client() as c:
         r = c.get("/api/forklift/harvlab2/inventory/vmwlab/vms", headers=auth("eye"))
     assert r.status_code == 502 and "503" in r.get_json()["error"] and "/home/" not in r.get_json()["error"]
+
+
+def test_an_inventory_that_never_answers_gives_a_short_timeout_message(world, monkeypatch):
+    def run(cmd, **kw):
+        raise wapp.subprocess.TimeoutExpired(cmd, kw.get("timeout"))
+    monkeypatch.setattr(wapp.subprocess, "run", run)
+    with wapp.app.test_client() as c:
+        r = c.get("/api/forklift/harvlab2/inventory/vmwlab/vms", headers=auth("eye"))
+    assert r.status_code == 502
+    err = r.get_json()["error"]
+    assert "did not answer in time" in err and "/" not in err
+
+
+def test_a_truncated_archive_ends_the_run_in_error_not_stuck_running(world):
+    """L'EOFError d'un gzip coupé net doit être une 422, pas une exception
+    non attrapée qui laisserait l'ActionRun à « running » pour toujours."""
+    data = vddk_bytes()
+    truncated = data[: len(data) // 2]
+    with wapp.app.test_client() as c:
+        r = c.put(f"/api/forklift-vddk/{ARCHIVE}", data=truncated, headers=auth("adm"))
+    assert r.status_code == 422
+    action_id = r.get_json()["action_id"]
+    run = wapp.ACTIONS[action_id]
+    assert run.status == "error" and run.exit_code == 2
+
+
+def test_an_upload_that_blows_up_unexpectedly_still_closes_the_run(world, monkeypatch):
+    """Le filet de sécurité : une exception qui n'est ni une annulation ni
+    une erreur de vérification connue (navigateur fermé, réseau coupé) ne
+    doit pas s'échapper de la route et laisser le suivi bloqué."""
+    def boom(run, stream, length, part):
+        raise RuntimeError("connection reset by peer")
+    monkeypatch.setattr(wapp, "_receive_archive", boom)
+    data = vddk_bytes()
+    with wapp.app.test_client() as c:
+        r = c.put(f"/api/forklift-vddk/{ARCHIVE}", data=data, headers=auth("adm"))
+    assert r.status_code == 400
+    action_id = r.get_json()["action_id"]
+    run = wapp.ACTIONS[action_id]
+    assert run.status == "error" and run.exit_code == 1
+
+
+def test_a_full_store_refuses_the_upload_before_receiving_it(world, monkeypatch):
+    class St:
+        f_bavail, f_frsize = 1, 1  # presque rien de libre
+    monkeypatch.setattr(wapp.os, "statvfs", lambda d: St())
+    data = vddk_bytes()
+    with wapp.app.test_client() as c:
+        r = c.put(f"/api/forklift-vddk/{ARCHIVE}", data=data, headers=auth("adm"))
+    assert r.status_code == 507
+    body = r.get_json()
+    assert body["need"] == len(data) and body["free"] == 1
+
+
+def test_a_stale_part_from_a_crash_is_dropped_before_a_new_upload(world):
+    """Un `.part` d'un autre nom, laissé par un dépôt interrompu par un arrêt
+    de la console, n'a aucune raison de rester : personne ne l'écrit plus."""
+    d = wapp.VDDK_DIR
+    d.mkdir(parents=True, exist_ok=True)
+    other = "VMware-vix-disklib-8.0.2-99.x86_64.tar.gz"
+    leftover = d / (other + wapp._PART_SUFFIX)
+    leftover.write_bytes(b"half-written")
+    data = vddk_bytes()
+    with wapp.app.test_client() as c:
+        r = c.put(f"/api/forklift-vddk/{ARCHIVE}", data=data, headers=auth("adm"))
+    assert r.status_code == 201
+    assert not leftover.exists()
+
+
+def test_no_tls_keys_on_a_kept_edit_keeps_the_stored_insecure_flag(world):
+    """`keep_credentials` gardait le mot de passe mais remettait
+    silencieusement `insecure` à faux : le secret existant dit `true`."""
+    with wapp.app.test_client() as c:
+        r = c.post("/api/forklift/harvlab2/do/provider-apply",
+                   json={"spec": {"name": "vmwlab", "url": "https://vmwlab-vc.home.lo/sdk",
+                                  "keep_credentials": True,
+                                  "vddk_image": "172.16.1.11:5005/harvops/vddk:8.0.4"}},
+                   headers=auth("adm"))
+    assert r.status_code == 202
+    _, _, sent, _ = world["actions"][0]
+    assert sent["insecure"] is True and "cacert" not in sent
+
+
+def test_no_tls_keys_on_a_kept_edit_keeps_the_stored_cacert(world, monkeypatch):
+    orig = wapp._kubectl_json
+    cacert = "-----BEGIN CERTIFICATE-----\nMIIB\n-----END CERTIFICATE-----\n"
+
+    def kj(kc, verb, kind, *a, **k):
+        if kind == "secrets" and a[:1] == (hf.secret_name("vmwlab"),):
+            return {"data": {"user": B64("administrator@vsphere.local"), "password": B64("Old-S3cret!pw"),
+                             "cacert": B64(cacert)}}
+        return orig(kc, verb, kind, *a, **k)
+    monkeypatch.setattr(wapp, "_kubectl_json", kj)
+    with wapp.app.test_client() as c:
+        r = c.post("/api/forklift/harvlab2/do/provider-apply",
+                   json={"spec": {"name": "vmwlab", "url": "https://vmwlab-vc.home.lo/sdk",
+                                  "keep_credentials": True}},
+                   headers=auth("adm"))
+    assert r.status_code == 202
+    _, _, sent, _ = world["actions"][0]
+    assert sent["cacert"] == cacert and "insecure" not in sent
+
+
+def test_an_explicit_insecure_wins_over_the_kept_tls_setting(world):
+    with wapp.app.test_client() as c:
+        r = c.post("/api/forklift/harvlab2/do/provider-apply",
+                   json={"spec": {"name": "vmwlab", "url": "https://vmwlab-vc.home.lo/sdk",
+                                  "keep_credentials": True, "insecure": True,
+                                  "vddk_image": "172.16.1.11:5005/harvops/vddk:8.0.4"}},
+                   headers=auth("adm"))
+    assert r.status_code == 202
+    _, _, sent, _ = world["actions"][0]
+    assert sent["insecure"] is True and "cacert" not in sent

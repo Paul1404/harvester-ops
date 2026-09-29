@@ -13639,12 +13639,8 @@ def api_forklift(cluster):
 
 
 def _fk_vmimport_source(kc, cluster, ns, name):
-    """La source VMware d'un import, par son namespace et son nom ; relevée
-    comme la liste de l'onglet (kubectl ne sait pas la nommer autrement à
-    travers le proxy des sources) puis filtrée côté serveur."""
-    items = (_kubectl_json(kc, "get", _VM_SOURCE_KIND, "-A", timeout=30, cluster=cluster) or {}).get("items") or []
-    return next((s for s in items if (s.get("metadata") or {}).get("namespace") == ns
-                and (s.get("metadata") or {}).get("name") == name), None)
+    """La source VMware d'un import, par son namespace et son nom."""
+    return _kubectl_json(kc, "get", _VM_SOURCE_KIND, name, "-n", ns, timeout=30, cluster=cluster)
 
 
 def _fk_provider_spec(kc, cluster, b):
@@ -13667,19 +13663,31 @@ def _fk_provider_spec(kc, cluster, b):
         spec = _hf.spec_from_vmimport(source, secret, vddk)
     else:
         spec = {"url": b.get("url"), "user": str(b.get("user") or "").strip(), "password": str(b.get("password") or "")}
+        has_tls_input = "cacert" in b or "insecure" in b
         if b.get("cacert"):
             spec["cacert"] = str(b["cacert"])
         else:
             spec["insecure"] = bool(b.get("insecure"))
         if vddk:
             spec["vddk_image"] = vddk
-        if b.get("keep_credentials") and not spec["password"]:
+        need_password = bool(b.get("keep_credentials")) and not spec["password"]
+        need_tls = bool(b.get("keep_credentials")) and not has_tls_input
+        if need_password or need_tls:
             secret = _kubectl_json(kc, "get", "secrets", _hf.secret_name(name), "-n", _hf.NS, timeout=30, cluster=cluster)
-            kept = _hf.secret_values(secret, "user", "password")
-            if not kept.get("password"):
-                raise LookupError(f"provider {name} has no saved credentials to keep")
-            spec["user"] = spec["user"] or kept.get("user", "")
-            spec["password"] = kept["password"]
+            kept = _hf.secret_values(secret, "user", "password", "cacert", "insecureSkipVerify")
+            if need_password:
+                if not kept.get("password"):
+                    raise LookupError(f"provider {name} has no saved credentials to keep")
+                spec["user"] = spec["user"] or kept.get("user", "")
+                spec["password"] = kept["password"]
+            if need_tls:
+                # un mot de passe repris ne doit pas remettre le TLS à
+                # « non vérifié » en silence : ce que le secret gardait
+                if kept.get("cacert"):
+                    spec["cacert"] = kept["cacert"]
+                    spec.pop("insecure", None)
+                else:
+                    spec["insecure"] = kept.get("insecureSkipVerify") == "true"
     # refuse avant d'écrire, sans jamais citer d'identifiant
     _hf.provider_secret(_hf.NS, name, spec)
     _hf.provider_manifest(_hf.NS, name, spec)
@@ -13723,7 +13731,7 @@ def api_forklift_do(cluster, action):
             if b.get("use_cluster_auth"):
                 reg = _kubectl_json(kc, "get", "settings.harvesterhci.io", "containerd-registry",
                                     timeout=30, cluster=cluster) or {}
-                spec = _hf.registry_auth(reg.get("value") or "", image.split("/", 1)[0])
+                spec = _hf.registry_auth(reg.get("value") or reg.get("default") or "", image.split("/", 1)[0])
                 if spec is None:
                     raise ValueError("Harvester has no credentials for this registry")
             elif b.get("username") or b.get("password"):
@@ -13750,6 +13758,7 @@ def api_forklift_do(cluster, action):
 
 @app.route("/api/forklift/<cluster>/inventory/<name>/<kind>")
 @requires_auth
+@_rate_limit("30/minute")
 def api_forklift_inventory(cluster, name, kind):
     """Ce que Forklift voit d'un vCenter, par l'outil (jeton court et
     port-forward) ; gardé 20 s par personne pour ne pas rouvrir un tunnel à
@@ -13763,8 +13772,13 @@ def api_forklift_inventory(cluster, name, kind):
     hit = _FK_INVENTORY_CACHE.get(key)
     if hit and time.time() - hit[0] < _FK_INVENTORY_TTL:
         return jsonify({"rows": hit[1]})
-    r = subprocess.run(_fk_cmd("inventory", kc) + ["--namespace", _hf.NS, "--name", name, "--kind", kind],
-                       capture_output=True, text=True, timeout=120)
+    try:
+        r = subprocess.run(_fk_cmd("inventory", kc) + ["--namespace", _hf.NS, "--name", name, "--kind", kind],
+                           capture_output=True, text=True, timeout=120)
+    except subprocess.TimeoutExpired:
+        return jsonify({"error": "the inventory did not answer in time"}), 502
+    except OSError as e:
+        return jsonify({"error": _error_text(e)}), 502
     if r.returncode != 0:
         lines = [ln.split("|", 3)[3] for ln in r.stderr.splitlines() if ln.startswith("STEP_EVENT|") and ln.count("|") >= 3]
         msg = (lines[-1] if lines else (r.stderr.strip().splitlines() or ["the inventory cannot be read"])[-1])
@@ -13797,6 +13811,15 @@ def api_forklift_vddk_list():
     return jsonify({"archives": out, "free": free})
 
 
+def _drop_stale_vddk_parts(directory):
+    """Un dépôt VDDK interrompu par un arrêt de la console laisse son
+    `.part` : tout `.part` qu'aucun dépôt en cours n'écrit est un reste.
+    Appelé sous `_VDDK_LOCK`."""
+    for p in directory.glob("VMware-vix-disklib-*.tar.gz" + _PART_SUFFIX):
+        if p.name[:-len(_PART_SUFFIX)] not in _VDDK_UPLOADS:
+            p.unlink(missing_ok=True)
+
+
 @app.route("/api/forklift-vddk/<archive>", methods=["PUT"])
 @requires_auth
 @_rate_limit("6 per minute")
@@ -13808,7 +13831,7 @@ def api_forklift_vddk_upload(archive):
     donne à son archive (`VMware-vix-disklib-...`) porte une majuscule et des
     points, ce que le contrôle générique des noms d'objet Kubernetes
     (`_validate_k8s_path_params`, appliqué à toute route qui porte un
-    paramètre `name`) refuse avant même d'atteindre cette route — comme
+    paramètre `name`) refuse avant même d'atteindre cette route, comme
     `/api/exports/<archive>` le fait déjà pour les mêmes raisons."""
     try:
         _hf.check_archive_name(archive)
@@ -13819,9 +13842,17 @@ def api_forklift_vddk_upload(archive):
         return jsonify({"error": "Content-Length required"}), 411
     d = _vddk_dir()
     dest, part = d / archive, d / (archive + _PART_SUFFIX)
+    try:
+        st = os.statvfs(d)
+        free = st.f_bavail * st.f_frsize
+    except OSError:
+        free = None
+    if free is not None and free < length + _UPLOAD_SPARE:
+        return jsonify({"error": "not enough room in the console", "need": length, "free": free}), 507
     with _VDDK_LOCK:
         if dest.exists() or archive in _VDDK_UPLOADS:
             return jsonify({"error": f"{archive} is already in the console"}), 409
+        _drop_stale_vddk_parts(d)
         _VDDK_UPLOADS.add(archive)
     run = ActionRun(uuid.uuid4().hex[:12], f"vddk-archive-upload:{archive}", "(local)", ["upload", archive])
     run.cluster_user = (current_cluster_identity() or {}).get("user")
@@ -13848,11 +13879,17 @@ def api_forklift_vddk_upload(archive):
         run.status, run.exit_code = "cancelled", 3
         run.error_summary = "cancelled, nothing kept"
         code, body = 409, {"error": "cancelled", "action_id": run.id}
-    except (ValueError, OSError, tarfile.TarError) as e:
+    except (ValueError, OSError, tarfile.TarError, EOFError) as e:
         run.status, run.exit_code = "error", 2
         run.error_summary = _error_text(e) if isinstance(e, OSError) else str(e)[:300]
         step("verify", "error", run.error_summary)
         code, body = 422, {"error": run.error_summary, "action_id": run.id}
+    except Exception as e:                     # noqa: BLE001
+        # navigateur fermé ou réseau coupé en cours de route
+        run.status, run.exit_code = "error", 1
+        run.error_summary = _error_text(e)
+        step("upload", "error", run.error_summary)
+        code, body = 400, {"error": run.error_summary, "action_id": run.id}
     finally:
         part.unlink(missing_ok=True)
         with _VDDK_LOCK:

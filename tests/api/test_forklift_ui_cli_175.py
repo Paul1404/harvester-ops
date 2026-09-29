@@ -33,7 +33,9 @@ B64 = lambda s: base64.b64encode(s.encode()).decode()  # noqa: E731
 
 def test_the_archive_name_gives_the_vddk_version():
     assert hf.check_archive_name("VMware-vix-disklib-8.0.3-23950268.x86_64.tar.gz") == "8.0.3"
-    for bad in ("vddk.tar.gz", "../VMware-vix-disklib-8.0.3-1.x86_64.tar.gz", "VMware-vix-disklib-8.0.3-1.x86_64.tgz", ""):
+    for bad in ("vddk.tar.gz", "../VMware-vix-disklib-8.0.3-1.x86_64.tar.gz", "VMware-vix-disklib-8.0.3-1.x86_64.tgz", "",
+                # un `.match` laisse passer un saut de ligne final à cause du `$` : `.fullmatch` le refuse
+                "VMware-vix-disklib-8.0.3-23950268.x86_64.tar.gz\n"):
         with pytest.raises(ValueError):
             hf.check_archive_name(bad)
 

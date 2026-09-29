@@ -663,6 +663,27 @@ def current_migration(plan, migrations):
     return max(mine, key=_mig_order) if mine else None
 
 
+def vm_status(plan, migrations, vm_id):
+    """Le statut Forklift d'une VM de la vague : plan.status.migration.vms,
+    sinon celui de la Migration courante (même lecture que wave_state)."""
+    st = plan.get("status") or {}
+    status_vms = {v.get("id"): v for v in ((st.get("migration") or {}).get("vms") or [])}
+    cur = current_migration(plan, migrations)
+    if cur is not None and not status_vms:
+        status_vms = {v.get("id"): v for v in ((cur.get("status") or {}).get("vms") or [])}
+    return status_vms.get(vm_id) or {}
+
+
+def vm_creation_done(vm):
+    """True si l'étape VirtualMachineCreation du pipeline Forklift est
+    terminée pour cette VM : la VM Harvester existe forcément, même si son
+    nom ou son étiquette nous échappent."""
+    for s in (vm or {}).get("pipeline") or []:
+        if s.get("name") == "VirtualMachineCreation":
+            return s.get("phase") == "Completed"
+    return False
+
+
 def _vm_error(vm):
     reasons = list(((vm.get("error") or {}).get("reasons")) or [])
     if not reasons:
@@ -846,7 +867,7 @@ def _cdi_env(deploy):
 
 
 def cdi_importer_state(operator_deploy):
-    _, image = _cdi_env(operator_deploy)
+    container, image = _cdi_env(operator_deploy)
     repo = image.rsplit(":", 1)[0] if ":" in image.rsplit("/", 1)[-1] else image
     if repo.startswith("registry.suse.com/") and repo.endswith("/cdi-importer"):
         kind = "suse-no-vddk"
@@ -854,18 +875,25 @@ def cdi_importer_state(operator_deploy):
         kind = "upstream"
     else:
         kind = "other"
-    return {"image": image, "kind": kind, "original": str(_ann(operator_deploy).get(A_ORIGINAL_IMPORTER) or "")}
+    return {"image": image, "kind": kind, "container": container,
+            "original": str(_ann(operator_deploy).get(A_ORIGINAL_IMPORTER) or "")}
 
 
 def cdi_importer_patch(image, keep_original):
     """Patch stratégique du Deployment cdi-operator. `keep_original` : l'état
     courant (cdi_importer_state) ; l'image d'origine n'est gardée en
-    annotation qu'une fois, jamais réécrite, et pas quand on y revient."""
+    annotation qu'une fois, jamais réécrite, pas quand on y revient, et
+    seulement quand l'image courante n'est pas déjà l'amont (sinon un
+    changement de miroir enregistrerait quay comme "original"). Le nom du
+    conteneur patché est celui trouvé dans le déploiement (`container` de
+    cdi_importer_state), jamais un nom supposé."""
     image = check_image(image, "importer image")
-    patch = {"spec": {"template": {"spec": {"containers": [
-        {"name": CDI_OPERATOR[1], "env": [{"name": n, "value": image} for n in CDI_IMAGE_ENVS]}]}}}}
     cur = keep_original or {}
-    if cur.get("image") and not cur.get("original") and cur["image"] != image:
+    container = cur.get("container") or CDI_OPERATOR[1]
+    patch = {"spec": {"template": {"spec": {"containers": [
+        {"name": container, "env": [{"name": n, "value": image} for n in CDI_IMAGE_ENVS]}]}}}}
+    if cur.get("image") and not cur.get("original") and cur["image"] != image \
+            and cur.get("kind") in ("suse-no-vddk", "other"):
         patch["metadata"] = {"annotations": {A_ORIGINAL_IMPORTER: cur["image"]}}
     return patch
 

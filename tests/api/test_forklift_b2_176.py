@@ -375,11 +375,13 @@ def cdi_deploy(image=SUSE_IMPORTER, original=None):
 
 def test_the_cdi_importer_image_is_recognised():
     # relevé réel : banc déjà basculé sur l'image amont, sans annotation (fait à la main)
-    assert hf.cdi_importer_state(fixture("cdi_operator")) == {"image": UPSTREAM, "kind": "upstream", "original": ""}
+    assert hf.cdi_importer_state(fixture("cdi_operator")) == {
+        "image": UPSTREAM, "kind": "upstream", "container": "cdi-operator", "original": ""}
     assert hf.cdi_importer_state(cdi_deploy())["kind"] == "suse-no-vddk"
     st = hf.cdi_importer_state(cdi_deploy("mirror.home.lo/kubevirt/cdi-importer:v1.65.0", original=SUSE_IMPORTER))
-    assert st == {"image": "mirror.home.lo/kubevirt/cdi-importer:v1.65.0", "kind": "other", "original": SUSE_IMPORTER}
-    assert hf.cdi_importer_state(None) == {"image": "", "kind": "other", "original": ""}
+    assert st == {"image": "mirror.home.lo/kubevirt/cdi-importer:v1.65.0", "kind": "other",
+                  "container": "cdi-operator", "original": SUSE_IMPORTER}
+    assert hf.cdi_importer_state(None) == {"image": "", "kind": "other", "container": "cdi-operator", "original": ""}
 
 
 def test_the_importer_patch_keeps_the_original_image_once():
@@ -398,6 +400,32 @@ def test_the_importer_patch_keeps_the_original_image_once():
     assert "metadata" not in hf.cdi_importer_patch(UPSTREAM, None)
     with pytest.raises(ValueError, match="importer image"):
         hf.cdi_importer_patch("cdi-importer", None)
+
+
+def test_the_importer_patch_never_records_the_upstream_image_as_original():
+    # déjà sur l'image amont (kind "upstream") : passer sur un miroir ne doit
+    # jamais enregistrer quay comme "original" (seuls suse-no-vddk et other le sont)
+    mirror = "mirror.home.lo/kubevirt/cdi-importer:v1.65.0"
+    already_upstream = hf.cdi_importer_state(cdi_deploy(UPSTREAM))
+    assert already_upstream["kind"] == "upstream"
+    p = hf.cdi_importer_patch(mirror, already_upstream)
+    assert "metadata" not in p
+    assert p["spec"]["template"]["spec"]["containers"][0]["env"][0]["value"] == mirror
+
+
+def test_the_importer_patch_targets_the_container_found_in_the_deployment():
+    # un déploiement dont le conteneur ne s'appelle pas "cdi-operator" ne doit
+    # jamais faire patcher un conteneur au hasard
+    d = cdi_deploy()
+    d["spec"]["template"]["spec"]["containers"][0]["name"] = "operator"
+    state = hf.cdi_importer_state(d)
+    assert state["container"] == "operator"
+    p = hf.cdi_importer_patch(UPSTREAM, state)
+    (c,) = p["spec"]["template"]["spec"]["containers"]
+    assert c["name"] == "operator"
+    # sans état connu (retour du CLI quand original=None) : le nom par défaut
+    assert hf.cdi_importer_patch(UPSTREAM, None)["spec"]["template"]["spec"]["containers"][0]["name"] \
+        == hf.CDI_OPERATOR[1]
 
 
 # --- intervalle des copies --------------------------------------------------------

@@ -101,7 +101,23 @@ class FakeKube:
         return copy.deepcopy(o)
 
     def list(self, kind, ns=None, selector=None):
-        return [copy.deepcopy(o) for (k, n, _), o in self.objs.items() if k == kind and (ns is None or n == ns)]
+        out = []
+        for (k, n, _), o in self.objs.items():
+            if k != kind or (ns is not None and n != ns):
+                continue
+            if selector and not self._matches(o, selector):
+                continue
+            out.append(copy.deepcopy(o))
+        return out
+
+    @staticmethod
+    def _matches(obj, selector):
+        labels = ((obj.get("metadata") or {}).get("labels")) or {}
+        for pair in selector.split(","):
+            k, _, v = pair.partition("=")
+            if labels.get(k) != v:
+                return False
+        return True
 
     def create(self, obj):
         o = copy.deepcopy(obj)
@@ -231,9 +247,13 @@ def running_copy(k, name="vague-1-m4"):
     return m
 
 
-def harvester_vm(k, name="vmwlab-src-1", strategy="Always"):
-    k.put(hfk.K_VM, "mig-b2", name, {"metadata": {"name": name, "namespace": "mig-b2"},
-                                     "spec": {"runStrategy": strategy}})
+def harvester_vm(k, name="vmwlab-src-1", strategy="Always", labels=None):
+    """La VM Harvester créée par Forklift. `labels` : les étiquettes réelles
+    (`vmID`, `plan`) pour un nom que target_vm_name ne devine pas."""
+    md = {"name": name, "namespace": "mig-b2"}
+    if labels:
+        md["labels"] = labels
+    k.put(hfk.K_VM, "mig-b2", name, {"metadata": md, "spec": {"runStrategy": strategy}})
     k.put(hfk.K_VMI, "mig-b2", name, {"metadata": {"name": name, "namespace": "mig-b2"}})
 
 
@@ -419,6 +439,11 @@ def test_an_unknown_wave_is_a_refusal(monkeypatch, capsys):
 class FakeVSphere:
     def __init__(self, creds, on=()):
         self.creds, self.on, self.powered, self.closed = creds, set(on), [], False
+        self.checked = []
+
+    def power_state(self, vm):
+        self.checked.append(vm)
+        return "POWERED_ON" if vm in self.on else "POWERED_OFF"
 
     def power_on(self, vm):
         if vm in self.on:
@@ -521,6 +546,74 @@ def test_a_vcenter_error_is_a_step_without_the_password(monkeypatch, capsys):
     out, err = capsys.readouterr()
     assert "STEP_EVENT|rollback|error|vm-16: vCenter 172.16.2.81: power on vm-16: unreachable" in err
     assert PASSWORD not in out + err
+
+
+def test_wave_rollback_checks_vcenter_before_halting_any_harvester_vm(monkeypatch, capsys):
+    """VSphere est paresseux : la panne doit apparaître à la lecture d'avant,
+    jamais après qu'une VM Harvester a déjà été arrêtée."""
+    k = FakeKube()
+    with_wave(k)
+    harvester_vm(k)
+
+    class Unreachable(FakeVSphere):
+        def power_state(self, vm):
+            raise vs.VSphereError("vCenter 172.16.2.81: power state of vm-16: unreachable (timed out)")
+    monkeypatch.setattr(hfk, "kube_from", lambda a: k)
+    monkeypatch.setattr(hfk, "make_vsphere", lambda creds: Unreachable(creds))
+    monkeypatch.setattr(hfk.time, "sleep", lambda s: None)
+    assert hfk.main(["wave-rollback", "--kubeconfig", "kc", "--wave", "vague-1"]) == hfk.EXIT_FAIL
+    out, err = capsys.readouterr()
+    assert "STEP_EVENT|rollback|error|vCenter check before stopping any Harvester VM" in err
+    assert PASSWORD not in out + err and "administrator" not in out + err
+    # rien n'a été arrêté côté Harvester ni marqué côté plan
+    assert k.objs[(hfk.K_VM, "mig-b2", "vmwlab-src-1")]["spec"]["runStrategy"] == "Always"
+    assert (hfk.K_VMI, "mig-b2", "vmwlab-src-1") in k.objs
+    assert hf.A_ROLLED_BACK not in (k.objs[(hf.K_PLAN, hf.NS, "vague-1")]["metadata"].get("annotations") or {})
+
+
+def test_wave_rollback_finds_the_harvester_vm_by_forklift_s_labels_when_the_name_differs(capsys):
+    """Nom réel relevé sur le banc (mig-b2, 29/09/2026) : Forklift étiquette
+    la VM qu'il crée avec vmID=<id de la source> et plan=<uid du Plan>, pas
+    forcément le nom que le plan ou la migration laissent deviner."""
+    k, box = FakeKube(), {}
+    plan = with_wave(k)
+    plan_uid = plan["metadata"]["uid"]
+    harvester_vm(k, name="vague-1-vm16-renamed", labels={"vmID": "vm-16", "plan": plan_uid, "guestConverted": "true"})
+    assert rollback(k, box) == hfk.EXIT_OK
+    assert k.objs[(hfk.K_VM, "mig-b2", "vague-1-vm16-renamed")]["spec"]["runStrategy"] == "Halted"
+    assert (hfk.K_VMI, "mig-b2", "vague-1-vm16-renamed") not in k.objs
+    assert box["client"].powered == ["vm-16"]
+
+
+def test_wave_rollback_refuses_to_power_on_a_source_whose_copy_cannot_be_found(monkeypatch, capsys):
+    """La vague est réussie (VirtualMachineCreation terminée) mais aucune VM
+    Harvester ne porte ce nom ni ces étiquettes : rallumer la source
+    risquerait de laisser deux machines avec la même IP et la même MAC."""
+    k = FakeKube()
+    with_wave(k)                       # succeeded, sans harvester_vm : rien sur Harvester
+    box = {}
+    monkeypatch.setattr(hfk.time, "sleep", lambda s: None)
+    assert rollback(k, box) == hfk.EXIT_FAIL
+    err = capsys.readouterr().err
+    assert "vm-16: no Harvester VM found" in err and "wave shows it was created" in err
+    assert box["client"].powered == []
+    assert hf.A_ROLLED_BACK not in (k.objs[(hf.K_PLAN, hf.NS, "vague-1")]["metadata"].get("annotations") or {})
+
+
+def test_wave_rollback_still_powers_on_a_source_never_created_on_harvester(capsys):
+    """Contre-épreuve : une vague en échec avant la création de la VM (étape
+    VirtualMachineCreation jamais atteinte) n'a rien à arrêter, la source est
+    donc rallumée comme avant ce correctif."""
+    k, box = FakeKube(), {}
+    # plan_conditions retire le statut figé du plan (celui du vrai relevé,
+    # une bascule m4 déjà réussie) : le statut de la VM revient à celui de
+    # sa seule Migration, m3, qui a échoué avant VirtualMachineCreation.
+    with_wave(k, migs=("vague-1-m3",), plan_conditions=[{"type": "Ready", "status": "True"}])
+    assert hf.wave_state(k.objs[(hf.K_PLAN, hf.NS, "vague-1")], [k.objs[(hf.K_MIGRATION, hf.NS, "vague-1-m3")]])[
+        "state"] == "failed"
+    assert rollback(k, box) == hfk.EXIT_OK
+    assert box["client"].powered == ["vm-16"]
+    assert "vm-16: no Harvester VM found: nothing to stop" in capsys.readouterr().err
 
 
 # --- clôture -------------------------------------------------------------------------

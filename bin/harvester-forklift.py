@@ -658,11 +658,30 @@ def wave_vm_ids(plan, wanted):
     return list(dict.fromkeys(wanted))
 
 
-def halt_vm(kube, ns, name, timeout, sleep, now, label):
-    """Arrête la VM Harvester et attend la disparition de sa VMI ; rend le code de sortie."""
-    vm = kube.get(K_VM, ns, name)
+def halt_vm(kube, ns, name, vm_id, plan_uid, assume_created, timeout, sleep, now, label):
+    """Arrête la VM Harvester et attend la disparition de sa VMI ; rend le
+    code de sortie.
+
+    Si le nom attendu (celui du plan) ne correspond à rien, la VM est
+    cherchée encore par les étiquettes que Forklift pose sur celles qu'il
+    crée (`vmID=<id>,plan=<uid du plan>`, relevées en réel le 29/09/2026) :
+    Forklift peut avoir choisi un autre nom. Si elle reste introuvable et que
+    `assume_created` dit que Forklift a fini de la créer (étape
+    VirtualMachineCreation terminée, ou vague entièrement réussie), on refuse
+    plutôt que de supposer son absence : rallumer la source laisserait deux
+    machines avec la même IP et la même adresse MAC."""
+    vm = kube.get(K_VM, ns, name) if name else None
+    if vm is None and plan_uid:
+        found = kube.list(K_VM, ns, selector=f"vmID={vm_id},plan={plan_uid}")
+        if found:
+            vm = found[0]
+            name = ((vm.get("metadata") or {}).get("name")) or name
     if vm is None:
-        step(label, "running", f"no Harvester VM {ns}/{name}: nothing to stop")
+        if assume_created:
+            step(label, "error", f"{vm_id}: no Harvester VM found by name or by Forklift's vmID/plan "
+                 "labels, but the wave shows it was created: source left off")
+            return EXIT_FAIL
+        step(label, "running", f"{vm_id}: no Harvester VM found: nothing to stop")
         return EXIT_OK
     spec = vm.get("spec") or {}
     if "running" in spec and "runStrategy" not in spec:
@@ -670,8 +689,11 @@ def halt_vm(kube, ns, name, timeout, sleep, now, label):
             kube.patch(K_VM, ns, name, {"spec": {"running": False}})
     elif spec.get("runStrategy") != "Halted":
         kube.patch(K_VM, ns, name, {"spec": {"runStrategy": "Halted"}})
-    return until(lambda: (True, f"Harvester VM {ns}/{name} stopped") if kube.get(K_VMI, ns, name) is None
-                 else (None, f"stopping Harvester VM {ns}/{name}"), timeout, label, sleep, now)
+    rc = until(lambda: (True, f"Harvester VM {ns}/{name} stopped") if kube.get(K_VMI, ns, name) is None
+               else (None, f"stopping Harvester VM {ns}/{name}"), timeout, label, sleep, now)
+    if rc != EXIT_OK:
+        step(label, "error", f"{vm_id}: Harvester VM {ns}/{name} still running: source left off")
+    return rc
 
 
 def cmd_wave_rollback(args, kube=None, vsphere=None, sleep=time.sleep, now=time.time):
@@ -697,17 +719,28 @@ def cmd_wave_rollback(args, kube=None, vsphere=None, sleep=time.sleep, now=time.
         return EXIT_OK
     _, creds = vcenter_of(kube, plan)
     target = (plan.get("spec") or {}).get("targetNamespace") or ""
+    plan_uid = (plan.get("metadata") or {}).get("uid") or ""
     client = (vsphere or make_vsphere)(creds)
     rc, rolled, powered = EXIT_OK, [], []
     try:
+        # vCenter est paresseux : sans cette lecture, la première panne
+        # (hôte injoignable, identifiants refusés) n'apparaîtrait qu'au
+        # premier power_on, après que des VMs Harvester ont déjà été
+        # arrêtées. On ouvre la session et on lit chaque source d'abord ;
+        # une VSphereError refuse tout sans rien arrêter.
+        try:
+            for i in todo:
+                client.power_state(i)
+        except vs.VSphereError as e:
+            step("rollback", "error", f"vCenter check before stopping any Harvester VM: {e}")
+            return EXIT_FAIL
         for i in todo:
             name = target_vm_name(plan, migs, i)
-            if not name or not hf.NAME_RE.match(name):
-                step("rollback", "error", f"{i}: the Harvester VM name is unknown ({name!r}): source left off")
-                rc = EXIT_FAIL
-                continue
-            if halt_vm(kube, target, name, args.timeout, sleep, now, "rollback") != EXIT_OK:
-                step("rollback", "error", f"{i}: Harvester VM {target}/{name} still running: source left off")
+            if name and not hf.NAME_RE.match(name):
+                name = ""
+            assume_created = st["state"] == "succeeded" or hf.vm_creation_done(hf.vm_status(plan, migs, i))
+            if halt_vm(kube, target, name, i, plan_uid, assume_created, args.timeout, sleep, now,
+                       "rollback") != EXIT_OK:
                 rc = EXIT_FAIL
                 continue
             try:

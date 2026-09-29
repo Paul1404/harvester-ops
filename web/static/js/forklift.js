@@ -329,16 +329,16 @@ const Forklift = (() => {
     if (s.kind === 'vms' && s.warm) rows = rows.filter(r => r.cbt);
     cur.host.querySelector('.res-count').textContent = tr('fk.inv.count', { n: rows.length });
     if (s.kind === 'networks') {
-      out.innerHTML = `<table class="res-table" data-fk="inv-table"><thead><tr><th>${esc(tr('fk.inv.name'))}</th><th>${esc(tr('fk.inv.path'))}</th></tr></thead>
+      out.innerHTML = `<table class="data-table res-table" data-fk="inv-table"><thead><tr><th>${esc(tr('fk.inv.name'))}</th><th>${esc(tr('fk.inv.path'))}</th></tr></thead>
         <tbody>${rows.map(r => `<tr><td>${esc(r.name)}</td><td>${esc(r.path)}</td></tr>`).join('')}</tbody></table>`;
       return;
     }
     if (s.kind === 'datastores') {
-      out.innerHTML = `<table class="res-table" data-fk="inv-table"><thead><tr><th>${esc(tr('fk.inv.name'))}</th><th>${esc(tr('fk.inv.capacity'))}</th><th>${esc(tr('fk.inv.free'))}</th></tr></thead>
+      out.innerHTML = `<table class="data-table res-table" data-fk="inv-table"><thead><tr><th>${esc(tr('fk.inv.name'))}</th><th>${esc(tr('fk.inv.capacity'))}</th><th>${esc(tr('fk.inv.free'))}</th></tr></thead>
         <tbody>${rows.map(r => `<tr><td>${esc(r.name)}</td><td>${size(r.capacity)}</td><td>${size(r.free)}</td></tr>`).join('')}</tbody></table>`;
       return;
     }
-    out.innerHTML = `<table class="res-table" data-fk="inv-table"><thead><tr>
+    out.innerHTML = `<table class="data-table res-table" data-fk="inv-table"><thead><tr>
         <th>${esc(tr('fk.inv.vm'))}</th><th>${esc(tr('fk.inv.power'))}</th><th>${esc(tr('fk.inv.os'))}</th>
         <th>${esc(tr('fk.inv.cpuMem'))}</th><th>${esc(tr('fk.inv.disks'))}</th><th>${esc(tr('fk.inv.warm'))}</th><th>${esc(tr('fk.inv.concerns'))}</th></tr></thead>
       <tbody>${rows.map(r => {

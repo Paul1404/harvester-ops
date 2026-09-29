@@ -134,17 +134,26 @@ def pod_problems(pods):
     return out
 
 
-def install_state(addon, deploys, controller, cert_manager_deploys):
+def install_state(addon, deploys, controller, cert_manager_deploys, inventory_access):
     """L'installation lue dans l'ordre où elle se fait. `deploys` et
-    `cert_manager_deploys` : {nom: Deployment} des deux namespaces."""
+    `cert_manager_deploys` : {nom: Deployment} des deux namespaces ;
+    `inventory_access` : le compte de service INVENTORY_SA, ou None.
+
+    `running` : Forklift tourne ; `ready` : il tourne ET la console peut lire
+    son inventaire. Le compte n'est posé qu'en fin d'installation : une
+    installation arrêtée plus tôt (délai des composants), ou un Forklift
+    posé autrement (l'add-on de Harvester), n'en a pas, et l'inventaire
+    échouerait alors que l'onglet se dirait prêt."""
     a, amsg = addon_state(addon)
     cm_missing = [n for n in CERT_MANAGER[1] if not deployment_ready(cert_manager_deploys.get(n))]
     comp_missing = [n for n in COMPONENTS if not deployment_ready(deploys.get(n))]
     operator = deployment_ready(deploys.get(OPERATOR_DEPLOY))
+    running = a == "ready" and operator and controller is not None and not comp_missing and not cm_missing
     return {"cert_manager": not cm_missing, "cert_manager_missing": cm_missing,
             "addon": a, "addon_message": amsg, "operator": operator,
             "controller": controller is not None, "components_missing": comp_missing,
-            "ready": a == "ready" and operator and controller is not None and not comp_missing and not cm_missing}
+            "inventory_access": inventory_access is not None,
+            "running": running, "ready": running and inventory_access is not None}
 
 
 def pick_addon(addons):
@@ -260,8 +269,11 @@ def provider_state(p):
     # vu en réel : juste après une modification, les conditions sont encore
     # celles de la version précédente (Ready vrai) ; rien n'est lu avant que
     # Forklift ait relu la nouvelle version
+    # (sans observedGeneration dans le statut, rien ne permet de le dire :
+    # les conditions sont lues telles quelles)
     gen = (p.get("metadata") or {}).get("generation")
-    if gen is not None and (st.get("observedGeneration") or 0) < gen:
+    seen = st.get("observedGeneration")
+    if gen is not None and seen is not None and seen < gen:
         return None, f"being checked ({st.get('phase') or 'pending'}: change not read yet)"
     conds = st.get("conditions") or []
     crit = [c for c in conds if c.get("category") == "Critical" and str(c.get("status")) == "True"]
@@ -271,6 +283,24 @@ def provider_state(p):
         return True, "ready: vCenter reached, inventory loaded"
     have = [c.get("type") for c in conds if str(c.get("status")) == "True"]
     return None, f"being checked ({st.get('phase') or 'pending'}" + (f": {', '.join(have)}" if have else "") + ")"
+
+
+def foreign_provider(p):
+    """Pourquoi la console ne réécrit pas ce fournisseur existant, ou "" s'il
+    est à elle. Seul un fournisseur vSphere portant son étiquette est à elle :
+    un fournisseur fait par un autre outil n'est jamais réécrit, et le
+    fournisseur `host` (openshift) que Forklift crée lui-même encore moins."""
+    if p is None:
+        return ""
+    m = p.get("metadata") or {}
+    kind = (p.get("spec") or {}).get("type") or "unknown"
+    where = f"{m.get('namespace')}/{m.get('name')}"
+    if kind != "vsphere":
+        return f"provider {where} exists and is not a vCenter ({kind}): pick another name"
+    if (m.get("labels") or {}).get(L_MANAGED) != "true":
+        return (f"provider {where} exists and was not made by harvester-ops: "
+                "change it with the tool that made it, or pick another name")
+    return ""
 
 
 def plans_using(ns, name, plans):

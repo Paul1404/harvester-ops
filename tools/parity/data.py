@@ -224,8 +224,8 @@ r("plus", "1.57", "Connexion obligatoire, comptes et rôles propres à la consol
 
 sec("addonmenus", "Menus apportés par des add-ons", "Menus brought by add-ons", "VM Imports / VM Migration", "VM Imports / VM Migration")
 r("ok", "1.71", "Imports de VM (VMware, OpenStack, OVA)", "VM imports (VMware, OpenStack, OVA)",
-  "OVA importée de bout en bout en réel ; source VMware vérifiée contre vcsim ; l'export réel depuis VMware et OpenStack n'est pas vérifié (ni vCenter ni OpenStack sur les bancs)",
-  "OVA imported end to end for real; VMware source checked against vcsim; the real export from VMware and OpenStack is not verified (no vCenter nor OpenStack on the benches)")
+  "OVA importée de bout en bout en réel ; source VMware vérifiée contre vcsim, puis contre le vrai vCenter du banc vmwlab (1.75) ; l'import réel d'une VM depuis VMware n'est pas encore fait, ni celui depuis OpenStack (pas d'OpenStack sur les bancs)",
+  "OVA imported end to end for real; VMware source checked against vcsim, then against the real vCenter of the vmwlab bench (1.75); a real VM import from VMware is not done yet, nor from OpenStack (no OpenStack on the benches)")
 r("plus", "1.71", "Raison d'un import ou d'une source bloqués, tirée du journal du contrôleur ; noms refusés avant d'écrire", "Reason of a blocked import or source, from the controller's log; names refused before writing",
   "Harvester boucle sans rien dire (image au nom trop long, identifiants refusés)", "Harvester loops silently (image name too long, refused credentials)")
 r("part", "1.75", "Migration par forklift-operator", "Migration through forklift-operator", "onglet Migrations VMware : Forklift installé, image VDDK, sources vCenter, inventaire ; vagues à chaud à venir", "VMware migrations tab: Forklift installed, VDDK image, vCenter sources, inventory; warm waves to come")

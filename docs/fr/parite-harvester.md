@@ -258,7 +258,7 @@ Menu Harvester : *VM Imports / VM Migration*
 
 | Fonction | Statut | Version | Précision |
 |---|---|---|---|
-| Imports de VM (VMware, OpenStack, OVA) | Fait | 1.71 | OVA importée de bout en bout en réel ; source VMware vérifiée contre vcsim ; l'export réel depuis VMware et OpenStack n'est pas vérifié (ni vCenter ni OpenStack sur les bancs) |
+| Imports de VM (VMware, OpenStack, OVA) | Fait | 1.71 | OVA importée de bout en bout en réel ; source VMware vérifiée contre vcsim, puis contre le vrai vCenter du banc vmwlab (1.75) ; l'import réel d'une VM depuis VMware n'est pas encore fait, ni celui depuis OpenStack (pas d'OpenStack sur les bancs) |
 | Raison d'un import ou d'une source bloqués, tirée du journal du contrôleur ; noms refusés avant d'écrire | Console seulement | 1.71 | Harvester boucle sans rien dire (image au nom trop long, identifiants refusés) |
 | Migration par forklift-operator | Partiel | 1.75 | onglet Migrations VMware : Forklift installé, image VDDK, sources vCenter, inventaire ; vagues à chaud à venir |
 

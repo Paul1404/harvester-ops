@@ -16,12 +16,16 @@ manifeste que la console tire de son paquet Cluster API), l'add-on
 expérimental forklift-operator puis le ForkliftController. Les secrets
 (vCenter, registre) arrivent en JSON sur l'entrée standard ou dans un fichier
 privé (`--spec FICHIER`, ce que fait la console), jamais en argument.
+`provider-apply` ne reprend jamais un fournisseur fait par un autre outil
+(ni le fournisseur `host` de Forklift) et pose l'accès à l'inventaire s'il
+manque ; `provider-delete` ne touche qu'à un fournisseur vSphere.
 Progression sur stderr au format STEP_EVENT|<étape>|<statut>|<message>.
 Codes : 0 succès, 1 échec, 2 refus. Bibliothèque standard seulement.
 Voir docs/design/2026-09-27-migrations-vmware.md.
 """
 
 import argparse
+import http.client
 import json
 import ssl
 import sys
@@ -92,15 +96,22 @@ def read_json_input(args):
 
 
 def bundle_cert_manager(bundle, into):
-    """Le manifeste cert-manager du paquet Cluster API de la console, écrit dans `into`."""
+    """Le manifeste cert-manager du paquet Cluster API de la console, écrit dans `into`.
+
+    Le paquet pèse ~440 Mo compressé : il est parcouru membre après membre et
+    la lecture s'arrête au manifeste, sans décompresser le reste
+    (`getmembers()` lisait tout le paquet pour quelques kilo-octets)."""
+    data = None
     try:
         with tarfile.open(bundle, "r:gz") as tar:
-            m = next((m for m in tar.getmembers() if m.isfile() and m.name.endswith(hf.CERT_MANAGER_MEMBER)), None)
-            if m is None:
-                raise ValueError("the Cluster API bundle has no cert-manager manifest")
-            data = tar.extractfile(m).read()
-    except (OSError, tarfile.TarError):
+            for m in tar:
+                if m.isfile() and m.name.endswith(hf.CERT_MANAGER_MEMBER):
+                    data = tar.extractfile(m).read()
+                    break
+    except (OSError, EOFError, tarfile.TarError):
         raise ValueError("the Cluster API bundle cannot be read") from None
+    if data is None:
+        raise ValueError("the Cluster API bundle has no cert-manager manifest")
     out = Path(into) / "cert-manager.yaml"
     out.write_bytes(data)
     return str(out)
@@ -127,7 +138,8 @@ def install_state(kube):
     return hf.install_state(hf.pick_addon(kube.list(hf.K_ADDON, None))[0],
                             by_name(kube.list(hf.K_DEPLOY, hf.NS)),
                             get_opt(kube, hf.K_CONTROLLER, hf.NS, hf.CONTROLLER_NAME),
-                            by_name(kube.list(hf.K_DEPLOY, hf.CERT_MANAGER[0])))
+                            by_name(kube.list(hf.K_DEPLOY, hf.CERT_MANAGER[0])),
+                            kube.get("serviceaccounts", hf.NS, hf.INVENTORY_SA))
 
 
 def cmd_status(args, kube=None):
@@ -252,9 +264,19 @@ def cmd_provider_apply(args, kube=None, sleep=time.sleep, now=time.time):
     ns, name = hf.check_name(args.namespace, "namespace"), hf.check_name(args.name, "provider")
     spec = read_json_input(args)
     secret, prov = hf.provider_secret(ns, name, spec), hf.provider_manifest(ns, name, spec)
-    if not install_state(kube)["ready"]:
+    # Forklift doit tourner ; l'accès à l'inventaire, lui, est posé ici s'il
+    # manque (installation arrêtée avant sa fin, Forklift posé autrement)
+    if not install_state(kube)["running"]:
         step("provider", "error", "Forklift is not installed and running on this cluster: run install first")
         return EXIT_REFUSED
+    # un fournisseur de ce nom fait par un autre outil (ou le `host` de
+    # Forklift) n'est jamais repris : l'application côté serveur forcerait
+    # ses champs
+    foreign = hf.foreign_provider(get_opt(kube, hf.K_PROVIDER, ns, name))
+    if foreign:
+        step("provider", "error", foreign)
+        return EXIT_REFUSED
+    kube.apply(hf.inventory_rbac())
     try:
         kube.apply([secret])
     except KubeError as e:
@@ -273,6 +295,11 @@ def cmd_provider_delete(args, kube=None, sleep=time.sleep, now=time.time):
     cur = get_opt(kube, hf.K_PROVIDER, ns, name)
     if cur is None:
         raise ValueError(f"no provider {ns}/{name}")
+    kind = (cur.get("spec") or {}).get("type") or "unknown"
+    if kind != "vsphere":
+        # le fournisseur `host` de Forklift en premier : sans lui, plus de migration
+        step("provider", "error", f"provider {ns}/{name} is not a vCenter ({kind}): harvester-forklift leaves it alone")
+        return EXIT_REFUSED
     users = hf.plans_using(ns, name, kube.list(hf.K_PLAN, None))
     if users:
         step("provider", "error", f"provider {ns}/{name} is used by migration plans: {', '.join(users)}")
@@ -358,7 +385,8 @@ def build_parser():
     cluster_args(sp)
     sp.add_argument("--spec", help='a private JSON file {"username": ..., "password": ...} instead of stdin')
     sp.set_defaults(fn=cmd_vddk_image)
-    for name, fn, hlp in (("provider-apply", cmd_provider_apply, "declare or change a vCenter provider (JSON on stdin)"),
+    for name, fn, hlp in (("provider-apply", cmd_provider_apply,
+                           "declare or change a vCenter provider (JSON on stdin); never one made by another tool"),
                           ("provider-delete", cmd_provider_delete, "delete a vCenter provider")):
         sp = sub.add_parser(name, help=hlp)
         cluster_args(sp)
@@ -379,6 +407,16 @@ def build_parser():
     return ap, sub
 
 
+def short_error(e):
+    """Un message court pour une panne de fichier, d'archive ou de réseau :
+    jamais de trace Python, et d'un chemin seulement son dernier élément."""
+    if isinstance(e, OSError) and e.strerror:
+        name = Path(str(e.filename)).name if e.filename else ""
+        return e.strerror + (f": {name}" if name else "")
+    text = str(e).strip()
+    return f"{type(e).__name__}: {text}" if text else type(e).__name__
+
+
 def main(argv=None):
     ap, _ = build_parser()
     args = ap.parse_args(argv)
@@ -387,6 +425,10 @@ def main(argv=None):
     except (ValueError, KubeError, op.RegistryError) as e:
         step(args.cmd, "error", str(e))
         return EXIT_REFUSED if isinstance(e, ValueError) else EXIT_FAIL
+    except (OSError, tarfile.TarError, EOFError, http.client.HTTPException) as e:
+        # archive illisible ou coupée, registre qui raccroche, disque plein...
+        step(args.cmd, "error", short_error(e))
+        return EXIT_FAIL
 
 
 if __name__ == "__main__":

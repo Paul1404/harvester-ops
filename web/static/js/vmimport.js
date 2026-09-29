@@ -177,13 +177,17 @@ const VMImport = (() => {
   }
 
   // -- Actions --------------------------------------------------------------
-  async function post(action, body, doneText, into) {
+  /** `cluster` : celui d'une fenêtre, figé à son ouverture ; sinon celui de
+   *  l'onglet. L'onglet n'est relu que s'il montre encore ce cluster. */
+  async function post(action, body, doneText, into, cluster) {
     const c = cur;
+    const target = cluster || (c && c.cluster);
     const msg = into || (c && c.host.querySelector('[data-vi="feedback"]'));
+    const same = () => !!c && c === cur && c.cluster === target;
     try {
-      const out = await call('POST', `/api/vmimport/${enc(c.cluster)}/do/${action}`, body);
-      follow(out.action_id, msg, doneText, () => { if (c === cur) setTimeout(load, 1500); });
-      if (c === cur) setTimeout(load, 2500);
+      const out = await call('POST', `/api/vmimport/${enc(target)}/do/${action}`, body);
+      follow(out.action_id, msg, doneText, () => { if (same()) setTimeout(load, 1500); });
+      if (same()) setTimeout(load, 2500);
       return true;
     } catch (err) {
       if (msg) msg.innerHTML = `<span class="res-error">${esc(err.message)}</span>`;
@@ -246,8 +250,8 @@ const VMImport = (() => {
   }
 
   // -- Fenêtres ---------------------------------------------------------------------
-  function win(id, title, bodyHtml, height = 640) {
-    const panel = FloatingPanels.open({ id, icon: 'upload', width: 720, height, title: `${title} · ${cur.cluster}`,
+  function win(cluster, id, title, bodyHtml, height = 640) {
+    const panel = FloatingPanels.open({ id, icon: 'upload', width: 720, height, title: `${title} · ${cluster}`,
       bodyHtml: `<form class="of-form" autocomplete="off">${bodyHtml}
         <div class="bk-form-actions"><button type="submit" class="btn btn-sm btn-primary tip" data-tip="${esc(tr('bk.submitTip'))}">${icon('ok')} ${esc(tr('na.save'))}</button></div>
         <div class="of-msg" role="status"></div></form>` });
@@ -259,19 +263,22 @@ const VMImport = (() => {
     .map(([v, l]) => `<option value="${esc(v)}" ${String(v) === String(sel) ? 'selected' : ''}>${esc(l)}</option>`).join('');
   const userNs = (sel) => (cur.data.namespaces || []).filter(n => !/^(cattle-|kube-|fleet-|longhorn-|harvester-system|local$)/.test(n) || n === sel);
 
-  function submitWith(form, build, action, doneText) {
+  /** `cluster` : celui de la fenêtre, figé à son ouverture (l'onglet peut
+   *  passer à un autre cluster avant l'envoi). */
+  function submitWith(form, build, action, doneText, cluster) {
     form.addEventListener('submit', async (e) => {
       e.preventDefault();
       const msg = form.querySelector('.of-msg');
       let spec;
       try { spec = build(form); } catch (err) { msg.innerHTML = `<span class="res-error">${esc(err.message)}</span>`; return; }
-      await post(action, { spec }, doneText(spec), msg);
+      await post(action, { spec }, doneText(spec), msg, cluster);
     });
   }
 
   function sourceForm(type, r) {
     const edit = !!r;
-    const form = win(`vi-src-${cur.cluster}-${type}-${edit ? r.name : 'new'}`,
+    const cluster = cur.cluster;
+    const form = win(cluster, `vi-src-${cluster}-${type}-${edit ? r.name : 'new'}`,
       edit ? tr('vi.editSource', { name: r.name }) : tr('vi.newSource', { type: TYPE_LABEL()[type] }),
       `<p class="form-hint">${esc(HINT()[type])}</p>
       ${field('name', tr('bk.f.name'), `<input name="name" required value="${esc(edit ? r.name : '')}" ${edit ? 'readonly' : ''}>`, tr('ml.t.name'))}
@@ -322,23 +329,25 @@ const VMImport = (() => {
                                     project_name: v('project_name'), domain_name: v('domain_name'), ca: f.querySelector('[name="ca"]').value.trim() };
       }
       return spec;
-    }, 'source-apply', (s) => tr('vi.done.source', { name: s.name }));
+    }, 'source-apply', (s) => tr('vi.done.source', { name: s.name }), cluster);
   }
 
-  function netRow(n = {}) {
-    const nads = cur.data.nads || [];
+  // `d` : les données du cluster de la fenêtre, pas celles de l'onglet au clic
+  function netRow(n = {}, d = cur.data) {
+    const nads = d.nads || [];
     return `<div class="vi-net" data-net>
       <input name="n-src" placeholder="VM Network" value="${esc(n.source || '')}" class="tip" data-tip="${esc(tr('vi.t.srcNet'))}">
       <select name="n-dst" class="tip" data-tip="${esc(tr('vi.t.dstNet'))}"><option value=""></option>${opts(nads, n.destination || '')}</select>
-      <select name="n-model" class="tip" data-tip="${esc(tr('vi.t.nicModel'))}"><option value="">${esc(tr('vi.fromSource'))}</option>${opts(cur.data.nic_models, n.model || '')}</select>
+      <select name="n-model" class="tip" data-tip="${esc(tr('vi.t.nicModel'))}"><option value="">${esc(tr('vi.fromSource'))}</option>${opts(d.nic_models, n.model || '')}</select>
       <button type="button" class="btn btn-sm btn-secondary tip" data-net-del data-tip="${esc(tr('vi.t.netDel'))}">${icon('trash')}</button></div>`;
   }
 
   function importForm() {
+    const cluster = cur.cluster;
     const d = cur.data;
     const sources = d.sources.map(s => [`${s.type}|${s.namespace}|${s.name}`,
       `${TYPE_LABEL()[s.type]} · ${s.namespace}/${s.name} · ${(SRC_STATE()[s.state] || [])[1] || s.state}`]);
-    const form = win(`vi-imp-${cur.cluster}-new`, tr('vi.newImport'),
+    const form = win(cluster, `vi-imp-${cluster}-new`, tr('vi.newImport'),
       `<p class="form-hint">${esc(tr('vi.importFormHint'))}</p>
       ${sources.length ? '' : `<p class="res-error">${esc(tr('vi.noSourceYet'))}</p>`}
       ${field('source', tr('vi.col.source'), `<select name="source" required>${opts(sources, '')}</select>`, tr('vi.t.source'))}
@@ -349,7 +358,7 @@ const VMImport = (() => {
       ${field('storage_class', tr('vi.f.class'), `<select name="storage_class"><option value="">${esc(tr('vi.defaultClass', { name: d.default_class || '?' }))}</option>${opts(d.classes, '')}</select>`, tr('vi.t.class'))}
       <h4 class="hs-sub">${esc(tr('vi.networks'))}</h4>
       <p class="form-hint">${esc(tr('vi.networksHint'))}</p>
-      <div data-nets>${netRow()}</div>
+      <div data-nets>${netRow({}, d)}</div>
       <button type="button" class="btn btn-sm btn-secondary tip" data-net-add data-tip="${esc(tr('vi.t.netAdd'))}">${icon('add')} ${esc(tr('vi.netAdd'))}</button>
       <details class="vi-adv"><summary>${esc(tr('vi.advanced'))}</summary>
         ${field('default_nic_model', tr('vi.f.defNic'), `<select name="default_nic_model"><option value="">virtio</option>${opts(d.nic_models, '')}</select>`, tr('vi.t.defNic'))}
@@ -373,7 +382,7 @@ const VMImport = (() => {
     form.querySelector('[name="name"]').addEventListener('input', (e) => { e.target.dataset.touched = '1'; });
     form.querySelector('[name="source"]').addEventListener('change', paint);
     form.querySelector('[name="vm_name"]').addEventListener('input', paint);
-    form.querySelector('[data-net-add]').addEventListener('click', () => form.querySelector('[data-nets]').insertAdjacentHTML('beforeend', netRow()));
+    form.querySelector('[data-net-add]').addEventListener('click', () => form.querySelector('[data-nets]').insertAdjacentHTML('beforeend', netRow({}, d)));
     form.addEventListener('click', (e) => { const x = e.target.closest('[data-net-del]'); if (x) x.closest('[data-net]').remove(); });
     paint();
     submitWith(form, (f) => {
@@ -392,7 +401,7 @@ const VMImport = (() => {
         spec.force_power_off = f.querySelector('[name="force_power_off"]').checked;
       }
       return spec;
-    }, 'import-create', (s) => tr('vi.done.import'));
+    }, 'import-create', (s) => tr('vi.done.import'), cluster);
   }
 
   return { start, stop };

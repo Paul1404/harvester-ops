@@ -75,6 +75,12 @@ def world(monkeypatch, tmp_path):
                       "settings": {"vddkInitImage": "172.16.1.11:5005/harvops/vddk:8.0.3"}},
              "status": {"conditions": [{"type": "Ready", "status": "True"}]}}]},
         (hf.K_PLAN,): {"items": []},
+        # le fournisseur lu par son nom, et le compte qui lit l'inventaire
+        (hf.K_PROVIDER, "forklift", "vmwlab"): {"metadata": {"namespace": "forklift", "name": "vmwlab",
+                                                             "labels": {hf.L_MANAGED: "true"}},
+                                                "spec": {"type": "vsphere"}},
+        ("serviceaccounts", "forklift", hf.INVENTORY_SA): {"metadata": {"namespace": "forklift",
+                                                                        "name": hf.INVENTORY_SA}},
         ("configmaps",): {"data": {"image": "172.16.1.11:5005/harvops/vddk:8.0.3", "digest": "sha256:" + "a" * 64,
                                    "archive": ARCHIVE, "pushed_at": "2026-09-28T20:00:00Z"}},
         ("settings.harvesterhci.io",): {"value": REG},
@@ -285,7 +291,7 @@ def test_the_inventory_comes_from_the_tool_and_is_kept_briefly(world, monkeypatc
     def run(cmd, **kw):
         calls.append(cmd)
         return R()
-    monkeypatch.setattr(wapp.subprocess, "run", run)
+    monkeypatch.setattr(wapp, "_fk_run_tool", lambda cmd, timeout: run(cmd, timeout=timeout))
     with wapp.app.test_client() as c:
         d = c.get("/api/forklift/harvlab2/inventory/vmwlab/vms", headers=auth("eye")).get_json()
         assert d["rows"] == [{"name": "vmwlab-src-1", "cbt": True}]
@@ -299,7 +305,7 @@ def test_an_inventory_failure_is_said_without_paths(world, monkeypatch):
     class R:
         returncode, stdout = 1, ""
         stderr = "STEP_EVENT|inventory|error|the inventory service answered 503 (/home/ju/.kube/x.yaml)\n"
-    monkeypatch.setattr(wapp.subprocess, "run", lambda cmd, **kw: R())
+    monkeypatch.setattr(wapp, "_fk_run_tool", lambda cmd, timeout: R())
     with wapp.app.test_client() as c:
         r = c.get("/api/forklift/harvlab2/inventory/vmwlab/vms", headers=auth("eye"))
     assert r.status_code == 502 and "503" in r.get_json()["error"] and "/home/" not in r.get_json()["error"]
@@ -308,7 +314,7 @@ def test_an_inventory_failure_is_said_without_paths(world, monkeypatch):
 def test_an_inventory_that_never_answers_gives_a_short_timeout_message(world, monkeypatch):
     def run(cmd, **kw):
         raise wapp.subprocess.TimeoutExpired(cmd, kw.get("timeout"))
-    monkeypatch.setattr(wapp.subprocess, "run", run)
+    monkeypatch.setattr(wapp, "_fk_run_tool", lambda cmd, timeout: run(cmd, timeout=timeout))
     with wapp.app.test_client() as c:
         r = c.get("/api/forklift/harvlab2/inventory/vmwlab/vms", headers=auth("eye"))
     assert r.status_code == 502
@@ -432,7 +438,7 @@ def test_the_inventory_reads_a_provider_outside_forklift(world, monkeypatch):
     def run(cmd, **kw):
         calls.append(cmd)
         return R()
-    monkeypatch.setattr(wapp.subprocess, "run", run)
+    monkeypatch.setattr(wapp, "_fk_run_tool", lambda cmd, timeout: run(cmd, timeout=timeout))
     with wapp.app.test_client() as c:
         d = c.get("/api/forklift/harvlab2/inventory/vmwlab/vms?namespace=default", headers=auth("eye")).get_json()
     assert d["rows"] == []
@@ -448,7 +454,7 @@ def test_the_inventory_still_defaults_to_forklift_without_the_query_param(world,
     def run(cmd, **kw):
         calls.append(cmd)
         return R()
-    monkeypatch.setattr(wapp.subprocess, "run", run)
+    monkeypatch.setattr(wapp, "_fk_run_tool", lambda cmd, timeout: run(cmd, timeout=timeout))
     with wapp.app.test_client() as c:
         c.get("/api/forklift/harvlab2/inventory/vmwlab/vms", headers=auth("eye"))
     assert calls[0][calls[0].index("--namespace") + 1] == "forklift"

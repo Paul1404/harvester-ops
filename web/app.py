@@ -13569,6 +13569,7 @@ VDDK_DIR = Path(os.environ.get(
 _FORKLIFT_DO = ("install", "vddk-image", "provider-apply", "provider-delete")
 _FK_INVENTORY_CACHE = {}        # (cluster, identité, fournisseur, sorte) -> (horodatage, lignes)
 _FK_INVENTORY_TTL = 20
+_FK_INVENTORY_TIMEOUT = 120       # secondes : au-delà, l'outil et son port-forward sont tués
 _FK_KINDS = ("vms", "networks", "datastores")
 _VM_SOURCE_KIND = "vmwaresources.migration.harvesterhci.io"
 _VDDK_UPLOADS = set()
@@ -13608,6 +13609,7 @@ def api_forklift(cluster):
              "controller": (_hf.K_CONTROLLER, _hf.CONTROLLER_NAME, "-n", _hf.NS),
              "providers": (_hf.K_PROVIDER, "-A"), "plans": (_hf.K_PLAN, "-A"),
              "vddk": ("configmaps", _hf.VDDK_CM, "-n", _hf.NS),
+             "inv_sa": ("serviceaccounts", _hf.INVENTORY_SA, "-n", _hf.NS),
              "registry": ("settings.harvesterhci.io", "containerd-registry"),
              "prov": (_hf.PROV_CLUSTER[0], _hf.PROV_CLUSTER[2], "-n", _hf.PROV_CLUSTER[1]),
              "sources": (_VM_SOURCE_KIND, "-A")}
@@ -13632,7 +13634,8 @@ def api_forklift(cluster):
                           "managed": (m.get("labels") or {}).get(_hf.L_MANAGED) == "true"})
     return jsonify({
         "cluster": cluster,
-        "install": _hf.install_state(addon, by_name("deploys"), got["controller"], by_name("cm_deploys")),
+        "install": _hf.install_state(addon, by_name("deploys"), got["controller"], by_name("cm_deploys"),
+                                     got["inv_sa"]),
         "harvester_addon": bool(theirs),
         "bundle": _capi_bundle_active_path() is not None,
         "vddk": vddk,
@@ -13681,16 +13684,21 @@ def _fk_provider_spec(kc, cluster, b):
             spec["insecure"] = bool(b.get("insecure"))
         if vddk:
             spec["vddk_image"] = vddk
-        need_password = bool(b.get("keep_credentials")) and not spec["password"]
-        need_tls = bool(b.get("keep_credentials")) and not has_tls_input
-        if need_password or need_tls:
+        keep = bool(b.get("keep_credentials"))
+        need_password = keep and not spec["password"]
+        # « vide garde le compte actuel » vaut aussi quand un nouveau mot de
+        # passe est saisi seul
+        need_user = keep and not spec["user"]
+        need_tls = keep and not has_tls_input
+        if need_password or need_user or need_tls:
             secret = _kubectl_json(kc, "get", "secrets", _hf.secret_name(name), "-n", ns, timeout=30, cluster=cluster)
             kept = _hf.secret_values(secret, "user", "password", "cacert", "insecureSkipVerify")
             if need_password:
                 if not kept.get("password"):
                     raise LookupError(f"provider {name} has no saved credentials to keep")
-                spec["user"] = spec["user"] or kept.get("user", "")
                 spec["password"] = kept["password"]
+            if need_user:
+                spec["user"] = kept.get("user", "")
             if need_tls:
                 # un mot de passe repris ne doit pas remettre le TLS à
                 # « non vérifié » en silence : ce que le secret gardait
@@ -13756,6 +13764,11 @@ def api_forklift_do(cluster, action):
                 return jsonify({"error": f"no VDDK archive {archive} in the console"}), 404
             image = _hf.check_image(str(b.get("image") or "").strip(), "VDDK image")
             cmd += ["--archive", str(path), "--image", image]
+            # la console tire l'image de base elle-même : en airgap, un miroir
+            # (sinon registry.suse.com doit être joignable depuis son hôte)
+            base = os.environ.get("HARVESTER_OPS_VDDK_BASE", "").strip()
+            if base:
+                cmd += ["--base", _hf.check_image(base, "HARVESTER_OPS_VDDK_BASE")]
             if b.get("plain_http"):
                 cmd.append("--plain-http")
             if b.get("use_cluster_auth"):
@@ -13768,7 +13781,16 @@ def api_forklift_do(cluster, action):
                     raise ValueError("registry: the user and the password go together")
             label = "forklift:vddk-image"
         elif action == "provider-apply":
-            ns, name, spec = _fk_provider_spec(kc, cluster, b.get("spec") if isinstance(b.get("spec"), dict) else {})
+            sp = b.get("spec") if isinstance(b.get("spec"), dict) else {}
+            ns, name, spec = _fk_provider_spec(kc, cluster, sp)
+            # une NOUVELLE source (ni modification ni namespace d'un
+            # fournisseur existant) ne remplace jamais en silence un
+            # fournisseur du même nom : « Ajouter » depuis VM Import
+            # préremplit le nom de la source reprise
+            if not sp.get("keep_credentials") and not sp.get("namespace") and \
+                    _kubectl_json(kc, "get", _hf.K_PROVIDER, name, "-n", ns, timeout=30, cluster=cluster):
+                return jsonify({"error": f"a provider named {name} already exists in {ns}: "
+                                         "pick another name, or change that source instead"}), 409
             cmd += ["--namespace", ns, "--name", name]
             label = f"forklift:provider-apply:{ns}/{name}"
         else:
@@ -13783,6 +13805,27 @@ def api_forklift_do(cluster, action):
     run, err = _cli_action(cluster, label, cmd, "harvester-forklift", spec=spec,
                            after=lambda: _invalidate_cluster_caches(cluster))
     return _res_reply(run, err, action=action)
+
+
+_FK_NO_INVENTORY_SA = re.compile(r'serviceaccounts? "?' + re.escape(_hf.INVENTORY_SA) + r'"? not found')
+
+
+def _fk_run_tool(cmd, timeout):
+    """L'outil dans sa propre session : au délai, tout son groupe de
+    processus tombe, y compris le `kubectl port-forward` qu'il a lancé
+    (subprocess.run ne tuait que l'outil et laissait le relais orphelin)."""
+    with subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+                          start_new_session=True) as p:
+        try:
+            out, err = p.communicate(timeout=timeout)
+        except subprocess.TimeoutExpired:
+            try:
+                os.killpg(p.pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+            p.wait()
+            raise
+    return subprocess.CompletedProcess(cmd, p.returncode, out, err)
 
 
 @app.route("/api/forklift/<cluster>/inventory/<name>/<kind>")
@@ -13803,13 +13846,15 @@ def api_forklift_inventory(cluster, name, kind):
         ns = _hf.check_name(ns_raw, "namespace") if ns_raw else _hf.NS
     except ValueError as e:
         return jsonify({"error": str(e)}), 400
-    key = (cluster, (current_cluster_identity() or {}).get("user"), ns, name, kind)
+    # par personne : sous une session Rancher, l'identité déléguée est
+    # vide, c'est le compte de la console qui distingue les personnes
+    key = (cluster, (current_cluster_identity() or {}).get("user"), current_user(), ns, name, kind)
     hit = _FK_INVENTORY_CACHE.get(key)
     if hit and time.time() - hit[0] < _FK_INVENTORY_TTL:
         return jsonify({"rows": hit[1]})
     try:
-        r = subprocess.run(_fk_cmd("inventory", kc) + ["--namespace", ns, "--name", name, "--kind", kind],
-                           capture_output=True, text=True, timeout=120)
+        r = _fk_run_tool(_fk_cmd("inventory", kc) + ["--namespace", ns, "--name", name, "--kind", kind],
+                         _FK_INVENTORY_TIMEOUT)
     except subprocess.TimeoutExpired:
         return jsonify({"error": "the inventory did not answer in time"}), 502
     except OSError as e:
@@ -13817,6 +13862,9 @@ def api_forklift_inventory(cluster, name, kind):
     if r.returncode != 0:
         lines = [ln.split("|", 3)[3] for ln in r.stderr.splitlines() if ln.startswith("STEP_EVENT|") and ln.count("|") >= 3]
         msg = (lines[-1] if lines else (r.stderr.strip().splitlines() or ["the inventory cannot be read"])[-1])
+        if _FK_NO_INVENTORY_SA.search(msg):
+            msg = ("the console's inventory access (service account harvester-ops-inventory) is missing on "
+                   "this cluster: run Resume in VMware migrations > Preparation")
         return jsonify({"error": _PATH_RE.sub("<path>", msg)[:300]}), 502
     try:
         rows = json.loads(r.stdout or "[]")

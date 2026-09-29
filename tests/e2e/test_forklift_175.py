@@ -13,7 +13,7 @@ from playwright.sync_api import expect  # noqa: E402
 ARCHIVE = "VMware-vix-disklib-8.0.3-23950268.x86_64.tar.gz"
 READY = {"ready": True, "cert_manager": True, "cert_manager_missing": [], "addon": "ready",
          "addon_message": "the forklift-operator add-on is deployed", "operator": True, "controller": True,
-         "components_missing": []}
+         "components_missing": [], "running": True, "inventory_access": True}
 DATA = {"cluster": "harv-fake", "install": READY, "harvester_addon": False, "bundle": True,
         "vddk": {"image": "172.16.1.11:5005/harvops/vddk:8.0.3", "digest": "sha256:" + "4f1c" * 16,
                  "archive": ARCHIVE, "pushed_at": "2026-09-28T20:00:00Z"},
@@ -24,7 +24,8 @@ DATA = {"cluster": "harv-fake", "install": READY, "harvester_addon": False, "bun
                        "vddk_image": "172.16.1.11:5005/harvops/vddk:8.0.3", "plans": [], "managed": True}],
         "vmimport_sources": [{"namespace": "mig", "name": "vc", "endpoint": "https://vmwlab-vc.home.lo/sdk"}]}
 ABSENT = {**DATA, "install": {**READY, "ready": False, "addon": "absent", "addon_message": "the forklift-operator add-on is not declared",
-                              "operator": False, "controller": False, "components_missing": ["forklift-api"]},
+                              "operator": False, "controller": False, "components_missing": ["forklift-api"],
+                              "running": False, "inventory_access": False},
           "vddk": None, "providers": []}
 STORE = {"archives": [{"name": ARCHIVE, "version": "8.0.3", "size": 41626848, "mtime": 1790000000}], "free": 10 ** 11}
 
@@ -45,7 +46,8 @@ def open_tab(context, flask_server, data):
     def writes(route, req):
         sent.append((req.url.split("://")[1].split("/", 1)[1], req.method, req.post_data_json if req.method == "POST" else None))
         fulfill(route, {"action_id": "fk0000000175"}, 202)
-    page.route("**/api/forklift/harv-fake", lambda r, q: fulfill(r, data))
+    # `data` : l'état lu, ou une fonction qui le rend (il change entre deux lectures)
+    page.route("**/api/forklift/harv-fake", lambda r, q: fulfill(r, data() if callable(data) else data))
     page.route("**/api/forklift/harv-fake/do/**", writes)
     page.route("**/api/forklift-vddk", lambda r, q: fulfill(r, STORE))
     page.route("**/api/stream/fk0000000175", lambda r, q: r.fulfill(
@@ -244,3 +246,118 @@ def test_the_new_source_button_is_enabled_once_forklift_is_ready(context, flask_
     page.evaluate("Sections.open('forklift', 'sources')")
     btn = page.locator('#tab-forklift [data-fk="new-source"]')
     expect(btn).to_be_enabled()
+
+
+# --- relecture finale ---------------------------------------------------------
+
+def test_a_background_refresh_keeps_the_vddk_form_being_typed(context, flask_server):
+    """La relecture de fond (10 s) redessinait toute la Préparation : utilisateur
+    et mot de passe du registre, image modifiée, choix de l'archive et case des
+    identifiants disparaissaient sous les doigts."""
+    state = {"data": DATA}
+    page, _ = open_tab(context, flask_server, lambda: state["data"])
+    form = page.locator('#tab-forklift [data-fk-step="vddk"]')
+    expect(form.locator('[name="image"]')).to_have_value("172.16.1.11:5005/harvops/vddk:8.0.3")
+    form.locator('[name="image"]').fill("reg.lan/harvops/vddk:9.9.9")
+    form.locator('[name="use_cluster_auth"]').uncheck()
+    form.locator('[name="username"]').fill("pusher")
+    form.locator('[name="password"]').fill("pw-typed")
+    form.locator('[name="plain_http"]').uncheck()
+    # entre-temps, Forklift a disparu du cluster : l'étape 1 doit le montrer
+    state["data"] = ABSENT
+    page.evaluate("Forklift.backgroundRefresh()")
+    expect(page.locator('#tab-forklift [data-fk="install"]')).to_be_visible()
+    expect(form.locator('[name="image"]')).to_have_value("reg.lan/harvops/vddk:9.9.9")
+    expect(form.locator('[name="username"]')).to_have_value("pusher")
+    expect(form.locator('[name="password"]')).to_have_value("pw-typed")
+    expect(form.locator('[name="use_cluster_auth"]')).not_to_be_checked()
+    expect(form.locator('[name="plain_http"]')).not_to_be_checked()
+    expect(form.locator('[data-fk="reg-creds"]')).to_be_visible()
+    # un clic sur Actualiser, lui, relit tout
+    state["data"] = DATA
+    page.locator('#tab-forklift [data-fk="refresh"]').click()
+    expect(form.locator('[name="image"]')).to_have_value("172.16.1.11:5005/harvops/vddk:8.0.3")
+    expect(form.locator('[name="username"]')).to_have_value("")
+
+
+def test_the_form_is_read_again_once_the_push_is_sent(context, flask_server):
+    page, sent = open_tab(context, flask_server, DATA)
+    form = page.locator('#tab-forklift [data-fk-step="vddk"]')
+    form.locator('[name="image"]').fill("reg.lan/harvops/vddk:9.9.9")
+    form.locator('[data-fk="push-vddk"]').click()
+    page.wait_for_timeout(300)
+    assert sent[-1][2]["image"] == "reg.lan/harvops/vddk:9.9.9"
+    page.evaluate("Forklift.backgroundRefresh()")
+    expect(form.locator('[name="image"]')).to_have_value("172.16.1.11:5005/harvops/vddk:8.0.3")
+
+
+def test_an_upload_in_progress_survives_a_background_refresh(context, flask_server):
+    page, _ = open_tab(context, flask_server, DATA)
+    pending = []
+    page.route(f"**/api/forklift-vddk/{ARCHIVE}", lambda r, q: pending.append(r))
+    form = page.locator('#tab-forklift [data-fk-step="vddk"]')
+    form.locator('[data-fk="upload-file"]').set_input_files(
+        {"name": ARCHIVE, "mimeType": "application/gzip", "buffer": b"x" * 2048})
+    line = form.locator('[data-fk="upload-line"]')
+    expect(line).not_to_be_empty()
+    page.evaluate("Forklift.backgroundRefresh()")
+    expect(line).not_to_be_empty()
+    page.wait_for_timeout(200)
+    assert pending, "the upload was not sent"
+    pending[0].fulfill(status=201, content_type="application/json",
+                       body=json.dumps({"action_id": "fk0000000175", "archive": ARCHIVE, "size": 2048}))
+    # fin de l'envoi : la Préparation est relue, le résultat reste dit
+    expect(line).to_contain_text("kept by the console")
+    page.evaluate("Forklift.backgroundRefresh()")
+    expect(line).to_contain_text("kept by the console")
+
+
+def test_the_inventory_access_is_a_part_and_resume_is_offered_without_it(context, flask_server):
+    no_sa = {**DATA, "install": {**READY, "ready": False, "running": True, "inventory_access": False}}
+    page, sent = open_tab(context, flask_server, no_sa)
+    one = page.locator('#tab-forklift [data-fk-step="forklift"]')
+    part = one.locator('.fk-part', has_text="inventory access")
+    expect(part).to_have_count(1)
+    assert part.get_attribute("data-tip")
+    expect(one).not_to_contain_text("ready")
+    btn = one.locator('[data-fk="install"]')
+    expect(btn).to_contain_text("Resume")
+    btn.click()
+    page.wait_for_timeout(300)
+    assert sent[-1][0] == "api/forklift/harv-fake/do/install"
+
+
+def test_a_source_window_submits_to_the_cluster_it_was_opened_for(context, flask_server):
+    page, sent = open_tab(context, flask_server, DATA)
+    page.evaluate("Sections.open('forklift', 'sources')")
+    page.locator('#tab-forklift [data-fk="new-source"]').click()
+    form = page.locator(".floating-panel .of-form").last
+    form.locator('[name="name"]').fill("vc2")
+    form.locator('[name="url"]').fill("vc2.lan")
+    form.locator('[name="user"]').fill("administrator@vsphere.local")
+    form.locator('[name="password"]').fill("pw")
+    form.locator('[name="tls"][value="insecure"]').check()
+    other = []
+    page.route("**/api/forklift/harv-other", lambda r, q: fulfill(r, {**DATA, "cluster": "harv-other"}))
+    page.route("**/api/forklift/harv-other/do/**",
+               lambda r, q: (other.append(q.url), fulfill(r, {"action_id": "fk0000000175"}, 202)))
+    # l'onglet passe à un autre cluster pendant que la fenêtre est ouverte
+    page.evaluate("Forklift.start('harv-other', document.querySelector("
+                  "'#tab-forklift .section-pane[data-pane=\"sources\"] .na-host'))")
+    form.locator('button[type="submit"]').click()
+    page.wait_for_timeout(400)
+    assert not other, other
+    assert sent[-1][0] == "api/forklift/harv-fake/do/provider-apply"
+
+
+def test_a_new_source_with_a_taken_name_is_refused_in_the_window(context, flask_server):
+    page, _ = open_tab(context, flask_server, DATA)
+    page.route("**/api/forklift/harv-fake/do/provider-apply", lambda r, q: fulfill(
+        r, {"error": "a provider named vmwlab already exists in forklift: pick another name, or change that source instead"}, 409))
+    page.evaluate("Sections.open('forklift', 'sources')")
+    page.locator('#tab-forklift [data-fk="new-source"]').click()
+    form = page.locator(".floating-panel .of-form").last
+    form.locator('[name="from"]').select_option("mig/vc")
+    form.locator('[name="name"]').fill("vmwlab")
+    form.locator('button[type="submit"]').click()
+    expect(form.locator(".of-msg")).to_contain_text("already exists")

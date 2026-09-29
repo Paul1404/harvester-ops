@@ -30,7 +30,11 @@ const Forklift = (() => {
     return `${v.toFixed(v >= 10 || i === 0 ? 0 : 1)} ${u[i]}`;
   };
 
-  let cur = null;       // { cluster, host, kind, data, store, timer, invToken }
+  // { cluster, host, kind, data, store, timer, invToken, dirty, uploading, uploadNote }
+  // dirty : le formulaire VDDK a été modifié ; uploading : une archive part.
+  // Tant que l'un des deux tient, la relecture de fond ne redessine pas
+  // l'étape VDDK (étapes 1 et 3 seulement), comme la fenêtre de mise à jour.
+  let cur = null;
   let lastInv = null;   // { cluster, source, namespace, kind, q, warm } : retrouvé au retour sur l'onglet (U4)
 
   async function call(method, url, body) {
@@ -53,7 +57,7 @@ const Forklift = (() => {
   function start(cluster, host) {
     stop();
     const kind = KINDS.includes(host.dataset.fk) ? host.dataset.fk : 'prep';
-    cur = { cluster, host, kind, data: null, store: null };
+    cur = { cluster, host, kind, data: null, store: null, dirty: false, uploading: false, uploadNote: '' };
     // v1.75.0 : le bouton « Ajouter un vCenter » n'a sa place que sur l'onglet Sources
     const newBtn = kind === 'sources'
       ? `<button type="button" class="btn btn-sm btn-primary tip needs-admin" data-fk="new-source" data-tip="${esc(tr('fk.t.newSource'))}">${icon('add')} ${esc(tr('fk.newSource'))}</button>` : '';
@@ -67,10 +71,7 @@ const Forklift = (() => {
     card.addEventListener('click', onClick);
     card.addEventListener('change', onChange);
     card.addEventListener('input', onInput);
-    // l'inventaire ouvre un tunnel vers le cluster : pas de relecture automatique
-    cur.timer = setInterval(() => {
-      if (cur && cur.kind !== 'inventory' && cur.host.isConnected && !cur.host.closest('[hidden]')) load();
-    }, REFRESH_MS);
+    cur.timer = setInterval(backgroundRefresh, REFRESH_MS);
     cur.ready = load();
     return cur.ready;
   }
@@ -78,6 +79,13 @@ const Forklift = (() => {
   function stop() {
     if (cur && cur.timer) clearInterval(cur.timer);
     cur = null;
+  }
+
+  /** La relecture de fond (toutes les REFRESH_MS). L'inventaire ouvre un
+   *  tunnel vers le cluster : pas de relecture automatique pour lui. */
+  function backgroundRefresh() {
+    if (cur && cur.kind !== 'inventory' && cur.host.isConnected && !cur.host.closest('[hidden]')) return load();
+    return Promise.resolve();
   }
 
   async function load() {
@@ -107,8 +115,17 @@ const Forklift = (() => {
       body.innerHTML = `<div class="sto-finding sev-critical"><div class="sto-finding-title">${esc((d && d.error) || tr('fabric.unreachable'))}</div></div>`;
       return;
     }
-    if (cur.kind === 'prep') body.innerHTML = prepView(d);
-    else if (cur.kind === 'sources') body.innerHTML = sourcesView(d);   // U4
+    if (cur.kind === 'prep') {
+      const steps = prepSteps(d);
+      if ((cur.dirty || cur.uploading) && body.querySelector('[data-fk-step="vddk"]')) {
+        // une saisie ou un envoi en cours n'est jamais effacé : seules les
+        // étapes 1 et 3 se redessinent
+        body.querySelector('[data-fk-step="forklift"]').outerHTML = steps.one;
+        body.querySelector('[data-fk-step="sources"]').outerHTML = steps.three;
+      } else {
+        body.innerHTML = steps.one + steps.two + steps.three;
+      }
+    } else if (cur.kind === 'sources') body.innerHTML = sourcesView(d);   // U4
     else inventoryView(body, d);                                        // U4
   }
 
@@ -121,6 +138,9 @@ const Forklift = (() => {
       [tr('fk.controller'), st.controller, tr('fk.t.controller')],
       [tr('fk.components'), st.controller && !st.components_missing.length,
        st.components_missing.length ? tr('fk.missing', { list: st.components_missing.join(', ') }) : tr('fk.t.components')],
+      // le compte qui lit l'inventaire : posé en fin d'installation, il
+      // manque si elle s'est arrêtée avant, ou si Forklift a été posé autrement
+      [tr('fk.invAccess'), !!st.inventory_access, tr('fk.t.invAccess')],
     ];
     return parts.map(([label, ok, tip]) => `<span class="fk-part tip" data-tip="${esc(tip)}">${icon(ok ? 'ok' : 'fail', 12)} ${esc(label)}</span>`).join(' ');
   }
@@ -130,9 +150,13 @@ const Forklift = (() => {
       <b>${esc(title)}</b> ${stateHtml}</div>${bodyHtml}</div>`;
   }
 
-  function prepView(d) {
+  /** Les trois étapes de la Préparation, séparément : la relecture de fond
+   *  peut n'en redessiner qu'une partie. */
+  function prepSteps(d) {
     const st = d.install;
-    const addonState = { ready: ['ok', tr('fk.st.ready')], deploying: ['warn', tr('fk.st.deploying')],
+    // un add-on déployé ne dit pas une installation finie (composants ou
+    // accès à l'inventaire manquants) : « incomplet », pas « prêt »
+    const addonState = { ready: ['warn', tr('fk.st.incomplete')], deploying: ['warn', tr('fk.st.deploying')],
                          failed: ['fail', tr('fk.st.failed')], disabled: ['warn', tr('fk.st.disabled')],
                          absent: ['warn', tr('fk.st.absent')] };
     const [cls, txt] = st.ready ? ['ok', tr('fk.st.ready')] : (addonState[st.addon] || ['warn', st.addon]);
@@ -153,7 +177,7 @@ const Forklift = (() => {
          <div class="fk-upload">
            <button type="button" class="btn btn-sm btn-secondary tip needs-admin" data-fk="upload-vddk" data-tip="${esc(tr('fk.t.upload'))}">${icon('upload')} ${esc(tr('fk.upload'))}</button>
            <input type="file" accept=".tar.gz" data-fk="upload-file" hidden>
-           <span class="form-hint" data-fk="upload-line"></span>
+           <span class="form-hint" data-fk="upload-line">${cur.uploadNote || ''}</span>
          </div>
          ${field('image', tr('fk.f.image'), `<input name="image" value="${esc((v && v.image) || d.registry.image)}" placeholder="registry.lan/harvops/vddk:8.0.3">`,
                  d.registry.host ? tr('fk.t.imageHint', { host: d.registry.host }) : tr('fk.t.image'))}
@@ -170,7 +194,7 @@ const Forklift = (() => {
       d.providers.length ? badge(ready ? 'ok' : 'warn', tr('fk.st.sources', { ready, total: d.providers.length })) : badge('warn', tr('fk.st.todo')),
       `<p class="form-hint">${esc(tr('fk.sourcesHint'))}</p>
        <button type="button" class="btn btn-sm btn-secondary tip" data-fk="goto-sources" data-tip="${esc(tr('fk.t.gotoSources'))}">${icon('cloud')} ${esc(tr('section.fkSources'))}</button>`);
-    return one + two + three;
+    return { one, two, three };
   }
 
   // -- Sources vCenter (U4) ----------------------------------------------------
@@ -198,10 +222,13 @@ const Forklift = (() => {
 
   function sourceForm(p) {
     const edit = !!p;
+    // la fenêtre appartient au cluster pour lequel elle s'ouvre : l'onglet
+    // peut passer à un autre cluster avant l'envoi
+    const cluster = cur.cluster;
     const d = cur.data;
     const vddk = (p && p.vddk_image) || (d.vddk && d.vddk.image) || '';
     const froms = edit ? [] : d.vmimport_sources || [];
-    const form = win(`fk-src-${cur.cluster}-${edit ? p.name : 'new'}`, edit ? tr('fk.editSource', { name: p.name }) : tr('fk.newSource'),
+    const form = win(cluster, `fk-src-${cluster}-${edit ? p.name : 'new'}`, edit ? tr('fk.editSource', { name: p.name }) : tr('fk.newSource'),
       `<p class="form-hint">${esc(tr('fk.sourceHint'))}</p>
       ${froms.length ? field('from', tr('fk.f.from'), `<select name="from"><option value="">${esc(tr('fk.from.none'))}</option>${
         froms.map(s => `<option value="${esc(`${s.namespace}/${s.name}`)}">${esc(`${s.namespace}/${s.name} (${s.endpoint})`)}</option>`).join('')}</select>`, tr('fk.t.from')) : ''}
@@ -253,7 +280,7 @@ const Forklift = (() => {
       }
       if (v('vddk_image')) spec.vddk_image = v('vddk_image');
       return spec;
-    }, 'provider-apply', (s) => tr('fk.done.source', { name: s.name }));
+    }, 'provider-apply', (s) => tr('fk.done.source', { name: s.name }), cluster);
   }
 
   // -- Inventaire (U4) ----------------------------------------------------
@@ -367,7 +394,11 @@ const Forklift = (() => {
       const c = cur;
       return c.ready && c.ready.then(() => { if (c === cur && cur.data) onClick(e); }, () => {});
     }
-    if (act === 'refresh') return load();
+    if (act === 'refresh') {
+      // un clic explicite relit tout, saisie comprise (sauf un envoi en cours)
+      cur.dirty = false;
+      return load();
+    }
     if (act === 'install') return post('install', {}, tr('fk.done.install'));
     if (act === 'goto-sources') return Sections.open('forklift', 'sources');
     if (act === 'goto-prep') return Sections.open('forklift', 'prep');
@@ -379,7 +410,9 @@ const Forklift = (() => {
       const body = { archive: val('archive'), image: val('image'), plain_http: chk('plain_http') };
       if (chk('use_cluster_auth')) body.use_cluster_auth = true;
       else if (val('username')) { body.username = val('username'); body.password = box.querySelector('[name="password"]').value; }
-      return post('vddk-image', body, tr('fk.done.push', { image: body.image }));
+      const c = cur;
+      // poussée envoyée : le formulaire redevient celui du cluster
+      return post('vddk-image', body, tr('fk.done.push', { image: body.image })).then((ok) => { if (ok && c === cur) c.dirty = false; });
     }
     if (act === 'new-source') return sourceForm(null);
     const name = b.dataset.name;
@@ -397,8 +430,15 @@ const Forklift = (() => {
     if (act === 'inv-refresh') return render();
   }
 
+  /** Une modification du formulaire VDDK (pas le choix d'un fichier à
+   *  déposer, qui lance l'envoi). */
+  function touchVddk(t) {
+    if (cur && t.closest && t.closest('[data-fk-step="vddk"]') && t.dataset.fk !== 'upload-file') cur.dirty = true;
+  }
+
   function onChange(e) {
     const t = e.target;
+    touchVddk(t);
     if (t.name === 'use_cluster_auth') {
       const box = t.closest('.fk-form');
       const creds = box && box.querySelector('[data-fk="reg-creds"]');
@@ -417,6 +457,7 @@ const Forklift = (() => {
   }
 
   function onInput(e) {
+    touchVddk(e.target);
     if (e.target.name === 'q' && lastInv) {
       lastInv.q = e.target.value;
       paintInventory();
@@ -424,37 +465,58 @@ const Forklift = (() => {
   }
 
   function upload(file) {
-    const line = cur.host.querySelector('[data-fk="upload-line"]');
+    const c = cur;
+    // la ligne est relue à chaque fois : la Préparation a pu être redessinée
+    const line = (html) => {
+      const el = c.host.querySelector('[data-fk="upload-line"]');
+      if (el) el.innerHTML = html;
+    };
     if (!/^VMware-vix-disklib-\d+\.\d+\.\d+-\d+\.x86_64\.tar\.gz$/.test(file.name)) {
-      line.innerHTML = `<span class="res-error">${esc(tr('fk.badArchive'))}</span>`;
+      c.uploadNote = `<span class="res-error">${esc(tr('fk.badArchive'))}</span>`;
+      line(c.uploadNote);
       return;
     }
-    const c = cur;
+    // fin de l'envoi : la note reste dite, le formulaire est relu (la
+    // nouvelle archive apparaît dans la liste)
+    const done = (html) => {
+      c.uploading = false;
+      c.dirty = false;
+      c.uploadNote = html;
+      line(html);
+      if (c === cur) load();
+    };
+    c.uploading = true;
+    c.uploadNote = '';
+    line(esc(tr('fk.uploading', { pct: 0 })));
     const xhr = new XMLHttpRequest();
     xhr.open('PUT', `/api/forklift-vddk/${enc(file.name)}`);
     xhr.setRequestHeader('Content-Type', 'application/octet-stream');
-    xhr.upload.onprogress = (e) => { line.textContent = tr('fk.uploading', { pct: Math.floor(100 * e.loaded / (e.total || file.size)) }); };
-    xhr.upload.onload = () => { line.textContent = tr('fk.verifying'); };
+    xhr.upload.onprogress = (e) => { line(esc(tr('fk.uploading', { pct: Math.floor(100 * e.loaded / (e.total || file.size)) }))); };
+    xhr.upload.onload = () => { line(esc(tr('fk.verifying'))); };
     xhr.onload = () => {
       let d = {};
       try { d = JSON.parse(xhr.responseText); } catch { /* sans corps */ }
       if (window.Dock && Dock.poll) Dock.poll();
-      line.innerHTML = xhr.status === 201 ? `${icon('ok')} ${esc(tr('fk.uploaded', { name: file.name }))}`
-                                          : `<span class="res-error">${esc(d.error || `HTTP ${xhr.status}`)}</span>`;
-      if (c === cur) load();
+      done(xhr.status === 201 ? `${icon('ok')} ${esc(tr('fk.uploaded', { name: file.name }))}`
+                              : `<span class="res-error">${esc(d.error || `HTTP ${xhr.status}`)}</span>`);
     };
-    xhr.onerror = () => { line.innerHTML = `<span class="res-error">${esc(tr('fk.uploadFailed'))}</span>`; };
+    xhr.onerror = () => done(`<span class="res-error">${esc(tr('fk.uploadFailed'))}</span>`);
+    xhr.onabort = xhr.onerror;
     xhr.send(file);
   }
 
   // -- Actions ------------------------------------------------------------
-  async function post(action, body, doneText, into) {
+  /** `cluster` : celui d'une fenêtre, figé à son ouverture ; sinon celui de
+   *  l'onglet. L'onglet n'est relu que s'il montre encore ce cluster. */
+  async function post(action, body, doneText, into, cluster) {
     const c = cur;
+    const target = cluster || (c && c.cluster);
     const msg = into || (c && c.host.querySelector('[data-fk="feedback"]'));
+    const same = () => !!c && c === cur && c.cluster === target;
     try {
-      const out = await call('POST', `/api/forklift/${enc(c.cluster)}/do/${action}`, body);
-      follow(out.action_id, msg, doneText, () => { if (c === cur) setTimeout(load, 1500); });
-      if (c === cur) setTimeout(load, 2500);
+      const out = await call('POST', `/api/forklift/${enc(target)}/do/${action}`, body);
+      follow(out.action_id, msg, doneText, () => { if (same()) setTimeout(load, 1500); });
+      if (same()) setTimeout(load, 2500);
       return true;
     } catch (err) {
       if (msg) msg.innerHTML = `<span class="res-error">${esc(err.message)}</span>`;
@@ -463,8 +525,8 @@ const Forklift = (() => {
   }
 
   // -- Fenêtres (posées ici pour U4 : sources vCenter) -------------------------
-  function win(id, title, bodyHtml, height = 640) {
-    const panel = FloatingPanels.open({ id, icon: 'upload', width: 720, height, title: `${title} · ${cur.cluster}`,
+  function win(cluster, id, title, bodyHtml, height = 640) {
+    const panel = FloatingPanels.open({ id, icon: 'upload', width: 720, height, title: `${title} · ${cluster}`,
       bodyHtml: `<form class="of-form" autocomplete="off">${bodyHtml}
         <div class="bk-form-actions"><button type="submit" class="btn btn-sm btn-primary tip" data-tip="${esc(tr('bk.submitTip'))}">${icon('ok')} ${esc(tr('na.save'))}</button></div>
         <div class="of-msg" role="status"></div></form>` });
@@ -475,16 +537,16 @@ const Forklift = (() => {
   const opts = (list, sel) => list.map(v => (Array.isArray(v) ? v : [v, v]))
     .map(([v, l]) => `<option value="${esc(v)}" ${String(v) === String(sel) ? 'selected' : ''}>${esc(l)}</option>`).join('');
 
-  function submitWith(form, build, action, doneText) {
+  function submitWith(form, build, action, doneText, cluster) {
     form.addEventListener('submit', async (e) => {
       e.preventDefault();
       const msg = form.querySelector('.of-msg');
       let spec;
       try { spec = build(form); } catch (err) { msg.innerHTML = `<span class="res-error">${esc(err.message)}</span>`; return; }
-      await post(action, { spec }, doneText(spec), msg);
+      await post(action, { spec }, doneText(spec), msg, cluster);
     });
   }
 
-  return { start, stop, openInventory };
+  return { start, stop, openInventory, backgroundRefresh };
 })();
 window.Forklift = Forklift;

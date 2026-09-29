@@ -1260,14 +1260,19 @@ forklift-operator add-on (chart 1.9.0, images `v1.8.2` by default,
 that order; images are pulled from `registry.rancher.com/harvester` (plan a
 mirror in airgap). If Harvester itself already carries a forklift-operator
 add-on (expected from 1.9.1), the console enables it as it ships and never
-rewrites its chart or its values.
+rewrites its chart or its values. That path is not verified for real yet:
+no bench runs a Harvester that ships this add-on.
 
 **VMware migrations**, in the Cluster menu right after VM Import, opens
 three tabs:
 
 - **Preparation**, three steps in the order they must be done, each with
   its state and its button: Forklift (install or resume, with the parts
-  read back: cert-manager, add-on, operator, controller, components); the
+  read back: cert-manager, add-on, operator, controller, components, and
+  the inventory access, the service account `harvester-ops-inventory`
+  through which the console reads Forklift's inventory; it is set at the
+  end of the installation, so an installation stopped earlier, or a
+  Forklift installed another way, shows it missing and offers Resume); the
   VDDK image (VMware's archive is given once to the console's own store and
   serves every cluster; the target image is proposed from Harvester's
   `containerd-registry` setting, and Harvester's own credentials for that
@@ -1275,7 +1280,10 @@ three tabs:
   a fleet-local secret, or credentials can be typed instead; the cluster
   remembers the last image pushed and the form offers it again); and
   vCenter sources, with a count of how many are ready and a link to the
-  next tab.
+  next tab. What is being typed in the VDDK step (image, registry account,
+  archive choice) and an upload in progress are kept while the tab refreshes
+  itself; Refresh reads everything again. A link from VM Import > VMware
+  opens this tab.
 - **vCenter sources**: one block per vSphere provider, its state
   (checking, ready, or refused with Forklift's message), its VDDK image if
   any, and how many migration plans use it. Adding a source can take a
@@ -1284,15 +1292,19 @@ three tabs:
   password, and a certificate (CA certificate, or insecure). Changing a
   source never asks for the password again unless one is typed, and keeps
   the TLS setting unless it is changed. Deleting is refused while a
-  migration plan uses the source. Editing is offered only for a source the
-  console itself created; one made from the command line elsewhere can
-  still be read and deleted, not edited.
+  migration plan uses the source. A new source never replaces an existing
+  provider of the same name: the window says the name is taken. Every
+  provider made by `harvester-forklift`, from the tab or on the command
+  line, carries the console's label `harvester-ops.io/managed` and can be
+  changed; a vSphere provider made by another tool is never changed (its
+  Change button is disabled and `provider-apply` refuses its name), it can
+  only be read and deleted. A window stays tied to the cluster it was
+  opened for, even if the tab moves to another cluster before Save.
 - **Inventory**, read-only: pick a source, then VMs, networks or
   datastores, search by name, and for VMs a filter on the ones that can
   move warm (Changed Block Tracking on). Each VM shows its CPUs, memory,
   disks, whether CBT is on, and Forklift's concerns translated to plain
-  text (critical, warning, information). A link from VM Import > VMware
-  leads here directly.
+  text (critical, warning, information).
 
 On the command line: `harvester-forklift status|install|vddk-image|
 provider-apply|provider-delete|inventory`. `install` takes
@@ -1303,9 +1315,23 @@ registry credentials on stdin or in a private file (`--spec`); with
 `--cluster` or `--kubeconfig` it also records the pushed image on the
 cluster (ConfigMap `forklift/harvester-ops-vddk`), so a later form offers
 it again. `provider-apply` reads its request as JSON (`url`, `user`,
-`password`, `insecure` or `cacert`, `vddk_image`) from stdin or `--spec`;
-`provider-delete` refuses while a plan uses the provider; `inventory`
-reads `vms`, `networks` or `datastores` as Forklift sees them.
+`password`, `insecure` or `cacert`, `vddk_image`) from stdin or `--spec`,
+sets the inventory access if it is missing, and refuses a name already
+taken by a provider it did not make (another tool's vSphere provider, or
+Forklift's own `host` provider); `provider-delete` refuses a provider that
+is not a vCenter, and one a plan uses; `inventory` reads `vms`, `networks`
+or `datastores` as Forklift sees them.
+
+**Airgap.** The console pulls the VDDK base image
+(`registry.suse.com/bci/bci-busybox:16.0`) itself, from its own host: in
+airgap, set `HARVESTER_OPS_VDDK_BASE` in `/etc/harvester-ops/env` to a
+mirror of it (`--base` on the command line). The target registry is
+trusted through the system certificate authorities of the console's image:
+a registry signed by an internal authority is not supported yet (plain
+HTTP works). Only the cert-manager manifest comes from the console's
+Cluster API bundle; its images, like Forklift's, are pulled by the
+cluster: mirror them. The cluster must also be able to pull from the
+registry the VDDK image is pushed to (Advanced > containerd-registry).
 
 Checked for real on the harvlab2 bench, against the nested vCenter of
 vmwlab, from the tab: this was also the first real check of a VM Import

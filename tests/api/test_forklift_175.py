@@ -73,12 +73,13 @@ def test_the_install_state_is_read_in_the_order_it_is_done():
     cm = {n: dep(n) for n in hf.CERT_MANAGER[1]}
     ok_addon = {"spec": {"enabled": True}, "status": {"status": "AddonDeploySuccessful"}}
     deploys = {n: dep(n) for n in (hf.OPERATOR_DEPLOY,) + hf.COMPONENTS}
-    st = hf.install_state(ok_addon, deploys, {"kind": "ForkliftController"}, cm)
+    sa = {"metadata": {"name": hf.INVENTORY_SA, "namespace": hf.NS}}
+    st = hf.install_state(ok_addon, deploys, {"kind": "ForkliftController"}, cm, sa)
     assert st["ready"] and st["cert_manager"] and st["operator"] and st["controller"] and st["components_missing"] == []
-    st = hf.install_state(None, {}, None, {})
+    st = hf.install_state(None, {}, None, {}, None)
     assert not st["ready"] and st["addon"] == "absent" and st["cert_manager_missing"] == list(hf.CERT_MANAGER[1])
     deploys["forklift-validation"] = dep("forklift-validation", ready=False)
-    st = hf.install_state(ok_addon, deploys, {"kind": "ForkliftController"}, cm)
+    st = hf.install_state(ok_addon, deploys, {"kind": "ForkliftController"}, cm, sa)
     assert not st["ready"] and st["components_missing"] == ["forklift-validation"]
 
 

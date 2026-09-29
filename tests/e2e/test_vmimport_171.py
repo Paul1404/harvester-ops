@@ -156,3 +156,27 @@ def test_a_disabled_add_on_is_said(context, flask_server):
     body = pane(page, "imports")
     expect(body.locator('[data-vi="open-addons"]')).to_be_visible(timeout=8000)
     expect(body).to_contain_text("vm-import-controller add-on is disabled")
+
+
+def test_a_source_window_submits_to_the_cluster_it_was_opened_for(ui):
+    """Relecture finale : la fenêtre envoyait au cluster affiché AU MOMENT de
+    l'envoi, pas à celui pour lequel elle avait été ouverte."""
+    page, sent = ui
+    pane(page, "vmware")
+    page.locator('#tab-vmimport .section-pane[data-pane="vmware"] [data-vi="new-source"]').click(timeout=8000)
+    w = page.locator("#fp-vi-src-harv-fake-vmware-new")
+    w.locator('[name="name"]').fill("vc2")
+    w.locator('[name="endpoint"]').fill("https://vc2/sdk")
+    w.locator('[name="dc"]').fill("DC2")
+    w.locator('[name="username"]').fill("administrator@vsphere.local")
+    w.locator('[name="password"]').fill("hunter2")
+    other = []
+    page.route("**/api/vmimport/harv-other", lambda r, q: fulfill(r, {**DATA, "cluster": "harv-other"}))
+    page.route("**/api/vmimport/harv-other/do/**",
+               lambda r, q: (other.append(q.url), fulfill(r, {"action_id": "vi0000000171"}, 202)))
+    page.evaluate("VMImport.start('harv-other', document.querySelector("
+                  "'#tab-vmimport .section-pane[data-pane=\"vmware\"] .na-host'))")
+    w.locator('button[type="submit"]').click()
+    page.wait_for_timeout(500)
+    assert not other, other
+    assert sent[-1][0] == "api/vmimport/harv-fake/do/source-apply"

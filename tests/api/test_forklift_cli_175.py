@@ -241,7 +241,10 @@ def test_provider_apply_writes_the_secret_and_the_provider_and_waits(monkeypatch
     monkeypatch.setattr(sys, "stdin", io.StringIO(json.dumps(SPEC)))
     c = Clock()
     assert hfk.cmd_provider_apply(prov_args(), kube=k, sleep=c.sleep, now=c.now) == hfk.EXIT_OK
-    assert [x[:2] for x in k.calls if x[0] == "apply"] == [("apply", "Secret"), ("apply", "Provider")]
+    # l'accès à l'inventaire est reposé (sans effet s'il est là) avant le secret et le fournisseur
+    assert [x[:2] for x in k.calls if x[0] == "apply"] == [
+        ("apply", "ServiceAccount"), ("apply", "ClusterRole"), ("apply", "ClusterRoleBinding"),
+        ("apply", "Secret"), ("apply", "Provider")]
     sec = k.objs[("secrets", "default", "vmwlab-vsphere")]
     assert sec["stringData"]["password"] == "Very-S3cret!pw"
     prov = k.objs[(hf.K_PROVIDER, "default", "vmwlab")]
@@ -264,7 +267,8 @@ def test_the_vcenter_refusal_is_said(monkeypatch, capsys):
 
 def test_a_provider_used_by_a_plan_is_not_deleted(capsys):
     k = installed()
-    k.objs[(hf.K_PROVIDER, "default", "vmwlab")] = {"metadata": {"name": "vmwlab", "namespace": "default"}, "spec": {}}
+    k.objs[(hf.K_PROVIDER, "default", "vmwlab")] = {"metadata": {"name": "vmwlab", "namespace": "default"},
+                                                    "spec": {"type": "vsphere"}}
     k.objs[(hf.K_PLAN, "mig", "wave-1")] = {"metadata": {"name": "wave-1", "namespace": "mig"},
                                           "spec": {"provider": {"source": {"name": "vmwlab", "namespace": "default"}}}}
     c = Clock()
@@ -275,12 +279,14 @@ def test_a_provider_used_by_a_plan_is_not_deleted(capsys):
 def test_delete_takes_the_secret_only_if_the_console_made_it():
     k = installed()
     k.objs[(hf.K_PROVIDER, "default", "vmwlab")] = {"metadata": {"name": "vmwlab", "namespace": "default"},
-                                                    "spec": {"secret": {"name": "vmwlab-vsphere", "namespace": "default"}}}
+                                                    "spec": {"type": "vsphere",
+                                                             "secret": {"name": "vmwlab-vsphere", "namespace": "default"}}}
     k.objs[("secrets", "default", "vmwlab-vsphere")] = {"metadata": {"labels": {"harvester-ops.io/managed": "true"}}}
     c = Clock()
     assert hfk.cmd_provider_delete(prov_args(with_secret=True), kube=k, sleep=c.sleep, now=c.now) == hfk.EXIT_OK
     assert ("delete", "secrets", "vmwlab-vsphere") in k.calls
-    k.objs[(hf.K_PROVIDER, "default", "vmwlab")] = {"metadata": {}, "spec": {"secret": {"name": "theirs", "namespace": "default"}}}
+    k.objs[(hf.K_PROVIDER, "default", "vmwlab")] = {"metadata": {}, "spec": {"type": "vsphere",
+                                                                          "secret": {"name": "theirs", "namespace": "default"}}}
     k.objs[("secrets", "default", "theirs")] = {"metadata": {"labels": {}}}
     assert hfk.cmd_provider_delete(prov_args(with_secret=True), kube=k, sleep=c.sleep, now=c.now) == hfk.EXIT_OK
     assert ("delete", "secrets", "theirs") not in k.calls

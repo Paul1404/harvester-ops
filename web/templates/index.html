@@ -134,6 +134,8 @@
           </a>
         </div>
       </div>
+      <!-- v1.76.0 : vue globale des migrations VMware, à côté d'Activity (pas sous Cluster) -->
+      <a class="tab"        data-tab="forkliftglobal" href="#forkliftglobal" data-i18n-title="tab.forkliftglobalTip" title="Every VMware migration wave running on every declared cluster"><span class="tab-icon" data-icon="migrate"></span> <span class="sidebar-label" data-i18n="tab.forkliftglobal">Migrations (all clusters)</span></a>
       <a class="tab"        data-tab="activity"     href="#activity" data-i18n-title="tab.activity" title="Activity"><span class="tab-icon" data-icon="activity"></span> <span class="sidebar-label" data-i18n="tab.activity">Activity</span></a>
     </nav>
 
@@ -698,6 +700,13 @@
       </div>
     </section>
 
+    <!-- MIGRATIONS (ALL CLUSTERS) : v1.76.0, vue globale des vagues Forklift -->
+    <section id="tab-forkliftglobal" class="tab-content">
+      <h1 data-i18n="fkg.title">Migrations (all clusters)</h1>
+      <p class="hint" data-i18n="fkg.hint">Every VMware migration wave on every declared cluster, in one table. An unreachable cluster is shown as such, without blocking the others.</p>
+      <div class="na-host" id="forklift-global-host"></div>
+    </section>
+
     <!-- ACTIVITY (merged Actions + Logs) -->
     <section id="tab-activity" class="tab-content">
       <h1 data-i18n="activity.title">Activity</h1>
@@ -1130,6 +1139,7 @@
   <script src="/static/js/monlog.js"></script>
   <script src="/static/js/vmimport.js"></script>
   <script src="/static/js/forklift.js"></script>
+  <script src="/static/js/forklift-global.js"></script>
 <script src="/static/js/versions.js"></script>
 <script src="/static/js/console-accounts.js"></script>
 <script src="/static/js/user-menu.js"></script>

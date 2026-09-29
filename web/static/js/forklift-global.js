@@ -1,0 +1,247 @@
+/**
+ * harvester-ops : vue globale « Migrations (tous clusters) » (v1.76.0)
+ *
+ * Un tableau lecture seule, à côté d'Activity dans le menu latéral (pas sous
+ * Cluster) : chaque VM VMware prise dans une vague de Forklift, quel que
+ * soit le cluster cible, avec son vCenter, la vague, l'étape, la dernière
+ * copie et la bascule. Une ligne d'en-tête par cluster (Forklift prêt,
+ * importeur, sources) ; un cluster injoignable est montré tel quel, sans
+ * bloquer les autres. Un clic sur une vague bascule vers ce cluster et
+ * ouvre son onglet Vagues.
+ *
+ * Le serveur (`GET /api/forklift-global`) ne porte pas le vCenter d'une
+ * vague : seul le fournisseur (nom/espace) est su du plan. Cette vue
+ * déduit donc le ou les vCenter d'un cluster de la liste de ses
+ * fournisseurs vSphere ; avec plusieurs fournisseurs sur un même cluster,
+ * la colonne vCenter des VMs de ce cluster les montre tous (aucun moyen
+ * de savoir lequel une vague donnée utilise sans lire le Plan lui-même).
+ */
+const ForkliftGlobal = (() => {
+  const tr = (k, p) => (window.i18n ? i18n.t(k, p) : k);
+  const esc = (v) => String(v == null ? '' : v)
+    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+  const icon = (n, size = 13) => (window.Icons ? Icons.svg(n, { size }) : '');
+  const badge = (cls, text, tip) =>
+    `<span class="badge ${cls}${tip ? ' tip' : ''}"${tip ? ` data-tip="${esc(tip)}"` : ''}>${esc(text)}</span>`;
+  const getJSON = (url) => fetch(url).then((r) => (r.ok ? r.json() : null)).catch(() => null);
+  const REFRESH_MS = 15000;
+
+  let host = null;
+  let timer = null;
+  let data = null;
+  const filters = { status: '', vcenter: '' };
+
+  // Mêmes libellés d'état que l'onglet Vagues d'un cluster (Forklift.js) :
+  // clés littérales identiques, pour ne pas dupliquer les traductions.
+  const WAVE_STATE = {
+    ready: ['info', () => tr('fk.w.st.ready')], pending: ['warn', () => tr('fk.w.st.pending')],
+    invalid: ['fail', () => tr('fk.w.st.invalid')], copying: ['info', () => tr('fk.w.st.copying')],
+    'cutover-scheduled': ['warn', () => tr('fk.w.st.cutoverScheduled')],
+    'cutting-over': ['warn', () => tr('fk.w.st.cuttingOver')], succeeded: ['ok', () => tr('fk.w.st.succeeded')],
+    failed: ['fail', () => tr('fk.w.st.failed')], 'rolled-back': ['warn', () => tr('fk.w.st.rolledBack')],
+    closed: ['', () => tr('fk.w.st.closed')],
+  };
+  const stateBadge = (w) => {
+    const [cls, label] = WAVE_STATE[w.state] || ['warn', () => w.state];
+    return `<span data-fkg-state="${esc(w.state)}">${badge(cls, label(), w.message || '')}</span>`;
+  };
+  // Regroupement des dix états en quatre familles pour le filtre : une
+  // vague en cours de validation ou de copie compte comme « En cours ».
+  const STATE_BUCKET = {
+    pending: 'progress', ready: 'progress', copying: 'progress',
+    'cutover-scheduled': 'cutover', 'cutting-over': 'cutover',
+    succeeded: 'finished', 'rolled-back': 'finished', closed: 'finished',
+    failed: 'failed', invalid: 'failed',
+  };
+  const CDI_LABEL = {
+    'suse-no-vddk': ['fail', () => tr('fk.cdi.suse')], upstream: ['ok', () => tr('fk.cdi.upstream')],
+    other: ['warn', () => tr('fk.cdi.other')],
+  };
+  const STATUS_OPTIONS = [
+    ['progress', () => tr('fkg.filter.inProgress')],
+    ['cutover', () => tr('fkg.filter.cutover')],
+    ['finished', () => tr('fkg.filter.finished')],
+    ['failed', () => tr('fkg.filter.failed')],
+  ];
+
+  const fmtWhen = (iso) => {
+    const t = Date.parse(iso || '');
+    return Number.isFinite(t) ? new Date(t).toLocaleString() : '';
+  };
+  /** Un instant à venir, avec son compte à rebours (comme l'onglet Vagues,
+   *  sans le tenir à jour ici : cette vue se relit déjà toutes les 15 s). */
+  const fmtDur = (sec) => {
+    const s = Math.max(0, Math.round(sec));
+    const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), r = s % 60;
+    if (h) return `${h} h ${String(m).padStart(2, '0')} min`;
+    if (m) return `${m} min ${String(r).padStart(2, '0')} s`;
+    return `${r} s`;
+  };
+  const whenWithCountdown = (iso) => {
+    const ms = Date.parse(iso || '') - Date.now();
+    const left = ms > 0 ? tr('fk.w.in', { left: fmtDur(ms / 1000) }) : tr('fk.w.due');
+    return `${esc(fmtWhen(iso))} (${esc(left)})`;
+  };
+  const hostOf = (url) => {
+    try { return new URL(url).host; } catch { return String(url || '').replace(/^https?:\/\//, '').split('/')[0]; }
+  };
+  const uniq = (arr) => Array.from(new Set(arr));
+
+  function fillSelect(sel, options, current, allLabelFn) {
+    if (!sel) return;
+    sel.innerHTML = [`<option value="">${esc(allLabelFn())}</option>`]
+      .concat(options.map(([v, labelFn]) => `<option value="${esc(v)}"${v === current ? ' selected' : ''}>${esc(labelFn())}</option>`))
+      .join('');
+  }
+
+  // -- cycle de vie -----------------------------------------------------------
+  function start(host_) {
+    stop();
+    host = host_;
+    if (!host) return Promise.resolve();
+    host.innerHTML = `<div class="card na-card fkg-card">
+        <div class="res-tools">
+          <span class="res-count"></span>
+          <select data-fkg="f-status" class="tip" data-tip="${esc(tr('fkg.filter.statusTip'))}" aria-label="Status"></select>
+          <select data-fkg="f-vcenter" class="tip" data-tip="${esc(tr('fkg.filter.vcenterTip'))}" aria-label="vCenter"></select>
+          <button type="button" class="btn btn-sm btn-secondary tip" data-fkg="refresh" data-tip="${esc(tr('res.refreshTip'))}">${icon('refresh')} ${esc(tr('overview.refresh'))}</button>
+        </div>
+        <div class="res-feedback" data-fkg="feedback"></div>
+        <div data-fkg="clusters" class="fk-sources"></div>
+        <div data-fkg="table"><p class="form-hint">${esc(tr('common.loading'))}</p></div>
+      </div>`;
+    const card = host.querySelector('.fkg-card');
+    card.addEventListener('click', onClick);
+    card.addEventListener('change', onChange);
+    timer = setInterval(backgroundRefresh, REFRESH_MS);
+    return load();
+  }
+
+  function stop() {
+    if (timer) clearInterval(timer);
+    timer = null;
+    host = null;
+    data = null;
+  }
+
+  /** Relecture de fond : seulement tant que la vue est montée (arrêtée par
+   *  App.setTab en quittant l'onglet) et l'onglet du navigateur visible. */
+  function backgroundRefresh() {
+    if (document.hidden || !host || !host.isConnected) return Promise.resolve();
+    return load();
+  }
+
+  async function load() {
+    const h = host;
+    const d = await getJSON('/api/forklift-global');
+    if (h !== host) return;   // la vue a été quittée pendant la requête
+    data = d || { clusters: [] };
+    render();
+  }
+
+  // -- rendu --------------------------------------------------------------
+  function allRows(clusters) {
+    const rows = [];
+    clusters.forEach((c) => {
+      const vcenterHosts = uniq((c.providers || []).map((p) => hostOf(p.url)).filter(Boolean));
+      (c.waves || []).forEach((w) => {
+        (w.vms || []).forEach((vm) => rows.push({ cluster: c.cluster, wave: w, vm, vcenterHosts }));
+      });
+    });
+    return rows;
+  }
+
+  function matchesFilters(row) {
+    if (filters.status) {
+      const bucket = STATE_BUCKET[row.wave.state] || 'progress';
+      if (bucket !== filters.status) return false;
+    }
+    if (filters.vcenter && !row.vcenterHosts.includes(filters.vcenter)) return false;
+    return true;
+  }
+
+  function clusterHeader(c) {
+    const hosts = uniq((c.providers || []).map((p) => hostOf(p.url)).filter(Boolean));
+    const stBadge = !c.reachable ? badge('fail', tr('fkg.unreachable'), tr('fkg.unreachable'))
+      : c.forklift_ready ? badge('ok', tr('fkg.ready'), '')
+      : badge('warn', tr('fkg.notInstalled'), '');
+    const cdi = c.reachable && CDI_LABEL[c.cdi_importer_kind];
+    const importerBadge = cdi ? badge(cdi[0], cdi[1](), '') : '';
+    const sourcesTxt = hosts.length ? `${tr('fkg.sources', { n: hosts.length })} : ${hosts.join(', ')}` : tr('fkg.noSources');
+    const wavesTxt = tr('fkg.waves', { n: (c.waves || []).length });
+    return `<div class="fk-source" data-fkg-clusterhead="${esc(c.cluster)}">
+        <div class="fk-step-head"><b>${esc(c.cluster)}</b> ${stBadge} ${importerBadge}</div>
+        <div class="form-hint">${esc(sourcesTxt)} · ${esc(wavesTxt)}</div>
+      </div>`;
+  }
+
+  function vmRow(row) {
+    const { cluster, wave, vm, vcenterHosts } = row;
+    const vcenter = vcenterHosts.length ? vcenterHosts.join(', ') : '–';
+    const last = vm.last_precopy && vm.last_precopy.end ? esc(fmtWhen(vm.last_precopy.end)) : '–';
+    const cutover = wave.cutover ? whenWithCountdown(wave.cutover)
+      : vm.rolled_back ? esc(tr('fk.w.st.rolledBack')) : '–';
+    const step = vm.error
+      ? `<span class="tip" data-tip="${esc(vm.error)}">${icon('warn', 12)} ${esc(vm.step || '')}</span>`
+      : esc(vm.step || '–');
+    return `<tr class="tip" data-fkg-cluster="${esc(cluster)}" data-fkg-wave="${esc(wave.name)}"
+          data-tip="${esc(tr('fkg.rowTip', { cluster }))}">
+        <td>${esc(vm.name || vm.id)}</td>
+        <td>${esc(vcenter)}</td>
+        <td>${esc(cluster)}</td>
+        <td>${esc(wave.name)} ${stateBadge(wave)}</td>
+        <td>${step}</td>
+        <td>${last}</td>
+        <td>${cutover}</td>
+      </tr>`;
+  }
+
+  function render() {
+    if (!host || !host.isConnected || !data) return;
+    const card = host.querySelector('.fkg-card');
+    if (!card) return;
+    const clusters = data.clusters || [];
+    const allHosts = uniq(clusters.flatMap((c) => (c.providers || []).map((p) => hostOf(p.url)).filter(Boolean)));
+    fillSelect(card.querySelector('[data-fkg="f-status"]'), STATUS_OPTIONS, filters.status, () => tr('fkg.filter.all'));
+    fillSelect(card.querySelector('[data-fkg="f-vcenter"]'), allHosts.map((h) => [h, () => h]), filters.vcenter,
+               () => tr('fkg.filter.allVcenters'));
+    card.querySelector('[data-fkg="clusters"]').innerHTML = clusters.map(clusterHeader).join('');
+    const rows = allRows(clusters).filter(matchesFilters);
+    card.querySelector('.res-count').textContent = tr('fkg.count', { n: rows.length });
+    const tableHost = card.querySelector('[data-fkg="table"]');
+    tableHost.innerHTML = rows.length
+      ? `<table class="data-table"><thead><tr>
+            <th>${esc(tr('fkg.col.vm'))}</th><th>${esc(tr('fkg.col.vcenter'))}</th>
+            <th>${esc(tr('fkg.col.cluster'))}</th><th>${esc(tr('fkg.col.wave'))}</th>
+            <th>${esc(tr('fkg.col.step'))}</th><th>${esc(tr('fkg.col.lastCopy'))}</th>
+            <th>${esc(tr('fkg.col.cutover'))}</th></tr></thead>
+          <tbody>${rows.map(vmRow).join('')}</tbody></table>`
+      : `<p class="form-hint">${esc(tr('fkg.none'))}</p>`;
+  }
+
+  // -- gestes ---------------------------------------------------------------
+  function gotoWave(cluster) {
+    const sel = document.querySelector('#cluster-select');
+    if (sel && sel.value !== cluster) {
+      sel.value = cluster;
+      sel.dispatchEvent(new Event('change', { bubbles: true }));
+    }
+    if (window.Sections) Sections.open('forklift', 'waves');
+  }
+
+  function onClick(e) {
+    if (e.target.closest('[data-fkg="refresh"]')) { load(); return; }
+    const row = e.target.closest('[data-fkg-wave]');
+    if (row) gotoWave(row.dataset.fkgCluster);
+  }
+
+  function onChange(e) {
+    const t = e.target;
+    if (t.matches('[data-fkg="f-status"]')) { filters.status = t.value; render(); }
+    else if (t.matches('[data-fkg="f-vcenter"]')) { filters.vcenter = t.value; render(); }
+  }
+
+  return { start, stop };
+})();
+window.ForkliftGlobal = ForkliftGlobal;

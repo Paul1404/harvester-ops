@@ -35,6 +35,10 @@ const App = (() => {
     if (name === 'namespaces') { refreshNamespaces(true); }
     if (name === 'activity')   refreshActivity();
     if (name === 'shutdown')   loadVMOrder();
+    // v1.76.0 : vue globale des migrations VMware, un module autonome comme
+    // les sections de Cluster (démarré/arrêté avec l'onglet, jamais en fond)
+    if (name === 'forkliftglobal') { if (window.ForkliftGlobal) ForkliftGlobal.start($('#forklift-global-host')); }
+    else if (window.ForkliftGlobal) ForkliftGlobal.stop();
     // v1.57.0 : Storage, Network, Add-ons, Security montent leur onglet
     // (une vue de blocs ou une liste) ; les autres pages coupent les listes.
     const section = window.Sections && Sections.isSection(name);
@@ -237,6 +241,12 @@ const App = (() => {
     if (active === 'namespaces') jobs.push(refreshNamespaces(true));
     if (active === 'activity')   jobs.push(refreshActivity());
     if (active === 'shutdown')   jobs.push(loadVMOrder());
+    // v1.76.0 : la vue globale des migrations ne dépend pas du cluster
+    // sélectionné, mais un rafraîchissement ne coûte rien et garde le
+    // même réflexe que les autres onglets de tête (Activity).
+    if (active === 'forkliftglobal' && window.ForkliftGlobal) {
+      jobs.push(ForkliftGlobal.start($('#forklift-global-host')));
+    }
     if (active === 'overview') {
       const mode = savedOverviewMode();
       if (mode !== 'metrics') {

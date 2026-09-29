@@ -22,6 +22,7 @@ Voir docs/design/2026-09-27-migrations-vmware.md et
 docs/design/2026-09-28-forklift-b1-plan.md.
 """
 
+import base64
 import json
 import re
 
@@ -274,6 +275,108 @@ def plans_using(ns, name, plans):
             m = pl.get("metadata") or {}
             out.append(f"{m.get('namespace')}/{m.get('name')}")
     return out
+
+
+# --- ce que l'onglet de la console demande (v1.75.0) --------------------------
+
+VDDK_CM = "harvester-ops-vddk"
+CERT_MANAGER_MEMBER = "manifests/cert-manager/cert-manager.yaml"
+ARCHIVE_RE = re.compile(r"^VMware-vix-disklib-(\d+\.\d+\.\d+)-\d+\.x86_64\.tar\.gz$")
+
+
+def check_archive_name(name):
+    """Le nom que VMware donne à l'archive VDDK ; rend sa version (8.0.3)."""
+    m = ARCHIVE_RE.match(str(name or ""))
+    if not m:
+        raise ValueError("VDDK archive: VMware-vix-disklib-<version>-<build>.x86_64.tar.gz expected")
+    return m.group(1)
+
+
+def vddk_record_manifest(image, digest, archive, when):
+    """La dernière image VDDK poussée pour ce cluster, gardée par le cluster
+    lui-même : toute console qui le gère la retrouve (Préparation, formulaire
+    de source)."""
+    return {"apiVersion": "v1", "kind": "ConfigMap",
+            "metadata": {"name": VDDK_CM, "namespace": NS, "labels": {L_MANAGED: "true"}},
+            "data": {"image": check_image(image, "VDDK image"), "digest": str(digest),
+                     "archive": str(archive), "pushed_at": str(when)}}
+
+
+def vddk_record(cm):
+    d = (cm or {}).get("data") or {}
+    if not d.get("image"):
+        return None
+    return {k: d.get(k, "") for k in ("image", "digest", "archive", "pushed_at")}
+
+
+def _registry_setting(value):
+    if isinstance(value, dict):
+        return value
+    try:
+        v = json.loads(value) if value and str(value).strip() else {}
+    except ValueError:
+        return {}
+    return v if isinstance(v, dict) else {}
+
+
+def registry_hint(value, archive=""):
+    """L'image VDDK proposée : le premier registre du réglage containerd-registry
+    de Harvester (ses Configs, puis les points d'accès de ses miroirs), chemin
+    harvops/vddk, étiquette = version du VDDK. Ne rend jamais d'identifiant,
+    seulement s'il y en a (`auth`)."""
+    v = _registry_setting(value)
+    hosts, plain = [], set()
+    for host in (v.get("Configs") or {}):
+        hosts.append(str(host))
+    for mirror in (v.get("Mirrors") or {}).values():
+        for ep in (mirror or {}).get("Endpoints") or []:
+            ep = str(ep)
+            host = re.sub(r"^https?://", "", ep).rstrip("/")
+            if ep.startswith("http://"):
+                plain.add(host)
+            hosts.append(host)
+    host = next((h for h in hosts if h), "")
+    if not host:
+        return {"image": "", "host": "", "plain_http": False, "auth": False}
+    try:
+        tag = check_archive_name(archive)
+    except ValueError:
+        tag = "latest"
+    return {"image": f"{host}/harvops/vddk:{tag}", "host": host, "plain_http": host in plain,
+            "auth": registry_auth(v, host) is not None}
+
+
+def registry_auth(value, host):
+    """Les identifiants que Harvester a déjà pour ce registre (Configs.<hôte>.Auth)."""
+    auth = (((_registry_setting(value).get("Configs") or {}).get(host) or {}).get("Auth")) or {}
+    if auth.get("Username") and auth.get("Password"):
+        return {"username": str(auth["Username"]), "password": str(auth["Password"])}
+    return None
+
+
+def secret_values(secret, *keys):
+    """Les valeurs décodées des clés présentes d'un Secret (champ data)."""
+    data = (secret or {}).get("data") or {}
+    return {k: base64.b64decode(data[k]).decode() for k in keys if data.get(k)}
+
+
+def spec_from_vmimport(source, secret, vddk_image=""):
+    """Un vCenter déjà déclaré dans VM Import (VmwareSource et son Secret)
+    devient une demande de fournisseur. Lu côté serveur : le mot de passe ne
+    passe jamais par le navigateur. Sans certificat d'autorité, VM Import ne
+    vérifie pas TLS : le fournisseur non plus."""
+    vals = secret_values(secret, "username", "password", "caCert")
+    if not vals.get("username") or not vals.get("password"):
+        raise ValueError("the VM Import source has no user and password to reuse")
+    spec = {"url": ((source or {}).get("spec") or {}).get("endpoint"),
+            "user": vals["username"], "password": vals["password"]}
+    if vals.get("caCert"):
+        spec["cacert"] = vals["caCert"]
+    else:
+        spec["insecure"] = True
+    if vddk_image:
+        spec["vddk_image"] = vddk_image
+    return spec
 
 
 # --- inventaire (service forklift-inventory) --------------------------------

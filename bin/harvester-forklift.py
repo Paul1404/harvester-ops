@@ -3,18 +3,20 @@
 
     harvester-forklift status          --cluster C
     harvester-forklift install         --cluster C [--chart-version V] [--image-tag T]
-                                       [--cert-manager-manifest FICHIER]
+                                       [--cert-manager-manifest FICHIER | --cert-manager-from-bundle PAQUET]
     harvester-forklift vddk-image      --archive VDDK.tar.gz --image REGISTRE/DEPOT:TAG
-                                       [--base IMAGE] [--plain-http] [--auth-stdin]
-    harvester-forklift provider-apply  --cluster C --namespace NS --name N   (JSON sur stdin)
+                                       [--base IMAGE] [--plain-http] [--auth-stdin | --spec FICHIER]
+                                       [--cluster C | --kubeconfig K]
+    harvester-forklift provider-apply  --cluster C --namespace NS --name N   (JSON sur stdin ou --spec FICHIER)
     harvester-forklift provider-delete --cluster C --namespace NS --name N [--with-secret]
     harvester-forklift inventory       --cluster C --namespace NS --name N --kind vms|networks|datastores
 
 Harvester 1.9 ne livre pas Forklift : `install` pose cert-manager (depuis le
 manifeste que la console tire de son paquet Cluster API), l'add-on
 expérimental forklift-operator puis le ForkliftController. Les secrets
-(vCenter, registre) arrivent en JSON sur l'entrée standard, jamais en
-argument. Progression sur stderr au format STEP_EVENT|<étape>|<statut>|<message>.
+(vCenter, registre) arrivent en JSON sur l'entrée standard ou dans un fichier
+privé (`--spec FICHIER`, ce que fait la console), jamais en argument.
+Progression sur stderr au format STEP_EVENT|<étape>|<statut>|<message>.
 Codes : 0 succès, 1 échec, 2 refus. Bibliothèque standard seulement.
 Voir docs/design/2026-09-27-migrations-vmware.md.
 """
@@ -23,6 +25,8 @@ import argparse
 import json
 import ssl
 import sys
+import tarfile
+import tempfile
 import time
 import urllib.error
 import urllib.request
@@ -73,6 +77,35 @@ def read_stdin_json():
     return data
 
 
+def read_json_input(args):
+    """La demande : le fichier privé donné par --spec (la console), sinon l'entrée standard."""
+    path = getattr(args, "spec", None)
+    if not path:
+        return read_stdin_json()
+    try:
+        data = json.loads(Path(path).read_text())
+    except (OSError, json.JSONDecodeError):
+        raise ValueError("--spec: a readable JSON file expected") from None
+    if not isinstance(data, dict):
+        raise ValueError("--spec: a JSON object expected")
+    return data
+
+
+def bundle_cert_manager(bundle, into):
+    """Le manifeste cert-manager du paquet Cluster API de la console, écrit dans `into`."""
+    try:
+        with tarfile.open(bundle, "r:gz") as tar:
+            m = next((m for m in tar.getmembers() if m.isfile() and m.name.endswith(hf.CERT_MANAGER_MEMBER)), None)
+            if m is None:
+                raise ValueError("the Cluster API bundle has no cert-manager manifest")
+            data = tar.extractfile(m).read()
+    except (OSError, tarfile.TarError):
+        raise ValueError("the Cluster API bundle cannot be read") from None
+    out = Path(into) / "cert-manager.yaml"
+    out.write_bytes(data)
+    return str(out)
+
+
 def until(fn, timeout, label, sleep=time.sleep, now=time.time, every=5):
     """Relit `fn()` -> (True|False|None, message) jusqu'à la fin ou le délai."""
     deadline, last = now() + timeout, None
@@ -107,7 +140,8 @@ def cmd_status(args, kube=None):
             res, msg = hf.provider_state(p)
             providers.append({"namespace": m.get("namespace"), "name": m.get("name"),
                               "type": (p.get("spec") or {}).get("type"), "ready": res, "message": msg})
-    print(json.dumps({"install": st, "providers": providers}))
+    vddk = hf.vddk_record(get_opt(kube, "configmaps", hf.NS, hf.VDDK_CM))
+    print(json.dumps({"install": st, "providers": providers, "vddk": vddk}))
     return EXIT_OK
 
 
@@ -118,12 +152,21 @@ def cmd_install(args, kube=None, sleep=time.sleep, now=time.time):
     if st["cert_manager"]:
         step("cert-manager", "done", "cert-manager is running")
     else:
-        if not args.cert_manager_manifest:
+        manifest = args.cert_manager_manifest
+        tmp = None
+        if not manifest and getattr(args, "cert_manager_from_bundle", None):
+            tmp = tempfile.TemporaryDirectory(prefix="hfk-cm-")
+            manifest = bundle_cert_manager(args.cert_manager_from_bundle, tmp.name)
+        if not manifest:
             step("cert-manager", "error", "cert-manager is missing: give --cert-manager-manifest "
                  "(the console takes it from its Cluster API bundle)")
             return EXIT_REFUSED
-        step("cert-manager", "running", "installing cert-manager")
-        kube.run("apply", "--server-side", "--force-conflicts", "-f", args.cert_manager_manifest, timeout=300)
+        try:
+            step("cert-manager", "running", "installing cert-manager")
+            kube.run("apply", "--server-side", "--force-conflicts", "-f", manifest, timeout=300)
+        finally:
+            if tmp:
+                tmp.cleanup()
 
         def cm():
             s = install_state(kube)
@@ -180,13 +223,22 @@ def cmd_install(args, kube=None, sleep=time.sleep, now=time.time):
 
 
 def cmd_vddk_image(args):
-    creds = read_stdin_json() if args.auth_stdin else None
-    if args.auth_stdin and not (creds.get("username") and creds.get("password")):
-        raise ValueError('--auth-stdin: {"username": ..., "password": ...} expected on stdin')
+    if getattr(args, "spec", None):
+        creds = read_json_input(args)
+    else:
+        creds = read_stdin_json() if args.auth_stdin else None
+    if creds is not None and not (creds.get("username") and creds.get("password")):
+        raise ValueError('registry credentials: {"username": ..., "password": ...} expected')
     step("vddk", "running", f"building the VDDK image from {Path(args.archive).name}")
     res = op.push_vddk_image(args.archive, args.image, base=args.base, target_creds=creds,
                              plain_http=args.plain_http, step=lambda m: step("vddk", "running", m))
     step("vddk", "done", f"{res['image']} ({res['digest'][:19]})")
+    if getattr(args, "cluster", None) or getattr(args, "kubeconfig", None):
+        kube = kube_from(args)
+        when = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+        kube.apply([hf.namespace_manifest(),
+                    hf.vddk_record_manifest(res["image"], res["digest"], Path(args.archive).name, when)])
+        step("vddk-record", "done", f"the cluster remembers {res['image']}")
     print(json.dumps(res))
     return EXIT_OK
 
@@ -194,7 +246,7 @@ def cmd_vddk_image(args):
 def cmd_provider_apply(args, kube=None, sleep=time.sleep, now=time.time):
     kube = kube or kube_from(args)
     ns, name = hf.check_name(args.namespace, "namespace"), hf.check_name(args.name, "provider")
-    spec = read_stdin_json()
+    spec = read_json_input(args)
     secret, prov = hf.provider_secret(ns, name, spec), hf.provider_manifest(ns, name, spec)
     if not install_state(kube)["ready"]:
         step("provider", "error", "Forklift is not installed and running on this cluster: run install first")
@@ -288,6 +340,9 @@ def build_parser():
     sp.add_argument("--chart-version", default=hf.CHART_VERSION)
     sp.add_argument("--image-tag", default=hf.IMAGE_TAG, help="tag of the harvester-forklift-* images")
     sp.add_argument("--cert-manager-manifest", help="cert-manager YAML, applied if cert-manager is missing")
+    sp.add_argument("--cert-manager-from-bundle",
+                    help="the console's Cluster API bundle (.tar.gz): its cert-manager manifest "
+                         "is applied if cert-manager is missing")
     sp.add_argument("--timeout", type=int, default=900)
     sp.set_defaults(fn=cmd_install)
     sp = sub.add_parser("vddk-image", help="build the VDDK init image from VMware's archive and push it")
@@ -296,6 +351,8 @@ def build_parser():
     sp.add_argument("--base", default=op.DEFAULT_BASE, help="base image with cp")
     sp.add_argument("--plain-http", action="store_true", help="the target registry speaks plain HTTP")
     sp.add_argument("--auth-stdin", action="store_true", help='{"username": ..., "password": ...} on stdin')
+    cluster_args(sp)
+    sp.add_argument("--spec", help='a private JSON file {"username": ..., "password": ...} instead of stdin')
     sp.set_defaults(fn=cmd_vddk_image)
     for name, fn, hlp in (("provider-apply", cmd_provider_apply, "declare or change a vCenter provider (JSON on stdin)"),
                           ("provider-delete", cmd_provider_delete, "delete a vCenter provider")):
@@ -306,6 +363,8 @@ def build_parser():
         sp.add_argument("--timeout", type=int, default=300)
         if name == "provider-delete":
             sp.add_argument("--with-secret", action="store_true", help="also delete the secret the console created")
+        if name == "provider-apply":
+            sp.add_argument("--spec", help="a private JSON file with the request instead of stdin")
         sp.set_defaults(fn=fn)
     sp = sub.add_parser("inventory", help="VMs, networks or datastores of a vCenter provider, as Forklift sees them")
     cluster_args(sp)

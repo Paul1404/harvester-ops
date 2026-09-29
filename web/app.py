@@ -674,6 +674,7 @@ ADMIN_ONLY_PREFIXES = (
     "/api/upgrade/",            # v1.69.0 : mise à jour de Harvester (redémarre les hôtes)
     "/api/monlog/",             # v1.70.0 : sorties et flux de journaux, AlertmanagerConfig
     "/api/vmimport/",           # v1.71.0 : sources d'import (identifiants) et imports de VM
+    "/api/forklift",            # v1.75.0 : Forklift, image VDDK et son magasin, fournisseurs vCenter
     "/api/users",               # gestion des comptes de la console
     "/api/harvester-users",     # comptes du cluster Harvester
     "/api/kubeovn/",            # réseaux kube-ovn : un changement peut couper des VMs
@@ -13549,6 +13550,332 @@ def api_vmimport_do(cluster, action):
         return jsonify({"error": str(e)}), 400
     run, err = _res_cli(cluster, kc, label, args, files)
     return _res_reply(run, err, action=action)
+
+
+# ---------------------------------------------------------------------------
+# v1.75.0 : migrations VMware par Forklift, onglet de cluster. Écritures par
+# bin/harvester-forklift.py (parité CLI), secrets par fichier privé ; un mot
+# de passe déjà dans le cluster est relu ici, jamais renvoyé au navigateur.
+# Voir docs/design/2026-09-29-forklift-ui-plan.md.
+# ---------------------------------------------------------------------------
+
+import tarfile  # noqa: E402
+import hv_forklift as _hf  # noqa: E402
+import oci_push as _op  # noqa: E402
+
+FORKLIFT_SCRIPT = "harvester-forklift.py"
+VDDK_DIR = Path(os.environ.get(
+    "HARVESTER_OPS_VDDK_DIR", str(Path.home() / ".local/share/harvester-ops/vddk")))
+_FORKLIFT_DO = ("install", "vddk-image", "provider-apply", "provider-delete")
+_FK_INVENTORY_CACHE = {}        # (cluster, identité, fournisseur, sorte) -> (horodatage, lignes)
+_FK_INVENTORY_TTL = 20
+_FK_KINDS = ("vms", "networks", "datastores")
+_VM_SOURCE_KIND = "vmwaresources.migration.harvesterhci.io"
+_VDDK_UPLOADS = set()
+_VDDK_LOCK = threading.Lock()
+_PATH_RE = re.compile(r"(?:/[^\s/:'\"()]+)+")
+
+
+def _vddk_dir():
+    VDDK_DIR.mkdir(parents=True, exist_ok=True)
+    return VDDK_DIR
+
+
+def _fk_cmd(action, kc):
+    return [sys.executable, str(BIN_DIR / FORKLIFT_SCRIPT), action, "--kubeconfig", kc]
+
+
+@app.route("/api/forklift/<cluster>")
+@requires_auth
+def api_forklift(cluster):
+    """L'onglet d'un coup : installation (dans l'ordre où elle se fait), image
+    VDDK retenue par le cluster, registre proposé, fournisseurs vCenter et
+    les sources VMware de VM Import qu'on peut reprendre."""
+    kc = _kubectl_for_cluster(cluster)
+    if not kc:
+        return jsonify({"error": f"unknown cluster: {cluster}"}), 404
+    if _cluster_reachable(kc) is False:
+        return jsonify(_unreachable_payload(cluster, kc)), 200
+    from concurrent.futures import ThreadPoolExecutor
+    reads = {"addons": (_hf.K_ADDON, "-A"), "deploys": (_hf.K_DEPLOY, "-n", _hf.NS),
+             "cm_deploys": (_hf.K_DEPLOY, "-n", _hf.CERT_MANAGER[0]),
+             "controller": (_hf.K_CONTROLLER, _hf.CONTROLLER_NAME, "-n", _hf.NS),
+             "providers": (_hf.K_PROVIDER, "-A"), "plans": (_hf.K_PLAN, "-A"),
+             "vddk": ("configmaps", _hf.VDDK_CM, "-n", _hf.NS),
+             "registry": ("settings.harvesterhci.io", "containerd-registry"),
+             "sources": (_VM_SOURCE_KIND, "-A")}
+    with ThreadPoolExecutor(max_workers=len(reads)) as pool:
+        futs = {k: pool.submit(_kubectl_json, kc, "get", *a, timeout=30, cluster=cluster) for k, a in reads.items()}
+        got = {k: f.result() for k, f in futs.items()}
+    items = lambda k: (got[k] or {}).get("items") or []  # noqa: E731
+    by_name = lambda k: {(d.get("metadata") or {}).get("name"): d for d in items(k)}  # noqa: E731
+    addon, theirs = _hf.pick_addon(items("addons"))
+    vddk = _hf.vddk_record(got["vddk"])
+    reg = got["registry"] or {}
+    providers = []
+    for p in items("providers"):
+        spec, m = p.get("spec") or {}, p.get("metadata") or {}
+        if spec.get("type") != "vsphere":
+            continue
+        ready, msg = _hf.provider_state(p)
+        providers.append({"name": m.get("name"), "namespace": m.get("namespace"), "url": spec.get("url"),
+                          "ready": ready, "message": msg,
+                          "vddk_image": (spec.get("settings") or {}).get("vddkInitImage", ""),
+                          "plans": _hf.plans_using(m.get("namespace"), m.get("name"), items("plans")),
+                          "managed": (m.get("labels") or {}).get(_hf.L_MANAGED) == "true"})
+    return jsonify({
+        "cluster": cluster,
+        "install": _hf.install_state(addon, by_name("deploys"), got["controller"], by_name("cm_deploys")),
+        "harvester_addon": bool(theirs),
+        "bundle": _capi_bundle_active_path() is not None,
+        "vddk": vddk,
+        "registry": _hf.registry_hint(reg.get("value") or reg.get("default") or "", (vddk or {}).get("archive", "")),
+        "providers": sorted(providers, key=lambda r: r["name"] or ""),
+        "vmimport_sources": sorted(({"namespace": (s.get("metadata") or {}).get("namespace"),
+                                     "name": (s.get("metadata") or {}).get("name"),
+                                     "endpoint": (s.get("spec") or {}).get("endpoint")} for s in items("sources")),
+                                   key=lambda r: (r["namespace"] or "", r["name"] or "")),
+    })
+
+
+def _fk_vmimport_source(kc, cluster, ns, name):
+    """La source VMware d'un import, par son namespace et son nom ; relevée
+    comme la liste de l'onglet (kubectl ne sait pas la nommer autrement à
+    travers le proxy des sources) puis filtrée côté serveur."""
+    items = (_kubectl_json(kc, "get", _VM_SOURCE_KIND, "-A", timeout=30, cluster=cluster) or {}).get("items") or []
+    return next((s for s in items if (s.get("metadata") or {}).get("namespace") == ns
+                and (s.get("metadata") or {}).get("name") == name), None)
+
+
+def _fk_provider_spec(kc, cluster, b):
+    """La demande de fournisseur complète. Trois formes : tout saisi ; repris
+    d'une source VM Import ; modifié sans ressaisir le mot de passe (repris du
+    secret du fournisseur). Rend (nom, demande) ; LookupError si l'objet cité
+    n'existe pas."""
+    name = _hf.check_name(str(b.get("name") or ""), "provider")
+    vddk = str(b.get("vddk_image") or "").strip()
+    src = b.get("from_vmimport")
+    if isinstance(src, dict):
+        ns, sname = _hf.check_name(src.get("namespace"), "namespace"), _hf.check_name(src.get("name"), "source")
+        source = _fk_vmimport_source(kc, cluster, ns, sname)
+        cred = ((source or {}).get("spec") or {}).get("credentials") or {}
+        secret = _kubectl_json(kc, "get", "secrets", _hf.check_name(cred.get("name"), "secret"),
+                               "-n", _hf.check_name(cred.get("namespace") or ns, "namespace"),
+                               timeout=30, cluster=cluster) if source else None
+        if not source or not secret:
+            raise LookupError(f"no VM Import source {ns}/{sname} with credentials")
+        spec = _hf.spec_from_vmimport(source, secret, vddk)
+    else:
+        spec = {"url": b.get("url"), "user": str(b.get("user") or "").strip(), "password": str(b.get("password") or "")}
+        if b.get("cacert"):
+            spec["cacert"] = str(b["cacert"])
+        else:
+            spec["insecure"] = bool(b.get("insecure"))
+        if vddk:
+            spec["vddk_image"] = vddk
+        if b.get("keep_credentials") and not spec["password"]:
+            secret = _kubectl_json(kc, "get", "secrets", _hf.secret_name(name), "-n", _hf.NS, timeout=30, cluster=cluster)
+            kept = _hf.secret_values(secret, "user", "password")
+            if not kept.get("password"):
+                raise LookupError(f"provider {name} has no saved credentials to keep")
+            spec["user"] = spec["user"] or kept.get("user", "")
+            spec["password"] = kept["password"]
+    # refuse avant d'écrire, sans jamais citer d'identifiant
+    _hf.provider_secret(_hf.NS, name, spec)
+    _hf.provider_manifest(_hf.NS, name, spec)
+    return name, spec
+
+
+@app.route("/api/forklift/<cluster>/do/<action>", methods=["POST"])
+@requires_auth
+@_rate_limit("30/minute")
+def api_forklift_do(cluster, action):
+    if action not in _FORKLIFT_DO:
+        return jsonify({"error": "action: " + ", ".join(_FORKLIFT_DO)}), 400
+    kc = _kubectl_for_cluster(cluster)
+    if not kc:
+        return jsonify({"error": f"unknown cluster: {cluster}"}), 404
+    b = request.get_json(silent=True) or {}
+    cmd, spec = _fk_cmd(action, kc), None
+    try:
+        if action == "install":
+            bundle = _capi_bundle_active_path()
+            if bundle:
+                cmd += ["--cert-manager-from-bundle", str(bundle)]
+            label = "forklift:install"
+        elif action == "vddk-image":
+            archive = str(b.get("archive") or "")
+            path = _vddk_dir() / archive
+            # un nom mal formé n'a jamais pu être déposé (l'envoi le
+            # contrôle déjà) : c'est donc la même absence pour l'appelant,
+            # pas une 400 séparée qui suggérerait une faute de saisie.
+            try:
+                _hf.check_archive_name(archive)
+                found = path.is_file()
+            except ValueError:
+                found = False
+            if not found:
+                return jsonify({"error": f"no VDDK archive {archive} in the console"}), 404
+            image = _hf.check_image(str(b.get("image") or "").strip(), "VDDK image")
+            cmd += ["--archive", str(path), "--image", image]
+            if b.get("plain_http"):
+                cmd.append("--plain-http")
+            if b.get("use_cluster_auth"):
+                reg = _kubectl_json(kc, "get", "settings.harvesterhci.io", "containerd-registry",
+                                    timeout=30, cluster=cluster) or {}
+                spec = _hf.registry_auth(reg.get("value") or "", image.split("/", 1)[0])
+                if spec is None:
+                    raise ValueError("Harvester has no credentials for this registry")
+            elif b.get("username") or b.get("password"):
+                spec = {"username": str(b.get("username") or ""), "password": str(b.get("password") or "")}
+                if not spec["username"] or not spec["password"]:
+                    raise ValueError("registry: the user and the password go together")
+            label = "forklift:vddk-image"
+        elif action == "provider-apply":
+            name, spec = _fk_provider_spec(kc, cluster, b.get("spec") if isinstance(b.get("spec"), dict) else {})
+            cmd += ["--namespace", _hf.NS, "--name", name]
+            label = f"forklift:provider-apply:{name}"
+        else:
+            name = _hf.check_name(str(b.get("name") or ""), "provider")
+            cmd += ["--namespace", _hf.NS, "--name", name, "--with-secret"]
+            label = f"forklift:provider-delete:{name}"
+    except LookupError as e:
+        return jsonify({"error": str(e)}), 404
+    except (ValueError, TypeError) as e:
+        return jsonify({"error": str(e)}), 400
+    run, err = _cli_action(cluster, label, cmd, "harvester-forklift", spec=spec,
+                           after=lambda: _invalidate_cluster_caches(cluster))
+    return _res_reply(run, err, action=action)
+
+
+@app.route("/api/forklift/<cluster>/inventory/<name>/<kind>")
+@requires_auth
+def api_forklift_inventory(cluster, name, kind):
+    """Ce que Forklift voit d'un vCenter, par l'outil (jeton court et
+    port-forward) ; gardé 20 s par personne pour ne pas rouvrir un tunnel à
+    chaque clic."""
+    if kind not in _FK_KINDS:
+        return jsonify({"error": "kind: " + ", ".join(_FK_KINDS)}), 400
+    kc = _kubectl_for_cluster(cluster)
+    if not kc:
+        return jsonify({"error": f"unknown cluster: {cluster}"}), 404
+    key = (cluster, (current_cluster_identity() or {}).get("user"), name, kind)
+    hit = _FK_INVENTORY_CACHE.get(key)
+    if hit and time.time() - hit[0] < _FK_INVENTORY_TTL:
+        return jsonify({"rows": hit[1]})
+    r = subprocess.run(_fk_cmd("inventory", kc) + ["--namespace", _hf.NS, "--name", name, "--kind", kind],
+                       capture_output=True, text=True, timeout=120)
+    if r.returncode != 0:
+        lines = [ln.split("|", 3)[3] for ln in r.stderr.splitlines() if ln.startswith("STEP_EVENT|") and ln.count("|") >= 3]
+        msg = (lines[-1] if lines else (r.stderr.strip().splitlines() or ["the inventory cannot be read"])[-1])
+        return jsonify({"error": _PATH_RE.sub("<path>", msg)[:300]}), 502
+    try:
+        rows = json.loads(r.stdout or "[]")
+    except json.JSONDecodeError:
+        return jsonify({"error": "the inventory answer cannot be read"}), 502
+    _FK_INVENTORY_CACHE[key] = (time.time(), rows)
+    return jsonify({"rows": rows})
+
+
+@app.route("/api/forklift-vddk")
+@requires_auth
+def api_forklift_vddk_list():
+    """Les archives VDDK déposées : une seule suffit pour tous les clusters."""
+    d = _vddk_dir()
+    out = []
+    for p in sorted(d.glob("VMware-vix-disklib-*.tar.gz")):
+        try:
+            ver, st = _hf.check_archive_name(p.name), p.stat()
+        except (ValueError, OSError):
+            continue
+        out.append({"name": p.name, "version": ver, "size": st.st_size, "mtime": st.st_mtime})
+    try:
+        st = os.statvfs(d)
+        free = st.f_bavail * st.f_frsize
+    except OSError:
+        free = 0
+    return jsonify({"archives": out, "free": free})
+
+
+@app.route("/api/forklift-vddk/<archive>", methods=["PUT"])
+@requires_auth
+@_rate_limit("6 per minute")
+def api_forklift_vddk_upload(archive):
+    """Dépose l'archive VDDK de VMware (corps de la requête), vérifiée comme
+    l'outil la lira ; action suivie comme tout dépôt.
+
+    Le paramètre de route s'appelle `archive`, pas `name` : le nom que VMware
+    donne à son archive (`VMware-vix-disklib-...`) porte une majuscule et des
+    points, ce que le contrôle générique des noms d'objet Kubernetes
+    (`_validate_k8s_path_params`, appliqué à toute route qui porte un
+    paramètre `name`) refuse avant même d'atteindre cette route — comme
+    `/api/exports/<archive>` le fait déjà pour les mêmes raisons."""
+    try:
+        _hf.check_archive_name(archive)
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
+    length = request.content_length
+    if not length:
+        return jsonify({"error": "Content-Length required"}), 411
+    d = _vddk_dir()
+    dest, part = d / archive, d / (archive + _PART_SUFFIX)
+    with _VDDK_LOCK:
+        if dest.exists() or archive in _VDDK_UPLOADS:
+            return jsonify({"error": f"{archive} is already in the console"}), 409
+        _VDDK_UPLOADS.add(archive)
+    run = ActionRun(uuid.uuid4().hex[:12], f"vddk-archive-upload:{archive}", "(local)", ["upload", archive])
+    run.cluster_user = (current_cluster_identity() or {}).get("user")
+    with ACTIONS_LOCK:
+        ACTIONS[run.id] = run
+
+    def step(sid, status, msg=""):
+        run.emit({"type": "step", "step_id": sid, "status": status, "message": msg, "ts": time.time()})
+
+    run.status = "running"
+    run.emit({"type": "status", "status": "running", "ts": time.time()})
+    step("upload", "running", f"receiving {archive} ({_vp.fmt_bytes(length)})")
+    code, body = 201, None
+    try:
+        _receive_archive(run, request.stream, length, part)
+        step("upload", "done", f"{archive} received")
+        step("verify", "running", "checking that this is VMware's VDDK")
+        _op.archive_layer(str(part))
+        os.link(part, dest)
+        step("verify", "done", f"VDDK {_hf.check_archive_name(archive)} kept by the console")
+        run.status, run.exit_code = "done", 0
+        body = {"action_id": run.id, "archive": archive, "size": length}
+    except _UploadCancelled:
+        run.status, run.exit_code = "cancelled", 3
+        run.error_summary = "cancelled, nothing kept"
+        code, body = 409, {"error": "cancelled", "action_id": run.id}
+    except (ValueError, OSError, tarfile.TarError) as e:
+        run.status, run.exit_code = "error", 2
+        run.error_summary = _error_text(e) if isinstance(e, OSError) else str(e)[:300]
+        step("verify", "error", run.error_summary)
+        code, body = 422, {"error": run.error_summary, "action_id": run.id}
+    finally:
+        part.unlink(missing_ok=True)
+        with _VDDK_LOCK:
+            _VDDK_UPLOADS.discard(archive)
+        run.ended_at = time.time()
+        run.emit({"type": "status", "status": run.status, "exit_code": run.exit_code, "ts": time.time()})
+        run.close()
+    return jsonify(body), code
+
+
+@app.route("/api/forklift-vddk/<archive>", methods=["DELETE"])
+@requires_auth
+@_rate_limit("20/minute")
+def api_forklift_vddk_delete(archive):
+    try:
+        _hf.check_archive_name(archive)
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
+    p = _vddk_dir() / archive
+    if not p.is_file():
+        return jsonify({"error": "not found"}), 404
+    p.unlink()
+    return jsonify({"deleted": archive})
 
 
 @app.route("/api/storage-options/<cluster>")

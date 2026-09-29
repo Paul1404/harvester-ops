@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<soapenv:Envelope xmlns:soapenc="http://schemas.xmlsoap.org/soap/encoding/"
+ xmlns:soapenv="http://schemas.xmlsoap.org/soap/envelope/"
+ xmlns:xsd="http://www.w3.org/2001/XMLSchema"
+ xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
+<soapenv:Body>
+<RetrievePropertiesExResponse xmlns="urn:vim25"><returnval><objects><obj type="VirtualMachine">vm-16</obj><propSet><name>snapshot</name><val xsi:type="VirtualMachineSnapshotInfo"><currentSnapshot type="VirtualMachineSnapshot">snapshot-2001</currentSnapshot><rootSnapshotList><snapshot type="VirtualMachineSnapshot">snapshot-1001</snapshot><vm type="VirtualMachine">vm-16</vm><name>forklift-migration-precopy</name><description>Forklift Operator warm migration precopy</description><id>1</id><createTime>2026-09-29T18:53:18.75068Z</createTime><state>poweredOff</state><quiesced>false</quiesced><childSnapshotList><snapshot type="VirtualMachineSnapshot">snapshot-1002</snapshot><vm type="VirtualMachine">vm-16</vm><name>forklift-migration-precopy</name><description>Forklift Operator warm migration precopy</description><id>2</id><createTime>2026-09-29T18:57:05.317258Z</createTime><state>poweredOff</state><quiesced>false</quiesced><childSnapshotList><snapshot type="VirtualMachineSnapshot">snapshot-2001</snapshot><vm type="VirtualMachine">vm-16</vm><name>forklift-migration-precopy</name><description>Forklift Operator warm migration precopy</description><id>3</id><createTime>2026-09-29T19:18:06.299004Z</createTime><state>poweredOff</state><quiesced>false</quiesced><replaySupported>false</replaySupported></childSnapshotList><replaySupported>false</replaySupported></childSnapshotList><replaySupported>false</replaySupported></rootSnapshotList></val></propSet></objects></returnval></RetrievePropertiesExResponse>
+</soapenv:Body>
+</soapenv:Envelope>

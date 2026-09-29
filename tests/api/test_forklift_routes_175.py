@@ -484,3 +484,62 @@ def test_editing_a_provider_outside_forklift_keeps_its_credentials_there(world):
     assert cmd[cmd.index("--namespace") + 1] == "default"
     assert sent["user"] == "administrator@vsphere.local" and sent["password"] == "Default-S3cret!pw"
     assert "Default-S3cret" not in " ".join(cmd)
+
+
+# -- vu en réel sur harvlab2 (Harvester 1.9) : Auth retiré du réglage --------------
+
+REG_19 = json.dumps({"Mirrors": {"172.16.1.11:5005": {"Endpoints": ["http://172.16.1.11:5005"]}},
+                     "Configs": {"172.16.1.11:5005": {"Auth": None, "TLS": None}}, "Auths": None})
+PROV_LOCAL = {"spec": {"rkeConfig": {"registries": {"configs": {
+    "172.16.1.11:5005": {"authConfigSecretName": "harvester-containerd-registry-4041e0afc4370bdc"}}}}}}
+AUTH_SECRET = {"type": "rke.cattle.io/auth-config",
+               "data": {"username": B64("harvops"), "password": B64("reg-S3cret"), "host": B64("172.16.1.11:5005")}}
+
+
+def harvester_19(monkeypatch):
+    """Harvester 1.9 : le réglage n'a plus d'Auth ; les identifiants vivent dans
+    un secret de fleet-local nommé par le cluster de provisionnement `local`."""
+    orig = wapp._kubectl_json
+
+    def kj(kc, verb, kind, *a, **k):
+        if kind == "settings.harvesterhci.io":
+            return {"value": REG_19}
+        if kind == hf.PROV_CLUSTER[0]:
+            return PROV_LOCAL if a[:3] == ("local", "-n", "fleet-local") else None
+        if kind == "secrets" and a[:3] == ("harvester-containerd-registry-4041e0afc4370bdc", "-n", "fleet-local"):
+            return AUTH_SECRET
+        return orig(kc, verb, kind, *a, **k)
+    monkeypatch.setattr(wapp, "_kubectl_json", kj)
+
+
+def test_harvester_1_9_registry_credentials_are_found_in_their_secret(world, monkeypatch):
+    harvester_19(monkeypatch)
+    data = vddk_bytes()
+    with wapp.app.test_client() as c:
+        d = c.get("/api/forklift/harvlab2", headers=auth("eye")).get_json()
+        assert d["registry"]["auth"] is True and "reg-S3cret" not in json.dumps(d)
+        assert c.put(f"/api/forklift-vddk/{ARCHIVE}", data=data, headers=auth("adm")).status_code == 201
+        r = c.post("/api/forklift/harvlab2/do/vddk-image",
+                   json={"archive": ARCHIVE, "image": "172.16.1.11:5005/harvops/vddk:8.0.3",
+                         "plain_http": True, "use_cluster_auth": True}, headers=auth("adm"))
+        assert r.status_code == 202 and "reg-S3cret" not in r.get_data(as_text=True)
+    _, cmd, sent, _ = world["actions"][0]
+    assert sent == {"username": "harvops", "password": "reg-S3cret"} and "reg-S3cret" not in " ".join(cmd)
+
+
+def test_a_registry_harvester_has_no_credentials_for_is_refused_clearly(world, monkeypatch):
+    harvester_19(monkeypatch)
+    data = vddk_bytes()
+    with wapp.app.test_client() as c:
+        assert c.put(f"/api/forklift-vddk/{ARCHIVE}", data=data, headers=auth("adm")).status_code == 201
+        r = c.post("/api/forklift/harvlab2/do/vddk-image",
+                   json={"archive": ARCHIVE, "image": "other.lan:5000/harvops/vddk:8.0.3",
+                         "use_cluster_auth": True}, headers=auth("adm"))
+    assert r.status_code == 400 and "no credentials" in r.get_json()["error"]
+
+
+def test_the_vddk_store_is_private(world):
+    """Vu en réel : le magasin naissait en 0755 ; l'archive est sous licence."""
+    with wapp.app.test_client() as c:
+        c.get("/api/forklift-vddk", headers=auth("eye"))
+    assert (wapp.VDDK_DIR.stat().st_mode & 0o777) == 0o700

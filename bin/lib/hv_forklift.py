@@ -257,6 +257,12 @@ def provider_state(p):
     if p is None:
         return None, "waiting for the provider"
     st = p.get("status") or {}
+    # vu en réel : juste après une modification, les conditions sont encore
+    # celles de la version précédente (Ready vrai) ; rien n'est lu avant que
+    # Forklift ait relu la nouvelle version
+    gen = (p.get("metadata") or {}).get("generation")
+    if gen is not None and (st.get("observedGeneration") or 0) < gen:
+        return None, f"being checked ({st.get('phase') or 'pending'}: change not read yet)"
     conds = st.get("conditions") or []
     crit = [c for c in conds if c.get("category") == "Critical" and str(c.get("status")) == "True"]
     if crit:
@@ -323,11 +329,12 @@ def _registry_setting(value):
     return v if isinstance(v, dict) else {}
 
 
-def registry_hint(value, archive=""):
+def registry_hint(value, archive="", prov_cluster=None):
     """L'image VDDK proposée : le premier registre du réglage containerd-registry
     de Harvester (ses Configs, puis les points d'accès de ses miroirs), chemin
     harvops/vddk, étiquette = version du VDDK. Ne rend jamais d'identifiant,
-    seulement s'il y en a (`auth`)."""
+    seulement s'il y en a (`auth`), dans le réglage ou, depuis Harvester 1.9,
+    dans le secret que nomme le cluster `local` (`prov_cluster`)."""
     v = _registry_setting(value)
     hosts, plain = [], set()
     for host in (v.get("Configs") or {}):
@@ -347,7 +354,7 @@ def registry_hint(value, archive=""):
     except ValueError:
         tag = "latest"
     return {"image": f"{host}/harvops/vddk:{tag}", "host": host, "plain_http": host in plain,
-            "auth": registry_auth(v, host) is not None}
+            "auth": registry_auth(v, host) is not None or bool(registry_auth_secret(prov_cluster, host))}
 
 
 def registry_auth(value, host):
@@ -356,6 +363,18 @@ def registry_auth(value, host):
     if auth.get("Username") and auth.get("Password"):
         return {"username": str(auth["Username"]), "password": str(auth["Password"])}
     return None
+
+
+PROV_CLUSTER = ("clusters.provisioning.cattle.io", "fleet-local", "local")
+
+
+def registry_auth_secret(prov_cluster, host):
+    """Vu en réel sur Harvester 1.9 : le réglage containerd-registry perd son
+    Auth (null) ; les identifiants vont dans un Secret rke.cattle.io/auth-config
+    de fleet-local, nommé par spec.rkeConfig.registries.configs.<hôte>.
+    authConfigSecretName du cluster de provisionnement `local`. Rend ce nom."""
+    cfg = ((((prov_cluster or {}).get("spec") or {}).get("rkeConfig") or {}).get("registries") or {}).get("configs") or {}
+    return str((cfg.get(host) or {}).get("authConfigSecretName") or "")
 
 
 def secret_values(secret, *keys):

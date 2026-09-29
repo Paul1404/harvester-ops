@@ -13577,7 +13577,13 @@ _PATH_RE = re.compile(r"(?:/[^\s/:'\"()]+)+")
 
 
 def _vddk_dir():
+    """Magasin des archives VDDK : sous licence VMware, d'où un répertoire
+    0700 comme celui des archives d'export (vu en réel : il naissait en 0755)."""
     VDDK_DIR.mkdir(parents=True, exist_ok=True)
+    try:
+        VDDK_DIR.chmod(0o700)
+    except OSError:
+        pass
     return VDDK_DIR
 
 
@@ -13603,6 +13609,7 @@ def api_forklift(cluster):
              "providers": (_hf.K_PROVIDER, "-A"), "plans": (_hf.K_PLAN, "-A"),
              "vddk": ("configmaps", _hf.VDDK_CM, "-n", _hf.NS),
              "registry": ("settings.harvesterhci.io", "containerd-registry"),
+             "prov": (_hf.PROV_CLUSTER[0], _hf.PROV_CLUSTER[2], "-n", _hf.PROV_CLUSTER[1]),
              "sources": (_VM_SOURCE_KIND, "-A")}
     with ThreadPoolExecutor(max_workers=len(reads)) as pool:
         futs = {k: pool.submit(_kubectl_json, kc, "get", *a, timeout=30, cluster=cluster) for k, a in reads.items()}
@@ -13629,7 +13636,8 @@ def api_forklift(cluster):
         "harvester_addon": bool(theirs),
         "bundle": _capi_bundle_active_path() is not None,
         "vddk": vddk,
-        "registry": _hf.registry_hint(reg.get("value") or reg.get("default") or "", (vddk or {}).get("archive", "")),
+        "registry": _hf.registry_hint(reg.get("value") or reg.get("default") or "", (vddk or {}).get("archive", ""),
+                                      got["prov"]),
         "providers": sorted(providers, key=lambda r: r["name"] or ""),
         "vmimport_sources": sorted(({"namespace": (s.get("metadata") or {}).get("namespace"),
                                      "name": (s.get("metadata") or {}).get("name"),
@@ -13697,6 +13705,25 @@ def _fk_provider_spec(kc, cluster, b):
     return ns, name, spec
 
 
+def _fk_registry_auth(kc, cluster, host):
+    """Les identifiants que Harvester a pour ce registre, lus côté serveur :
+    dans le réglage (Harvester 1.8), sinon dans le secret de fleet-local que
+    nomme le cluster `local` (Harvester 1.9 retire Auth du réglage)."""
+    reg = _kubectl_json(kc, "get", "settings.harvesterhci.io", "containerd-registry", timeout=30, cluster=cluster) or {}
+    creds = _hf.registry_auth(reg.get("value") or reg.get("default") or "", host)
+    if creds:
+        return creds
+    prov = _kubectl_json(kc, "get", _hf.PROV_CLUSTER[0], _hf.PROV_CLUSTER[2], "-n", _hf.PROV_CLUSTER[1],
+                         timeout=30, cluster=cluster)
+    name = _hf.registry_auth_secret(prov, host)
+    if not name:
+        return None
+    secret = _kubectl_json(kc, "get", "secrets", _hf.check_name(name, "secret"), "-n", _hf.PROV_CLUSTER[1],
+                           timeout=30, cluster=cluster)
+    vals = _hf.secret_values(secret, "username", "password")
+    return vals if vals.get("username") and vals.get("password") else None
+
+
 @app.route("/api/forklift/<cluster>/do/<action>", methods=["POST"])
 @requires_auth
 @_rate_limit("30/minute")
@@ -13732,9 +13759,7 @@ def api_forklift_do(cluster, action):
             if b.get("plain_http"):
                 cmd.append("--plain-http")
             if b.get("use_cluster_auth"):
-                reg = _kubectl_json(kc, "get", "settings.harvesterhci.io", "containerd-registry",
-                                    timeout=30, cluster=cluster) or {}
-                spec = _hf.registry_auth(reg.get("value") or reg.get("default") or "", image.split("/", 1)[0])
+                spec = _fk_registry_auth(kc, cluster, image.split("/", 1)[0])
                 if spec is None:
                     raise ValueError("Harvester has no credentials for this registry")
             elif b.get("username") or b.get("password"):

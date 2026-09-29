@@ -227,3 +227,28 @@ def test_install_cert_manager_from_bundle_no_manifest(tmp_path, monkeypatch, cap
     assert "no cert-manager manifest" in capsys.readouterr().err
     assert len(created_dirs) == 1
     assert not Path(created_dirs[0]).exists(), f"temp dir {created_dirs[0]} was not cleaned up after error"
+
+
+def test_harvester_1_9_keeps_registry_credentials_in_a_secret_named_by_the_local_cluster():
+    """Vu en réel sur harvlab2 : Auth est null dans le réglage, le secret est
+    nommé par spec.rkeConfig.registries.configs.<hôte>.authConfigSecretName."""
+    reg = json.dumps({"Configs": {"172.16.1.11:5005": {"Auth": None}},
+                      "Mirrors": {"172.16.1.11:5005": {"Endpoints": ["http://172.16.1.11:5005"]}}})
+    prov = {"spec": {"rkeConfig": {"registries": {"configs": {
+        "172.16.1.11:5005": {"authConfigSecretName": "harvester-containerd-registry-4041e0afc4370bdc"}}}}}}
+    assert hf.registry_auth(reg, "172.16.1.11:5005") is None
+    assert hf.registry_auth_secret(prov, "172.16.1.11:5005") == "harvester-containerd-registry-4041e0afc4370bdc"
+    assert hf.registry_auth_secret(prov, "other:5000") == "" and hf.registry_auth_secret(None, "x") == ""
+    assert hf.registry_hint(reg, "x")["auth"] is False
+    assert hf.registry_hint(reg, "x", prov)["auth"] is True
+
+
+def test_a_changed_provider_is_not_ready_before_forklift_reads_the_change():
+    """Vu en réel : après une modification, Ready restait vrai (version
+    précédente) et l'action disait « prêt » pendant que Forklift revérifiait."""
+    ready = [{"type": "Ready", "status": "True"}]
+    stale = {"metadata": {"generation": 2}, "status": {"observedGeneration": 1, "phase": "Staging", "conditions": ready}}
+    assert hf.provider_state(stale)[0] is None and "not read yet" in hf.provider_state(stale)[1]
+    fresh = {"metadata": {"generation": 2}, "status": {"observedGeneration": 2, "phase": "Ready", "conditions": ready}}
+    assert hf.provider_state(fresh)[0] is True
+    assert hf.provider_state({"status": {"conditions": ready}})[0] is True        # sans génération : comme avant

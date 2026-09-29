@@ -133,6 +133,13 @@ def flask_server(test_config):
         # /tmp/harvester-ops-terraform, audit D17)
         "HARVESTER_OPS_TF_WORKSPACES": str(test_config["root"] / "terraform"),
         "HARVESTER_OPS_TF_DB": str(test_config["root"] / "tf-declarations.db"),
+        # v1.75.0 : sans lui, test_api_capi_bundle_build_creates_action
+        # construisait un VRAI paquet Cluster API de 442 Mo dans le dist/ du
+        # dépôt, et le rendait actif, à chaque passage de la suite (19 Go
+        # accumulés, console de dev pointée sur un paquet de test)
+        "HARVESTER_OPS_CAPI_BUNDLE": str(test_config["root"] / "dist" / "capi-bundle.tar.gz"),
+        # v1.75.0 : le magasin d'archives VDDK du serveur de test reste le sien
+        "HARVESTER_OPS_VDDK_DIR": str(test_config["root"] / "vddk"),
         # Force no auth in tests — point to a path that won't exist, and ask
         # for the open mode explicitly (v1.57.0 : sinon la console attend son
         # premier administrateur)

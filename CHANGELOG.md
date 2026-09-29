@@ -17,6 +17,7 @@ This file summarises each minor release; per-patch detail lives in `git log`.
 
 ### Tests
 - `test_forklift_175.py`, `test_oci_push_175.py` (two simulated registries, Bearer auth, redirected blobs), `test_forklift_cli_175.py`, `test_forklift_ui_cli_175.py`, `test_forklift_routes_175.py`, `tests/e2e/test_forklift_175.py`; checked for real on the harvlab2 bench against the nested vCenter of vmwlab, from the tab.
+- The test server keeps its own Cluster API bundle and VDDK stores: a test used to build a real 442 MB bundle into the repository's `dist/` and make it active on every run of the suite; that build is now stopped as soon as its action is seen.
 
 ## [1.74.0] - 2026-09-27 - LVM storage and downloading CDI images
 

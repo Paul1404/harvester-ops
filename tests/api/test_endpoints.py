@@ -5,6 +5,7 @@ These tests catch regressions in routing, auth bypass logic, payload shape,
 error handling. They don't validate cluster behavior (that requires --live).
 """
 
+from pathlib import Path
 import json
 import time
 
@@ -228,6 +229,21 @@ def test_api_capi_bundle_build_creates_action(api):
     _, activity = api("GET", "/api/activity")
     all_ids = [a["id"] for a in activity["in_progress"] + activity["actions_done"]]
     assert body["action_id"] in all_ids
+    # v1.75.0 : la construction est réelle (plusieurs minutes, 442 Mo) : on
+    # l'arrête dès que l'action est vue, elle n'a rien à produire ici
+    api("DELETE", f"/api/action/{body['action_id']}")
+
+
+def test_the_test_server_never_writes_the_repository_dist(flask_server):
+    """v1.75.0 : le serveur de test a son propre magasin de paquets Cluster
+    API ; avant, il écrivait (et activait) dans le dist/ du dépôt."""
+    import os
+    env_bundle = flask_server.get("env", {}).get("HARVESTER_OPS_CAPI_BUNDLE") if isinstance(flask_server, dict) else None
+    repo_dist = Path(__file__).resolve().parents[2] / "dist"
+    assert env_bundle is None or not str(env_bundle).startswith(str(repo_dist))
+    src = (Path(__file__).resolve().parents[1] / "conftest.py").read_text()
+    assert '"HARVESTER_OPS_CAPI_BUNDLE": str(test_config["root"]' in src
+    assert '"HARVESTER_OPS_VDDK_DIR": str(test_config["root"]' in src
 
 
 def test_capi_bundles_endpoints_full_cycle(api, flask_server):

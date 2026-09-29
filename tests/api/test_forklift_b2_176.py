@@ -216,6 +216,38 @@ def test_a_wave_being_copied_and_its_next_precopy():
     assert vm["next_precopy"] == "2026-09-29T19:37:04Z" == st["next_precopy"]
 
 
+def failed_before_cutover_objects():
+    """vague-1-m4 en échec pendant DiskTransfer (VDDK), avant toute bascule :
+    ni `spec.cutover` ni l'étape Cutover n'ont jamais commencé."""
+    plan, m = copying_objects()
+    m["status"]["conditions"].append({"type": "Failed", "status": "True", "category": "Advisory",
+                                      "message": "The migration has FAILED."})
+    vm = m["status"]["vms"][0]
+    vm["error"] = {"reasons": ["Unable to connect to vddk data source"]}
+    vm["pipeline"][1]["error"] = {"reasons": ["Unable to connect to vddk data source"]}
+    plan["status"]["migration"]["vms"] = [copy.deepcopy(vm)]
+    return plan, m
+
+
+def test_a_wave_failed_before_any_switchover_has_not_started_its_cutover():
+    """Le bug corrigé : un échec en DiskTransfer, avant toute bascule, ne
+    doit jamais se lire comme une bascule amorcée (sinon un rollback serait
+    proposé alors qu'il n'y a rien à défaire)."""
+    plan, m = failed_before_cutover_objects()
+    st = hf.wave_state(plan, [m], now=AFTER)
+    assert st["state"] == "failed"
+    assert st["cutover_started"] is False
+    (vm,) = st["vms"]
+    assert vm["cutover_started"] is False
+    assert "vddk" in vm["error"]
+
+
+def test_a_succeeded_wave_did_start_its_cutover():
+    st = hf.wave_state(PLANS["vague-1"], list(MIGRATIONS.values()), now=AFTER)
+    assert st["cutover_started"] is True
+    assert st["vms"][0]["cutover_started"] is True
+
+
 def test_a_scheduled_cutover_then_a_cutover_under_way():
     plan, m = copying_objects(cutover="2026-09-29T19:40:00Z")
     before = hf.wave_state(plan, [m], now=datetime(2026, 9, 29, 19, 33, tzinfo=timezone.utc))

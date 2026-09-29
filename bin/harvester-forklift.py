@@ -714,6 +714,15 @@ def cmd_wave_rollback(args, kube=None, vsphere=None, sleep=time.sleep, now=time.
     for i in ids:
         if i in done:
             step("rollback", "done", f"{i}: already rolled back, left as is")
+    # une VM dont le pipeline n'a jamais atteint la bascule (échec pendant
+    # DiskTransfer par exemple) n'a rien à défaire côté Harvester ; un
+    # rollback la marquerait revenue et bloquerait tout nouveau lancement
+    cutover_map = {v["id"]: bool(v.get("cutover_started")) for v in st["vms"]}
+    not_started = [i for i in todo if not cutover_map.get(i)]
+    if not_started:
+        step("rollback", "error", f"{', '.join(not_started)}: no switchover has started for this VM in wave "
+             f"{wave}: a rollback follows a switchover")
+        return EXIT_REFUSED
     if not todo:
         print(json.dumps({"wave": wave, "rolled_back": [], "already": ids}))
         return EXIT_OK

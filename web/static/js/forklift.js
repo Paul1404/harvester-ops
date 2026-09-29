@@ -47,7 +47,11 @@ const Forklift = (() => {
                                  body: body ? JSON.stringify(body) : undefined });
     let d = {};
     try { d = await r.json(); } catch { /* sans corps */ }
-    if (!r.ok) throw new Error(d.hint || d.error || `HTTP ${r.status}`);
+    if (!r.ok) {
+      const e = new Error(d.hint || d.error || `HTTP ${r.status}`);
+      if (d.skipped) e.skipped = d.skipped;
+      throw e;
+    }
     return d;
   }
   const getJSON = (url) => fetch(url).then(r => (r.ok ? r.json() : null)).catch(() => null);
@@ -98,8 +102,9 @@ const Forklift = (() => {
   async function load() {
     if (!cur) return;
     const c = cur;
-    // l'onglet Vagues lit aussi les destinations (réseaux, classes, namespaces)
-    const [d, store] = await Promise.all([getJSON(`/api/forklift/${enc(c.cluster)}${c.kind === 'waves' ? '?targets=1' : ''}`),
+    // les destinations (réseaux, classes, namespaces) ne sont lues que par la
+    // fenêtre de composition : la liste des vagues ne s'en sert jamais
+    const [d, store] = await Promise.all([getJSON(`/api/forklift/${enc(c.cluster)}`),
                                           c.kind === 'prep' ? getJSON('/api/forklift-vddk') : Promise.resolve(c.store)]);
     if (c !== cur) return;
     // une saisie ou un envoi en cours : un aléa de la relecture de fond
@@ -538,9 +543,14 @@ const Forklift = (() => {
   }
 
   /** Les deux erreurs connues de Forklift, avec leur remède (le texte de
-   *  Forklift reste montré tel quel à côté). */
+   *  Forklift reste montré tel quel à côté). L'importeur SUSE (sans VDDK) se
+   *  répare en changeant d'importeur (étape 2) ; un autre importeur (déjà
+   *  upstream ou inconnu) a plutôt une image VDDK à corriger (étape 3). */
   function errorHint(msg) {
-    if (/vddk|nbdkit/i.test(msg || '')) return tr('fk.w.hintVddk');
+    if (/unable to connect to vddk data source|nbdkit/i.test(msg || '')) {
+      const kind = cur && cur.data && cur.data.cdi_importer && cur.data.cdi_importer.kind;
+      return kind === 'suse-no-vddk' ? tr('fk.w.hintVddk') : tr('fk.w.hintVddkImage');
+    }
     if (/VMware Tools is not running/i.test(msg || '')) return tr('fk.w.hintTools');
     return '';
   }
@@ -558,8 +568,11 @@ const Forklift = (() => {
       out.push(btn('wave-cutover', 'btn-primary', 'switch', tr('fk.w.cutoverNow'), tr('fk.t.wCutoverNow')));
       out.push(btn('wave-schedule', 'btn-secondary', 'timer', tr('fk.w.schedule'), tr('fk.t.wSchedule')));
     }
-    if (ROLLBACK.includes(w.state)) out.push(btn('wave-rollback', 'btn-danger', 'undo', tr('fk.w.rollback'), tr('fk.t.wRollback')));
+    // un rollback ne se propose qu'une fois la bascule au moins amorcée : un
+    // échec pendant la copie (avant toute bascule) ne se défait pas
+    if (ROLLBACK.includes(w.state) && w.cutover_started) out.push(btn('wave-rollback', 'btn-danger', 'undo', tr('fk.w.rollback'), tr('fk.t.wRollback')));
     if (!RUNNING.includes(w.state) && w.state !== 'closed') out.push(btn('wave-close', 'btn-secondary', 'clean', tr('fk.w.close'), tr('fk.t.wClose')));
+    if (w.state === 'closed') out.push(btn('wave-clean-snapshots', 'btn-secondary', 'clean', tr('fk.w.cleanSnapshotsBtn'), tr('fk.t.wCleanSnapshots')));
     if (!RUNNING.includes(w.state)) out.push(btn('wave-delete', 'btn-danger', 'trash', tr('fk.w.delete'), tr('fk.t.wDelete')));
     return out.join('');
   }
@@ -599,6 +612,7 @@ const Forklift = (() => {
       return post('wave-rollback', { wave }, tr('fk.done.rollback', { wave }), null, cluster);
     }
     if (act === 'wave-close') return closeForm(cluster, w);
+    if (act === 'wave-clean-snapshots') return post('wave-close', { wave, clean_snapshots: true }, tr('fk.done.close', { wave }), null, cluster);
     if (act === 'wave-delete') {
       if (!confirm(tr('fk.confirm.delete', { wave }))) return;
       return post('wave-delete', { wave }, tr('fk.done.waveDelete', { wave }), null, cluster);
@@ -645,21 +659,36 @@ const Forklift = (() => {
   // -- Suivi d'une vague (fenêtre) -------------------------------------------------
   const follows = new Map();   // `${cluster}/${wave}` -> { panel, cluster, wave, timer }
 
+  // DiskTransfer/Cutover : `completed`/`total` sont des Mio (montrés en
+  // taille) ; ImageConversion/VirtualMachineCreation : l'étape suffit, le
+  // pourcentage rendu par Forklift n'y veut rien dire (0/1 fini vu en réel)
+  const SIZED_STEPS = new Set(['DiskTransfer', 'Cutover']);
+  const STEP_ONLY_STEPS = new Set(['ImageConversion', 'VirtualMachineCreation']);
+  function progressCell(v) {
+    const p = v.progress || { done: 0, total: 0 };
+    if (STEP_ONLY_STEPS.has(v.step_name)) return `<span data-fk="vm-pct">–</span>`;
+    if (SIZED_STEPS.has(v.step_name)) {
+      const done = size(p.done * 1048576), total = size(p.total * 1048576);
+      return `<progress class="tip" max="${esc(p.total || 1)}" value="${esc(p.done)}" data-tip="${esc(`${done} / ${total}`)}"></progress> <span data-fk="vm-pct">${esc(done)} / ${esc(total)}</span>`;
+    }
+    const pct = p.total ? Math.floor(100 * p.done / p.total) : 0;
+    return `<progress class="tip" max="${esc(p.total || 1)}" value="${esc(p.done)}" data-tip="${esc(`${p.done} / ${p.total}`)}"></progress> <span data-fk="vm-pct">${pct} %</span>`;
+  }
+
   function followBody(w) {
     if (!w) return `<p class="form-hint" data-fk-gone>${esc(tr('fk.w.gone'))}</p>`;
-    const canRollback = ROLLBACK.includes(w.state);
+    // un rollback ne se propose qu'une fois la bascule de CETTE VM amorcée
+    const canRollback = (v) => ROLLBACK.includes(w.state) && v.cutover_started && !v.rolled_back;
     const rows = (w.vms || []).map((v) => {
-      const p = v.progress || { done: 0, total: 0 };
-      const pct = p.total ? Math.floor(100 * p.done / p.total) : 0;
       const last = v.last_precopy && v.last_precopy.seconds != null ? fmtDur(v.last_precopy.seconds) : '–';
       return `<tr data-fk-vm="${esc(v.id)}">
         <td class="tip" data-tip="${esc(v.id)}">${esc(v.name || v.id)}${v.rolled_back ? ` ${badge('warn', tr('fk.w.rolledBack'))}` : ''}</td>
         <td class="tip" data-tip="${esc(v.step_name || '')}">${esc(v.step || v.phase || '–')}</td>
-        <td><progress class="tip" max="${esc(p.total || 1)}" value="${esc(p.done)}" data-tip="${esc(`${p.done} / ${p.total}`)}"></progress> <span data-fk="vm-pct">${pct} %</span></td>
+        <td>${progressCell(v)}</td>
         <td data-fk="vm-copies">${esc(v.precopies)}</td>
         <td data-fk="vm-last">${esc(last)}</td>
         <td data-fk="vm-next">${v.next_precopy ? countdown(v.next_precopy) : '–'}</td>
-        <td>${errorHtml(v.error)}${canRollback && !v.rolled_back
+        <td>${errorHtml(v.error)}${canRollback(v)
           ? `<button type="button" class="btn btn-sm btn-danger tip needs-admin" data-fk-vm-rollback="${esc(v.id)}" data-name="${esc(v.name || v.id)}" data-tip="${esc(tr('fk.t.wRollbackVm'))}">${icon('undo')} ${esc(tr('fk.w.rollbackVm'))}</button>` : ''}</td></tr>`;
     }).join('');
     return `<div class="fk-step-head">${stateBadge(w)} <span class="form-hint">${esc(tr('fk.w.target', { ns: w.target_namespace }))}</span></div>
@@ -779,6 +808,15 @@ const Forklift = (() => {
         <label class="fk-check tip" data-tip="${esc(tr('fk.t.compatMode'))}"><input type="checkbox" name="compat_mode" ${linux ? '' : 'disabled'}> ${esc(tr('fk.f.compatMode'))}</label>
         <label class="fk-check tip" data-tip="${esc(tr('fk.t.staticIps'))}"><input type="checkbox" name="preserve_static_ips"> ${esc(tr('fk.f.staticIps'))}</label>
       </fieldset>`;
+    // sans classe de stockage utilisable, la vague ne pourra jamais créer de
+    // volume sur ce cluster : la fenêtre le dit et empêche l'envoi
+    const submitBtn = form.querySelector('button[type="submit"]');
+    if (!classes.length) {
+      box.insertAdjacentHTML('afterbegin', `<div class="sto-finding sev-critical" data-fk="no-class"><div class="sto-finding-title">${icon('warn')} ${esc(tr('fk.w.noClass'))}</div></div>`);
+      if (submitBtn) { submitBtn.disabled = true; submitBtn.setAttribute('data-tip', tr('fk.t.noClass')); }
+    } else if (submitBtn) {
+      submitBtn.disabled = false;
+    }
     const raw = box.querySelector('[name="skip_conversion"]');
     const compat = box.querySelector('[name="compat_mode"]');
     raw.addEventListener('change', () => { compat.disabled = !raw.checked; if (!raw.checked) compat.checked = false; });
@@ -1008,7 +1046,13 @@ const Forklift = (() => {
       if (same()) setTimeout(load, 2500);
       return out;
     } catch (err) {
-      if (msg) msg.innerHTML = `<span class="res-error">${esc(err.message)}</span>`;
+      if (msg) {
+        msg.innerHTML = `<span class="res-error">${esc(err.message)}</span>`;
+        // des clusters injoignables n'ont pas pu dire s'ils tenaient déjà ces VMs
+        if (err.skipped && err.skipped.length) {
+          msg.insertAdjacentHTML('beforeend', `<div class="form-hint">${esc(tr('fk.w.skipped', { list: err.skipped.join(', ') }))}</div>`);
+        }
+      }
       return null;
     }
   }
@@ -1023,7 +1067,7 @@ const Forklift = (() => {
         <div class="of-msg" role="status"></div></form>` });
     return panel.el.querySelector('.of-form');
   }
-  const field = (name, label, input, tip, cls = '') => `<label class="bk-field of-field ${cls}" data-f="${name}"><span>${esc(label)}</span>${
+  const field = (name, label, input, tip, cls = '') => `<label class="bk-field of-field ${cls}" data-f="${esc(name)}"><span>${esc(label)}</span>${
     input.replace(/^<(input|select|textarea)/, `<$1 class="tip" data-tip="${esc(tip || '')}"`)}</label>`;
   const opts = (list, sel) => list.map(v => (Array.isArray(v) ? v : [v, v]))
     .map(([v, l]) => `<option value="${esc(v)}" ${String(v) === String(sel) ? 'selected' : ''}>${esc(l)}</option>`).join('');

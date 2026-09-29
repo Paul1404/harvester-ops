@@ -726,7 +726,11 @@ def _precopy(p):
             "seconds": int((end - start).total_seconds()) if start and end else None}
 
 
-def _vm_row(vm_id, vm, rolled):
+def _vm_row(vm_id, vm, rolled, cutover_set=False):
+    """`cutover_set` : la Migration courante porte déjà `spec.cutover` (la
+    bascule a été déclenchée ou programmée). Un rollback ne se justifie
+    qu'une fois la bascule au moins amorcée : ni un simple échec de copie
+    (DiskTransfer, avant toute bascule) ne doit l'autoriser."""
     vm = vm or {}
     step = _current_step(vm.get("pipeline") or [])
     prog = (step or {}).get("progress") or {}
@@ -737,16 +741,23 @@ def _vm_row(vm_id, vm, rolled):
     pre = warm.get("precopies") or []
     finished = [p for p in pre if p.get("end")]
     last = _precopy(finished[-1]) if finished else (_precopy(pre[-1]) if pre else None)
-    cutover_started = any(s.get("name") == "Cutover"
-                          and (s.get("started") or s.get("error") or s.get("phase") not in (None, "", "Pending"))
-                          for s in vm.get("pipeline") or [])
-    copying = not vm.get("completed") and not vm.get("error") and not cutover_started
+    # étape Cutover réellement amorcée (celle qui arrête les copies
+    # incrémentales, `next_precopy` compris) : distincte de `cutover_started`
+    # ci-dessous, qui compte aussi une bascule programmée mais pas encore
+    # atteinte (une vague `cutover-scheduled` continue de copier jusque-là).
+    cutover_step_started = any(
+        s.get("name") == "Cutover"
+        and (s.get("started") or s.get("error") or s.get("phase") not in (None, "", "Pending"))
+        for s in vm.get("pipeline") or [])
+    cutover_started = cutover_set or cutover_step_started
+    copying = not vm.get("completed") and not vm.get("error") and not cutover_step_started
     name = (step or {}).get("name") or ""
     return {"id": vm_id, "name": vm.get("name") or "", "phase": _vm_phase(vm),
             "step": STEP_LABELS.get(name, name), "step_name": name,
             "progress": {"done": done, "total": total}, "precopies": len(pre), "last_precopy": last,
             "next_precopy": (warm.get("nextPrecopyAt") or None) if copying else None,
-            "error": _vm_error(vm), "rolled_back": vm_id in rolled}
+            "error": _vm_error(vm), "rolled_back": vm_id in rolled,
+            "cutover_started": cutover_started}
 
 
 def wave_state(plan, migrations, now=None):
@@ -768,8 +779,8 @@ def wave_state(plan, migrations, now=None):
     cur = current_migration(plan, migrations)
     if cur is not None and not status_vms:
         status_vms = {v.get("id"): v for v in ((cur.get("status") or {}).get("vms") or [])}
-    vms = [_vm_row(i, status_vms.get(i), rolled) for i in ids]
     cutover = ((cur or {}).get("spec") or {}).get("cutover") or None
+    vms = [_vm_row(i, status_vms.get(i), rolled, cutover is not None) for i in ids]
     message = ""
     errors = "; ".join(v["error"] for v in vms if v["error"])
     critical = [c for c in st.get("conditions") or []
@@ -803,9 +814,10 @@ def wave_state(plan, migrations, now=None):
         else:
             state = "pending"
     nexts = [v["next_precopy"] for v in vms if v["next_precopy"]]
+    cutover_started = cutover is not None or any(v["cutover_started"] for v in vms)
     return {"name": md.get("name"), "target_namespace": spec.get("targetNamespace") or "",
             "state": state, "message": message, "migration": ((cur or {}).get("metadata") or {}).get("name"),
-            "vms": vms, "cutover": cutover,
+            "vms": vms, "cutover": cutover, "cutover_started": cutover_started,
             "next_precopy": min(nexts) if nexts and state in ("copying", "cutover-scheduled") else None}
 
 

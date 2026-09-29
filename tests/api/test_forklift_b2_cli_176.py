@@ -247,6 +247,21 @@ def running_copy(k, name="vague-1-m4"):
     return m
 
 
+def failed_before_cutover(k, name="vague-1-m4"):
+    """La Migration m4 en échec pendant DiskTransfer (VDDK), avant toute
+    bascule : ni `spec.cutover` ni l'étape Cutover n'ont jamais commencé."""
+    m = running_copy(k, name)
+    m["status"]["conditions"] = [c for c in m["status"]["conditions"] if c["type"] == "Ready"] + [
+        {"type": "Failed", "status": "True", "category": "Advisory", "message": "The migration has FAILED."}]
+    for vm in m["status"].get("vms") or []:
+        vm["error"] = {"reasons": ["Unable to connect to vddk data source"]}
+        for s in vm.get("pipeline") or []:
+            if s["name"] == "DiskTransfer":
+                s["phase"] = "Running"
+                s["error"] = {"reasons": ["Unable to connect to vddk data source"]}
+    return m
+
+
 def harvester_vm(k, name="vmwlab-src-1", strategy="Always", labels=None):
     """La VM Harvester créée par Forklift. `labels` : les étiquettes réelles
     (`vmID`, `plan`) pour un nom que target_vm_name ne devine pas."""
@@ -524,6 +539,22 @@ def test_wave_rollback_refuses_a_wave_still_copying(capsys):
     assert "client" not in box
 
 
+def test_wave_rollback_refuses_a_vm_that_never_reached_switchover(capsys):
+    """Le bug corrigé : une vague en échec pendant DiskTransfer (VDDK), avant
+    toute bascule, ne doit jamais se laisser marquer revenue à la source :
+    plus rien ne pourrait alors relancer la vague."""
+    k, box = FakeKube(), {}
+    with_wave(k, plan_conditions=[{"type": "Ready", "status": "True"}])
+    failed_before_cutover(k)
+    assert rollback(k, box) == hfk.EXIT_REFUSED
+    assert "client" not in box   # jamais de session vCenter ouverte
+    err = capsys.readouterr().err
+    assert "no switchover has started" in err and "vm-16" in err
+    plan = k.objs[(hf.K_PLAN, hf.NS, "vague-1")]
+    assert hf.A_ROLLED_BACK not in (plan["metadata"].get("annotations") or {})
+    assert hf.wave_state(plan, [k.objs[(hf.K_MIGRATION, hf.NS, "vague-1-m4")]])["state"] == "failed"
+
+
 def test_wave_rollback_refuses_a_vm_outside_the_wave():
     k = FakeKube()
     with_wave(k)
@@ -671,6 +702,23 @@ def test_wave_close_without_cleaning_never_reaches_vcenter(capsys):
     assert hfk.cmd_wave_close(ns(wave="vague-1", clean_snapshots=False), kube=k, vsphere=factory) == hfk.EXIT_OK
     assert hfk.cmd_wave_close(ns(wave="vague-1", clean_snapshots=False), kube=k, vsphere=factory) == hfk.EXIT_OK
     assert "was already closed" in capsys.readouterr().err
+
+
+def test_wave_close_accepts_being_asked_to_clean_snapshots_on_an_already_closed_wave(capsys):
+    """L'onglet Vagues propose « Retirer les instantanés Forklift » sur une
+    vague déjà close : reclore avec le nettoyage demandé doit fonctionner."""
+    k, box = FakeKube(), {}
+    with_wave(k)
+
+    def factory(creds):
+        box["c"] = SnapVSphere(creds)
+        return box["c"]
+    assert hfk.cmd_wave_close(ns(wave="vague-1", clean_snapshots=False), kube=k, vsphere=factory) == hfk.EXIT_OK
+    assert "wave vague-1 closed" in capsys.readouterr().err
+    assert hfk.cmd_wave_close(ns(wave="vague-1", clean_snapshots=True), kube=k, vsphere=factory) == hfk.EXIT_OK
+    err = capsys.readouterr().err
+    assert "was already closed" in err
+    assert box["c"].removed == ["snapshot-1002", "snapshot-1001"]
 
 
 def test_wave_close_refuses_while_a_migration_is_running(capsys):

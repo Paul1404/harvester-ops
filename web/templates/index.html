@@ -91,6 +91,10 @@
             <span class="tab-icon" data-icon="migrate"></span>
             <span class="sidebar-label" data-i18n="tab.vmimport">VM Import</span>
           </a>
+          <a class="tab tab-child" data-tab="forklift" href="#forklift" data-i18n-title="tab.forkliftTip" title="Warm migrations of VMware VMs with Forklift: preparation, vCenter sources, inventory">
+            <span class="tab-icon" data-icon="migrate"></span>
+            <span class="sidebar-label" data-i18n="tab.forklift">VMware migrations</span>
+          </a>
           <a class="tab tab-child" data-tab="advanced" href="#advanced" data-i18n-title="tab.advancedTip" title="Harvester settings, devices, backup target, support bundles and kubeconfigs">
             <span class="tab-icon" data-icon="settings"></span>
             <span class="sidebar-label" data-i18n="tab.advanced">Advanced</span>
@@ -333,6 +337,23 @@
       <div class="section-pane" data-pane="vmware" hidden><div class="na-host" data-vi="vmware"></div></div>
       <div class="section-pane" data-pane="openstack" hidden><div class="na-host" data-vi="openstack"></div></div>
       <div class="section-pane" data-pane="ova" hidden><div class="na-host" data-vi="ova"></div></div>
+    </section>
+
+    <!-- v1.75.0 : MIGRATIONS VMWARE (Forklift) -->
+    <section id="tab-forklift" class="tab-content" data-section="forklift">
+      <div class="shutdown-header">
+        <div class="automation-header-text">
+          <h1><span data-i18n="tab.forklift">VMware migrations</span> · <span class="cluster-name"></span></h1>
+        </div>
+        <div class="sub-tabs sub-tabs-inline" role="tablist">
+          <button type="button" class="sub-tab tip" role="tab" data-section-tab="prep" data-i18n-title="section.fkPrepTip" title="What Forklift needs on this cluster, step by step"><span class="tab-icon" data-icon="settings"></span> <span data-i18n="section.fkPrep">Preparation</span></button>
+          <button type="button" class="sub-tab tip" role="tab" data-section-tab="sources" data-i18n-title="section.fkSourcesTip" title="The vCenter servers Forklift reads VMs from"><span class="tab-icon" data-icon="cloud"></span> <span data-i18n="section.fkSources">vCenter sources</span></button>
+          <button type="button" class="sub-tab tip" role="tab" data-section-tab="inventory" data-i18n-title="section.fkInventoryTip" title="VMs, networks and datastores of a vCenter as Forklift sees them"><span class="tab-icon" data-icon="general"></span> <span data-i18n="section.fkInventory">Inventory</span></button>
+        </div>
+      </div>
+      <div class="section-pane" data-pane="prep" hidden><div class="na-host" data-fk="prep"></div></div>
+      <div class="section-pane" data-pane="sources" hidden><div class="na-host" data-fk="sources"></div></div>
+      <div class="section-pane" data-pane="inventory" hidden><div class="na-host" data-fk="inventory"></div></div>
     </section>
 
     <!-- v1.70.0 : MONITORING & LOGGING -->
@@ -1106,6 +1127,7 @@
   <script src="/static/js/upgrade.js"></script>
   <script src="/static/js/monlog.js"></script>
   <script src="/static/js/vmimport.js"></script>
+  <script src="/static/js/forklift.js"></script>
 <script src="/static/js/versions.js"></script>
 <script src="/static/js/console-accounts.js"></script>
 <script src="/static/js/user-menu.js"></script>

@@ -29,6 +29,9 @@ const Sections = (() => {
     // v1.71.0 : le menu Virtual Machine Imports de Harvester
     vmimport: { first: 'imports', panes: { imports: { mod: 'VMImport' }, vmware: { mod: 'VMImport' },
                                            openstack: { mod: 'VMImport' }, ova: { mod: 'VMImport' } } },
+    // v1.75.0 : migrations VMware par Forklift
+    forklift: { first: 'prep', panes: { prep: { mod: 'Forklift' }, sources: { mod: 'Forklift' },
+                                        inventory: { mod: 'Forklift' } } },
     // v1.67.0 : le menu Advanced de Harvester (réglages, paquet de support, kubeconfigs)
     advanced: { first: 'settings', panes: { settings: { mod: 'Advanced' },
                                             // v1.68.0 : les périphériques de Harvester
@@ -38,7 +41,7 @@ const Sections = (() => {
                                             support: { mod: 'Advanced' } } },
   };
   // les modules qui tiennent leur onglet eux-mêmes : un seul vit à la fois
-  const MODS = ['NetAdmin', 'Advanced', 'Devices', 'MonLog', 'VMImport'];
+  const MODS = ['NetAdmin', 'Advanced', 'Devices', 'MonLog', 'VMImport', 'Forklift'];
   const KEY = (sec) => `harvester_ops_section_${sec}`;
 
   function isSection(name) { return Object.prototype.hasOwnProperty.call(DEF, name); }

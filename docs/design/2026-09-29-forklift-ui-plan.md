@@ -1718,7 +1718,7 @@ def test_editing_a_source_keeps_its_password_unless_retyped(context, flask_serve
     page.wait_for_timeout(400)
     spec = sent[-1][2]["spec"]
     assert spec["keep_credentials"] is True and spec["password"] == "" and spec["name"] == "vmwlab"
-    assert spec["insecure"] is True           # en modification, « ne pas vérifier » tant qu'aucune autorité n'est recollée
+    assert "insecure" not in spec and "cacert" not in spec   # « garder le réglage actuel » : le serveur reprend le TLS du secret
 
 
 def test_the_inventory_shows_warm_capability_and_forklift_s_concerns(context, flask_server):
@@ -1808,8 +1808,9 @@ Fenêtre :
         ${field('user', tr('vi.f.user'), '<input name="user" autocomplete="off" placeholder="administrator@vsphere.local">', edit ? tr('fk.t.userKeep') : tr('fk.t.user'))}
         ${field('password', tr('vi.f.password'), `<input name="password" type="password" autocomplete="new-password" ${edit ? `placeholder="${esc(tr('fk.unchanged'))}"` : 'required'}>`, edit ? tr('fk.t.passwordKeep') : tr('fk.t.password'))}
         <fieldset class="fk-tls"><legend>${esc(tr('fk.f.tls'))}</legend>
+          ${edit ? `<label class="fk-check tip" data-tip="${esc(tr('fk.t.tlsKeep'))}"><input type="radio" name="tls" value="keep" checked> ${esc(tr('fk.tls.keep'))}</label>` : ''}
           <label class="fk-check tip" data-tip="${esc(tr('fk.t.tlsCa'))}"><input type="radio" name="tls" value="ca" ${edit ? '' : 'checked'}> ${esc(tr('fk.tls.ca'))}</label>
-          <label class="fk-check tip" data-tip="${esc(edit ? tr('fk.t.tlsEdit') : tr('fk.t.tlsInsecure'))}"><input type="radio" name="tls" value="insecure" ${edit ? 'checked' : ''}> ${esc(tr('fk.tls.insecure'))}</label>
+          <label class="fk-check tip" data-tip="${esc(tr('fk.t.tlsInsecure'))}"><input type="radio" name="tls" value="insecure"> ${esc(tr('fk.tls.insecure'))}</label>
           ${field('cacert', tr('vi.f.ca'), '<textarea name="cacert" rows="4" class="adv-code" placeholder="-----BEGIN CERTIFICATE-----"></textarea>', tr('fk.t.cacert'))}
         </fieldset>
       </div>
@@ -1838,9 +1839,10 @@ Fenêtre :
         spec.url = v('url');
         spec.user = v('user');
         spec.password = f.querySelector('[name="password"]').value;
-        if (f.querySelector('[name="tls"]:checked').value === 'insecure') spec.insecure = true;
-        else if (v('cacert')) spec.cacert = v('cacert');
-        else throw new Error(tr('fk.needCa'));
+        const tls = f.querySelector('[name="tls"]:checked').value;
+        if (tls === 'insecure') spec.insecure = true;
+        else if (tls === 'ca') { if (v('cacert')) spec.cacert = v('cacert'); else throw new Error(tr('fk.needCa')); }
+        // « keep » : ni cacert ni insecure, le serveur reprend le réglage TLS du secret du fournisseur
         if (edit) spec.keep_credentials = true;
       }
       if (v('vddk_image')) spec.vddk_image = v('vddk_image');
@@ -1849,7 +1851,7 @@ Fenêtre :
   }
 ```
 
-En modification, le secret n'est pas relu pour l'affichage : « Ne pas vérifier » est cochée par défaut (bulle `fk.t.tlsEdit`), et recoller une autorité la remplace.
+En modification, le secret n'est pas relu pour l'affichage : l'option « Garder le réglage actuel » est cochée par défaut et n'envoie ni `cacert` ni `insecure` ; le serveur reprend alors `cacert` et `insecureSkipVerify` du secret du fournisseur (règle posée par le correctif de U2).
 
 `submitWith` : recopié de `vmimport.js` (il appelle `post(action, { spec }, ...)`).
 
@@ -1982,7 +1984,7 @@ EN (FR ensuite ; DE, ES, IT traduits avec les mêmes clés) :
     'fk.t.passwordKeep': 'Empty keeps the current password', 'fk.unchanged': 'unchanged',
     'fk.f.tls': 'Certificate of the vCenter', 'fk.tls.ca': 'Trust this certificate authority', 'fk.tls.insecure': 'Do not verify',
     'fk.t.tlsCa': 'Paste the PEM certificate of the authority that signed the vCenter', 'fk.t.tlsInsecure': 'TLS is not verified: for a lab only',
-    'fk.t.tlsEdit': 'The current certificate setting is not shown: paste the authority again to verify TLS',
+    'fk.tls.keep': 'Keep the current setting', 'fk.t.tlsKeep': 'The certificate authority or the choice not to verify, as saved for this source',
     'fk.t.cacert': '-----BEGIN CERTIFICATE----- ...', 'fk.needCa': 'Paste the certificate authority, or choose not to verify',
     'fk.f.vddk': 'VDDK image', 'fk.t.vddk': 'The image pushed in the preparation; without it, disks are copied more slowly',
     'fk.done.source': 'vCenter source {name} declared',
@@ -2033,7 +2035,7 @@ FR :
     'fk.t.passwordKeep': 'Vide : le mot de passe actuel est gardé', 'fk.unchanged': 'inchangé',
     'fk.f.tls': 'Certificat du vCenter', 'fk.tls.ca': 'Faire confiance à cette autorité', 'fk.tls.insecure': 'Ne pas vérifier',
     'fk.t.tlsCa': 'Coller le certificat PEM de l\'autorité qui a signé le vCenter', 'fk.t.tlsInsecure': 'TLS n\'est pas vérifié : pour un banc seulement',
-    'fk.t.tlsEdit': 'Le réglage de certificat actuel n\'est pas affiché : recoller l\'autorité pour vérifier TLS',
+    'fk.tls.keep': 'Garder le réglage actuel', 'fk.t.tlsKeep': 'L\'autorité de certification, ou le choix de ne pas vérifier, tels qu\'enregistrés pour cette source',
     'fk.t.cacert': '-----BEGIN CERTIFICATE----- ...', 'fk.needCa': 'Coller l\'autorité de certification, ou choisir de ne pas vérifier',
     'fk.f.vddk': 'Image VDDK', 'fk.t.vddk': 'L\'image poussée à la préparation ; sans elle, les disques sont copiés plus lentement',
     'fk.done.source': 'Source vCenter {name} déclarée',

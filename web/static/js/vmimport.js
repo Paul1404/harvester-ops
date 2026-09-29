@@ -117,7 +117,10 @@ const VMImport = (() => {
     } else {
       const rows = d.sources.filter(s => s.type === cur.kind);
       count.textContent = tr('vi.countSources', { n: rows.length });
-      body.innerHTML = off + `<p class="form-hint">${esc(HINT()[cur.kind])}</p>` + sourceTable(rows);
+      body.innerHTML = off + `<p class="form-hint">${esc(HINT()[cur.kind])}</p>`
+        + (cur.kind === 'vmware' ? `<p class="form-hint">${esc(tr('vi.forkliftHint'))}
+        <button type="button" class="btn btn-sm btn-secondary tip" data-vi="open-forklift" data-tip="${esc(tr('vi.t.openForklift'))}">${icon('migrate')} ${esc(tr('tab.forklift'))}</button></p>` : '')
+        + sourceTable(rows);
     }
   }
 
@@ -206,6 +209,7 @@ const VMImport = (() => {
     const b = e.target.closest('[data-vi]');
     if (!b || !cur) return;
     const act = b.dataset.vi;
+    if (act === 'open-forklift' && window.Sections) return Sections.open('forklift', 'prep');
     if (!cur.data && act !== 'refresh' && act !== 'open-addons') {
       // clic avant l'arrivée des données : on le rejoue une fois lues
       const c = cur;

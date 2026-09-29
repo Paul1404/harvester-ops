@@ -128,6 +128,21 @@ def test_an_import_maps_networks_and_shows_the_name_harvester_will_use(ui):
     expect(w.locator("[data-vi-vmware]")).to_be_hidden()
 
 
+def test_a_vmware_source_pane_links_to_forklift(ui):
+    page, _ = ui
+    page.route("**/api/forklift/harv-fake", lambda r, q: fulfill(r, {
+        "cluster": "harv-fake", "install": {"ready": False, "cert_manager": False, "cert_manager_missing": [],
+                                             "addon": "absent", "addon_message": "", "operator": False,
+                                             "controller": False, "components_missing": []},
+        "harvester_addon": False, "bundle": False, "vddk": None,
+        "registry": {"image": "", "host": "", "plain_http": False, "auth": False},
+        "providers": [], "vmimport_sources": []}))
+    page.route("**/api/forklift-vddk", lambda r, q: fulfill(r, {"archives": [], "free": 0}))
+    vc = pane(page, "vmware")
+    vc.locator('[data-vi="open-forklift"]').click(timeout=8000)
+    expect(page.locator("#tab-forklift")).to_be_visible()
+
+
 def test_a_disabled_add_on_is_said(context, flask_server):
     context.add_init_script(
         "localStorage.setItem('harvester_ops_language','en');"

@@ -5112,6 +5112,13 @@ td.tpl-acts .btn + .btn { margin-left: 4px; }
 .fk-form { display: grid; gap: 6px; max-width: 640px; }
 .fk-upload { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .fk-check { display: flex; align-items: center; gap: 6px; }
+/* v1.75.0 : sources vCenter et inventaire */
+.fk-sources { display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: 10px; }
+.fk-source { border: 1px solid var(--border); border-radius: 8px; padding: 10px 12px; }
+.fk-source-actions { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 8px; }
+.fk-inv-tools { display: flex; align-items: flex-end; gap: 10px; flex-wrap: wrap; margin-bottom: 8px; }
+.fk-concerns span { white-space: nowrap; }
+.fk-tls { border: 0; padding: 0; margin: 0; display: grid; gap: 4px; }
 /* v1.72.0 : projets Rancher dans la fenêtre Namespaces */
 .nsw-tabs { margin-bottom: 8px; }
 .pj-qrow { display: grid; grid-template-columns: 1.2fr 1fr 1fr auto; gap: 6px; margin-bottom: 6px; align-items: center; }

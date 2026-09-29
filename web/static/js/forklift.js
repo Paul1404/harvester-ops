@@ -54,10 +54,11 @@ const Forklift = (() => {
     stop();
     const kind = KINDS.includes(host.dataset.fk) ? host.dataset.fk : 'prep';
     cur = { cluster, host, kind, data: null, store: null };
-    // v1.75.0 : la création de source (U4) aura son propre bouton dans
-    // l'onglet Sources vCenter, une fois sourcesView et son formulaire posés
+    // v1.75.0 : le bouton « Ajouter un vCenter » n'a sa place que sur l'onglet Sources
+    const newBtn = kind === 'sources'
+      ? `<button type="button" class="btn btn-sm btn-primary tip needs-admin" data-fk="new-source" data-tip="${esc(tr('fk.t.newSource'))}">${icon('add')} ${esc(tr('fk.newSource'))}</button>` : '';
     host.innerHTML = `<div class="card na-card fk-card">
-        <div class="res-tools"><span class="res-count"></span>
+        <div class="res-tools"><span class="res-count"></span>${newBtn}
           <button type="button" class="btn btn-sm btn-secondary tip" data-fk="refresh" data-tip="${esc(tr('res.refreshTip'))}">${icon('refresh')} ${esc(tr('overview.refresh'))}</button>
         </div>
         <div class="res-feedback" data-fk="feedback"></div>
@@ -65,6 +66,7 @@ const Forklift = (() => {
     const card = host.querySelector('.fk-card');
     card.addEventListener('click', onClick);
     card.addEventListener('change', onChange);
+    card.addEventListener('input', onInput);
     // l'inventaire ouvre un tunnel vers le cluster : pas de relecture automatique
     cur.timer = setInterval(() => {
       if (cur && cur.kind !== 'inventory' && cur.host.isConnected && !cur.host.closest('[hidden]')) load();
@@ -163,9 +165,174 @@ const Forklift = (() => {
     return one + two + three;
   }
 
-  // -- Sources vCenter et Inventaire : posés en U4 -----------------------------
-  function sourcesView() { return `<p class="form-hint">${esc(tr('common.comingSoon'))}</p>`; }
-  function inventoryView(body) { body.innerHTML = `<p class="form-hint">${esc(tr('common.comingSoon'))}</p>`; }
+  // -- Sources vCenter (U4) ----------------------------------------------------
+  function sourcesView(d) {
+    if (!d.install.ready) {
+      return `<div class="sto-finding sev-action"><div class="sto-finding-title">${icon('warn')} ${esc(tr('fk.needInstall'))}</div>
+        <button type="button" class="btn btn-sm btn-secondary tip" data-fk="goto-prep" data-tip="${esc(tr('fk.t.gotoPrep'))}">${icon('settings')} ${esc(tr('section.fkPrep'))}</button></div>`;
+    }
+    cur.host.querySelector('.res-count').textContent = tr('fk.count', { n: d.providers.length });
+    if (!d.providers.length) return `<p class="form-hint">${esc(tr('fk.noSource'))}</p>`;
+    const state = (p) => (p.ready === true ? badge('ok', tr('fk.src.ready'), p.message)
+      : p.ready === false ? badge('fail', tr('fk.src.refused'), p.message) : badge('warn', tr('fk.src.checking'), p.message));
+    return `<div class="fk-sources">${d.providers.map(p => `<div class="fk-source" data-fk-source="${esc(p.name)}">
+        <div class="fk-step-head"><b>${esc(p.name)}</b> ${state(p)}</div>
+        <div class="form-hint">${esc(p.url)}</div>
+        ${p.ready === false ? `<div class="res-error">${esc(p.message)}</div>` : ''}
+        <div class="form-hint">${esc(tr('fk.src.vddk', { image: p.vddk_image || tr('fk.src.noVddk') }))}</div>
+        <div class="form-hint">${esc(tr('fk.src.plans', { n: p.plans.length }))}</div>
+        <div class="fk-source-actions">
+          <button type="button" class="btn btn-sm btn-secondary tip" data-fk="inv-source" data-name="${esc(p.name)}" ${p.ready === true ? '' : 'disabled'} data-tip="${esc(tr('fk.t.inventory'))}">${icon('general')} ${esc(tr('section.fkInventory'))}</button>
+          <button type="button" class="btn btn-sm btn-secondary tip needs-admin" data-fk="edit-source" data-name="${esc(p.name)}" ${p.managed ? '' : 'disabled'} data-tip="${esc(p.managed ? tr('fk.t.edit') : tr('fk.t.notManaged'))}">${icon('edit')} ${esc(tr('fk.edit'))}</button>
+          <button type="button" class="btn btn-sm btn-danger tip needs-admin" data-fk="del-source" data-name="${esc(p.name)}" ${p.plans.length ? 'disabled' : ''} data-tip="${esc(p.plans.length ? tr('fk.t.delUsed', { plans: p.plans.join(', ') }) : tr('fk.t.del'))}">${icon('trash')} ${esc(tr('fk.del'))}</button>
+        </div></div>`).join('')}</div>`;
+  }
+
+  function sourceForm(p) {
+    const edit = !!p;
+    const d = cur.data;
+    const vddk = (p && p.vddk_image) || (d.vddk && d.vddk.image) || '';
+    const froms = edit ? [] : d.vmimport_sources || [];
+    const form = win(`fk-src-${cur.cluster}-${edit ? p.name : 'new'}`, edit ? tr('fk.editSource', { name: p.name }) : tr('fk.newSource'),
+      `<p class="form-hint">${esc(tr('fk.sourceHint'))}</p>
+      ${froms.length ? field('from', tr('fk.f.from'), `<select name="from"><option value="">${esc(tr('fk.from.none'))}</option>${
+        froms.map(s => `<option value="${esc(`${s.namespace}/${s.name}`)}">${esc(`${s.namespace}/${s.name} (${s.endpoint})`)}</option>`).join('')}</select>`, tr('fk.t.from')) : ''}
+      ${field('name', tr('bk.f.name'), `<input name="name" required value="${esc(edit ? p.name : '')}" ${edit ? 'readonly' : ''}>`, tr('fk.t.name'))}
+      <div data-fk-typed>
+        ${field('url', tr('fk.f.url'), `<input name="url" required placeholder="vcenter.lan" value="${esc(edit ? p.url : '')}">`, tr('fk.t.url'))}
+        ${field('user', tr('vi.f.user'), '<input name="user" autocomplete="off" placeholder="administrator@vsphere.local">', edit ? tr('fk.t.userKeep') : tr('fk.t.user'))}
+        ${field('password', tr('vi.f.password'), `<input name="password" type="password" autocomplete="new-password" ${edit ? `placeholder="${esc(tr('fk.unchanged'))}"` : 'required'}>`, edit ? tr('fk.t.passwordKeep') : tr('fk.t.password'))}
+        <fieldset class="fk-tls"><legend>${esc(tr('fk.f.tls'))}</legend>
+          ${edit ? `<label class="fk-check tip" data-tip="${esc(tr('fk.t.tlsKeep'))}"><input type="radio" name="tls" value="keep" checked> ${esc(tr('fk.tls.keep'))}</label>` : ''}
+          <label class="fk-check tip" data-tip="${esc(tr('fk.t.tlsCa'))}"><input type="radio" name="tls" value="ca" ${edit ? '' : 'checked'}> ${esc(tr('fk.tls.ca'))}</label>
+          <label class="fk-check tip" data-tip="${esc(tr('fk.t.tlsInsecure'))}"><input type="radio" name="tls" value="insecure"> ${esc(tr('fk.tls.insecure'))}</label>
+          ${field('cacert', tr('vi.f.ca'), '<textarea name="cacert" rows="4" class="adv-code" placeholder="-----BEGIN CERTIFICATE-----"></textarea>', tr('fk.t.cacert'))}
+        </fieldset>
+      </div>
+      <p class="form-hint" data-fk-from-hint hidden>${esc(tr('fk.fromHint'))}</p>
+      ${field('vddk_image', tr('fk.f.vddk'), `<input name="vddk_image" value="${esc(vddk)}">`, tr('fk.t.vddk'))}`, 600);
+    const sync = () => {
+      const from = form.querySelector('[name="from"]');
+      const on = !!(from && from.value);
+      form.querySelector('[data-fk-typed]').hidden = on;
+      form.querySelector('[data-fk-from-hint]').hidden = !on;
+      form.querySelectorAll('[data-fk-typed] [required]').forEach(x => { x.disabled = on; });
+      const ca = form.querySelector('[name="tls"]:checked').value === 'ca';
+      form.querySelector('[data-f="cacert"]').hidden = !ca;
+      if (on && !form.querySelector('[name="name"]').value) form.querySelector('[name="name"]').value = from.value.split('/')[1];
+    };
+    form.addEventListener('change', sync);
+    sync();
+    submitWith(form, (f) => {
+      const v = (n) => { const x = f.querySelector(`[name="${n}"]`); return x ? x.value.trim() : ''; };
+      const spec = { name: v('name') };
+      const from = v('from');
+      if (from) {
+        const [namespace, sname] = from.split('/');
+        spec.from_vmimport = { namespace, name: sname };
+      } else {
+        spec.url = v('url');
+        spec.user = v('user');
+        spec.password = f.querySelector('[name="password"]').value;
+        const tls = f.querySelector('[name="tls"]:checked').value;
+        if (tls === 'insecure') spec.insecure = true;
+        else if (tls === 'ca') { if (v('cacert')) spec.cacert = v('cacert'); else throw new Error(tr('fk.needCa')); }
+        // « keep » : ni cacert ni insecure, le serveur reprend le réglage TLS du secret du fournisseur
+        if (edit) spec.keep_credentials = true;
+      }
+      if (v('vddk_image')) spec.vddk_image = v('vddk_image');
+      return spec;
+    }, 'provider-apply', (s) => tr('fk.done.source', { name: s.name }));
+  }
+
+  // -- Inventaire (U4) ----------------------------------------------------
+  const CONCERN = () => ({
+    'Changed Block Tracking (CBT) not enabled': tr('fk.c.cbt'),
+    'Empty Host Name': tr('fk.c.hostName'),
+    'Unsupported operating system detected': tr('fk.c.os'),
+    'CPU/Memory hotplug detected': tr('fk.c.hotplug'),
+    'Disk serial numbers may be truncated': tr('fk.c.serial'),
+    'Shareable disk detected': tr('fk.c.shareable'),
+    'RDM disk detected': tr('fk.c.rdm'),
+    'VM snapshot detected': tr('fk.c.snapshot'),
+  });
+  const concernText = (c) => {
+    const m = /^Disk - (\S+) does not have CBT enabled$/.exec(c.label || '');
+    return m ? tr('fk.c.diskCbt', { disk: m[1] }) : (CONCERN()[c.label] || c.label);
+  };
+  const SEV = { Critical: 'fail', Warning: 'warn', Information: 'info' };
+  // Clés en toutes lettres : le contrôle de parité ne lit que des littéraux.
+  const INV_KINDS = ['vms', 'networks', 'datastores'];
+  const INV_LABEL = { vms: () => tr('fk.inv.vms'), networks: () => tr('fk.inv.networks'), datastores: () => tr('fk.inv.datastores') };
+  const INV_TIP = { vms: () => tr('fk.t.inv.vms'), networks: () => tr('fk.t.inv.networks'), datastores: () => tr('fk.t.inv.datastores') };
+
+  function openInventory(name) {
+    lastInv = { cluster: cur ? cur.cluster : (window.App && App.getCurrentCluster()), source: name, kind: 'vms', q: '', warm: false };
+    Sections.open('forklift', 'inventory');
+  }
+
+  async function inventoryView(body, d) {
+    const ready = d.providers.filter(p => p.ready === true);
+    if (!ready.length) {
+      body.innerHTML = `<p class="form-hint">${esc(tr('fk.inv.noSource'))}</p>`;
+      return;
+    }
+    if (!lastInv || lastInv.cluster !== cur.cluster || !ready.some(p => p.name === lastInv.source)) {
+      lastInv = { cluster: cur.cluster, source: ready[0].name, kind: 'vms', q: '', warm: false };
+    }
+    const s = lastInv;
+    body.innerHTML = `<div class="fk-inv-tools">
+        ${field('source', tr('fk.inv.source'), `<select name="source">${opts(ready.map(p => p.name), s.source)}</select>`, tr('fk.t.invSource'))}
+        <div class="sub-tabs sub-tabs-inline">${INV_KINDS.map(k => `<button type="button" class="sub-tab tip ${k === s.kind ? 'active' : ''}" data-fk="inv-kind" data-kind="${k}" data-tip="${esc(INV_TIP[k]())}">${esc(INV_LABEL[k]())}</button>`).join('')}</div>
+        <input name="q" class="tip" data-tip="${esc(tr('fk.t.search'))}" placeholder="${esc(tr('fk.search'))}" value="${esc(s.q)}">
+        ${s.kind === 'vms' ? `<label class="fk-check tip" data-tip="${esc(tr('fk.t.warmOnly'))}"><input type="checkbox" name="warm_only" ${s.warm ? 'checked' : ''}> ${esc(tr('fk.warmOnly'))}</label>` : ''}
+        <button type="button" class="btn btn-sm btn-secondary tip" data-fk="inv-refresh" data-tip="${esc(tr('fk.t.invRefresh'))}">${icon('refresh')}</button>
+      </div><div data-fk="inv-out"><p class="form-hint">${esc(tr('common.loading'))}</p></div>`;
+    const c = cur;
+    let res;
+    try { res = await call('GET', `/api/forklift/${enc(c.cluster)}/inventory/${enc(s.source)}/${s.kind}`); }
+    catch (err) { if (c === cur) body.querySelector('[data-fk="inv-out"]').innerHTML = `<p class="res-error">${esc(err.message)}</p>`; return; }
+    if (c !== cur) return;
+    c.invRows = res.rows || [];
+    paintInventory();
+  }
+
+  function paintInventory() {
+    const out = cur.host.querySelector('[data-fk="inv-out"]');
+    if (!out) return;
+    const s = lastInv;
+    const q = s.q.toLowerCase();
+    let rows = (cur.invRows || []).filter(r => !q || `${r.name} ${r.path || ''} ${r.guest || ''}`.toLowerCase().includes(q));
+    if (s.kind === 'vms' && s.warm) rows = rows.filter(r => r.cbt);
+    cur.host.querySelector('.res-count').textContent = tr('fk.inv.count', { n: rows.length });
+    if (s.kind === 'networks') {
+      out.innerHTML = `<table class="res-table" data-fk="inv-table"><thead><tr><th>${esc(tr('fk.inv.name'))}</th><th>${esc(tr('fk.inv.path'))}</th></tr></thead>
+        <tbody>${rows.map(r => `<tr><td>${esc(r.name)}</td><td>${esc(r.path)}</td></tr>`).join('')}</tbody></table>`;
+      return;
+    }
+    if (s.kind === 'datastores') {
+      out.innerHTML = `<table class="res-table" data-fk="inv-table"><thead><tr><th>${esc(tr('fk.inv.name'))}</th><th>${esc(tr('fk.inv.capacity'))}</th><th>${esc(tr('fk.inv.free'))}</th></tr></thead>
+        <tbody>${rows.map(r => `<tr><td>${esc(r.name)}</td><td>${size(r.capacity)}</td><td>${size(r.free)}</td></tr>`).join('')}</tbody></table>`;
+      return;
+    }
+    out.innerHTML = `<table class="res-table" data-fk="inv-table"><thead><tr>
+        <th>${esc(tr('fk.inv.vm'))}</th><th>${esc(tr('fk.inv.power'))}</th><th>${esc(tr('fk.inv.os'))}</th>
+        <th>${esc(tr('fk.inv.cpuMem'))}</th><th>${esc(tr('fk.inv.disks'))}</th><th>${esc(tr('fk.inv.warm'))}</th><th>${esc(tr('fk.inv.concerns'))}</th></tr></thead>
+      <tbody>${rows.map(r => {
+        const total = (r.disks || []).reduce((a, x) => a + (x.capacity || 0), 0);
+        const cs = r.concerns || [];
+        const shown = cs.filter(c => !/^Disk - /.test(c.label || '')).slice(0, 2);
+        const rest = cs.length - shown.length;
+        return `<tr data-vm="${esc(r.name)}"><td class="tip" data-tip="${esc(r.path || '')}">${esc(r.name)}</td>
+          <td>${esc(r.power === 'poweredOn' ? tr('fk.inv.on') : r.power === 'poweredOff' ? tr('fk.inv.off') : r.power || '')}</td>
+          <td>${esc(r.guest || '')}</td><td>${esc(`${r.cpus || '?'} / ${size((r.memory_mib || 0) * 1048576)}`)}</td>
+          <td>${esc(`${(r.disks || []).length} · ${size(total)}`)}</td>
+          <td>${r.cbt ? `<span class="tip" data-fk-warm="yes" data-tip="${esc(tr('fk.t.cbtOn'))}">${icon('ok')} ${esc(tr('fk.inv.cbtOn'))}</span>`
+                      : `<span class="tip" data-fk-warm="no" data-tip="${esc(tr('fk.t.cbtOff'))}">${icon('fail')} ${esc(tr('fk.inv.cbtOff'))}</span>`}</td>
+          <td class="fk-concerns">${shown.map(c => `<span class="tip" data-tip="${esc(c.label)}">${icon(SEV[c.category] || 'info', 12)} ${esc(concernText(c))}</span>`).join(' ')}
+            ${rest > 0 ? `<span class="badge tip" data-tip="${esc(cs.map(concernText).join('\n'))}">+${rest}</span>` : ''}</td></tr>`;
+      }).join('')}</tbody></table>`;
+  }
 
   // -- Gestes -----------------------------------------------------------------
   function onClick(e) {
@@ -191,6 +358,17 @@ const Forklift = (() => {
       else if (val('username')) { body.username = val('username'); body.password = box.querySelector('[name="password"]').value; }
       return post('vddk-image', body, tr('fk.done.push', { image: body.image }));
     }
+    if (act === 'new-source') return sourceForm(null);
+    const name = b.dataset.name;
+    const prov = name && (cur.data.providers || []).find(p => p.name === name);
+    if (act === 'edit-source' && prov) return sourceForm(prov);
+    if (act === 'del-source' && prov) {
+      if (!confirm(tr('fk.confirm.del', { name }))) return;
+      return post('provider-delete', { name }, tr('ml.done.delete', { name }));
+    }
+    if (act === 'inv-source' && prov) return openInventory(name);
+    if (act === 'inv-kind') { lastInv.kind = b.dataset.kind; return render(); }
+    if (act === 'inv-refresh') return render();
   }
 
   function onChange(e) {
@@ -201,6 +379,19 @@ const Forklift = (() => {
       if (creds) creds.hidden = t.checked;
     } else if (t.dataset.fk === 'upload-file' && t.files[0]) {
       upload(t.files[0]);
+    } else if (t.name === 'source' && lastInv) {
+      lastInv.source = t.value;
+      render();
+    } else if (t.name === 'warm_only' && lastInv) {
+      lastInv.warm = t.checked;
+      paintInventory();
+    }
+  }
+
+  function onInput(e) {
+    if (e.target.name === 'q' && lastInv) {
+      lastInv.q = e.target.value;
+      paintInventory();
     }
   }
 
@@ -256,10 +447,14 @@ const Forklift = (() => {
   const opts = (list, sel) => list.map(v => (Array.isArray(v) ? v : [v, v]))
     .map(([v, l]) => `<option value="${esc(v)}" ${String(v) === String(sel) ? 'selected' : ''}>${esc(l)}</option>`).join('');
 
-  // -- Inventaire (U4) ----------------------------------------------------
-  function openInventory() {
-    // U3 : simple renvoi sur l'onglet ; U4 y branchera la source et la sorte
-    Sections.open('forklift', 'inventory');
+  function submitWith(form, build, action, doneText) {
+    form.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const msg = form.querySelector('.of-msg');
+      let spec;
+      try { spec = build(form); } catch (err) { msg.innerHTML = `<span class="res-error">${esc(err.message)}</span>`; return; }
+      await post(action, { spec }, doneText(spec), msg);
+    });
   }
 
   return { start, stop, openInventory };

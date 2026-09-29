@@ -85,3 +85,102 @@ def test_the_vddk_image_is_pushed_with_harvester_s_registry_credentials(context,
     assert url == "api/forklift/harv-fake/do/vddk-image"
     assert body == {"archive": ARCHIVE, "image": "172.16.1.11:5005/harvops/vddk:8.0.3", "plain_http": True,
                     "use_cluster_auth": True}
+
+
+VMS = json.load(open(__import__("pathlib").Path(__file__).resolve().parents[1] / "api" / "fixtures" / "forklift_inventory_vms_175.json"))
+
+
+def rows_of(vms):
+    """Les lignes que rend l'outil (hf.inventory_rows), depuis le relevé réel."""
+    import sys
+    from pathlib import Path
+    sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "bin" / "lib"))
+    import hv_forklift as hf
+    return hf.inventory_rows("vms", vms)
+
+
+def test_a_source_block_says_its_state_and_offers_inventory_edit_delete(context, flask_server):
+    page, sent = open_tab(context, flask_server, DATA)
+    page.evaluate("Sections.open('forklift', 'sources')")
+    block = page.locator('#tab-forklift [data-fk-source="vmwlab"]')
+    expect(block).to_contain_text("https://vmwlab-vc.home.lo/sdk")
+    expect(block.locator('[data-fk="del-source"]')).to_be_enabled()
+    block.locator('[data-fk="del-source"]').click()
+    page.wait_for_timeout(400)
+    assert sent[-1][0] == "api/forklift/harv-fake/do/provider-delete" and sent[-1][2] == {"name": "vmwlab"}
+
+
+def test_a_source_used_by_a_plan_cannot_be_deleted(context, flask_server):
+    used = {**DATA, "providers": [{**DATA["providers"][0], "plans": ["forklift/wave-1"]}]}
+    page, _ = open_tab(context, flask_server, used)
+    page.evaluate("Sections.open('forklift', 'sources')")
+    expect(page.locator('#tab-forklift [data-fk-source="vmwlab"] [data-fk="del-source"]')).to_be_disabled()
+
+
+def test_a_vcenter_of_vm_import_is_taken_without_retyping_the_password(context, flask_server):
+    page, sent = open_tab(context, flask_server, DATA)
+    page.evaluate("Sections.open('forklift', 'sources')")
+    page.locator('#tab-forklift [data-fk="new-source"]').click()
+    form = page.locator(".floating-panel .of-form").last
+    form.locator('[name="from"]').select_option("mig/vc")
+    expect(form.locator('[name="password"]')).to_be_hidden()
+    form.locator('[name="name"]').fill("vmwlab2")
+    form.locator('button[type="submit"]').click()
+    page.wait_for_timeout(400)
+    url, _, body = sent[-1]
+    assert url == "api/forklift/harv-fake/do/provider-apply"
+    assert body == {"spec": {"name": "vmwlab2", "from_vmimport": {"namespace": "mig", "name": "vc"},
+                             "vddk_image": "172.16.1.11:5005/harvops/vddk:8.0.3"}}
+
+
+def test_a_typed_vcenter_goes_with_its_certificate_choice(context, flask_server):
+    page, sent = open_tab(context, flask_server, DATA)
+    page.evaluate("Sections.open('forklift', 'sources')")
+    page.locator('#tab-forklift [data-fk="new-source"]').click()
+    form = page.locator(".floating-panel .of-form").last
+    form.locator('[name="name"]').fill("vc2")
+    form.locator('[name="url"]').fill("vc2.lan")
+    form.locator('[name="user"]').fill("administrator@vsphere.local")
+    form.locator('[name="password"]').fill("pw")
+    form.locator('[name="tls"][value="insecure"]').check()
+    form.locator('button[type="submit"]').click()
+    page.wait_for_timeout(400)
+    assert sent[-1][2] == {"spec": {"name": "vc2", "url": "vc2.lan", "user": "administrator@vsphere.local", "password": "pw",
+                                    "insecure": True, "vddk_image": "172.16.1.11:5005/harvops/vddk:8.0.3"}}
+
+
+def test_editing_a_source_keeps_its_password_unless_retyped(context, flask_server):
+    page, sent = open_tab(context, flask_server, DATA)
+    page.evaluate("Sections.open('forklift', 'sources')")
+    page.locator('#tab-forklift [data-fk-source="vmwlab"] [data-fk="edit-source"]').click()
+    form = page.locator(".floating-panel .of-form").last
+    expect(form.locator('[name="name"]')).to_have_attribute("readonly", "")
+    form.locator('button[type="submit"]').click()
+    page.wait_for_timeout(400)
+    spec = sent[-1][2]["spec"]
+    assert spec["keep_credentials"] is True and spec["password"] == "" and spec["name"] == "vmwlab"
+    assert "insecure" not in spec and "cacert" not in spec   # « garder le réglage actuel » : le serveur reprend le TLS du secret
+
+
+def test_the_inventory_shows_warm_capability_and_forklift_s_concerns(context, flask_server):
+    page, _ = open_tab(context, flask_server, DATA)
+    page.route("**/api/forklift/harv-fake/inventory/vmwlab/vms", lambda r, q: fulfill(r, {"rows": rows_of(VMS)}))
+    page.evaluate("Forklift.openInventory('vmwlab')")
+    table = page.locator('#tab-forklift [data-fk="inv-table"]')
+    expect(table.locator("tbody tr")).to_have_count(4)
+    vc = table.locator('tr[data-vm="vmwlab-vc"]')
+    expect(vc).to_contain_text("CBT")
+    expect(vc.locator('[data-fk-warm="no"]')).to_have_count(1)
+    expect(table.locator('tr[data-vm="vmwlab-src-1"] [data-fk-warm="yes"]')).to_have_count(1)
+    page.locator('#tab-forklift [name="warm_only"]').check()
+    expect(table.locator("tbody tr")).to_have_count(3)
+    page.locator('#tab-forklift [name="q"]').fill("src-3")
+    expect(table.locator("tbody tr")).to_have_count(1)
+
+
+def test_an_inventory_error_is_said(context, flask_server):
+    page, _ = open_tab(context, flask_server, DATA)
+    page.route("**/api/forklift/harv-fake/inventory/vmwlab/vms",
+               lambda r, q: fulfill(r, {"error": "the inventory service answered 503"}, 502))
+    page.evaluate("Forklift.openInventory('vmwlab')")
+    expect(page.locator("#tab-forklift .res-error")).to_contain_text("503")

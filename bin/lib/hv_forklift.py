@@ -815,7 +815,9 @@ def wave_state(plan, migrations, now=None):
             state = "pending"
     nexts = [v["next_precopy"] for v in vms if v["next_precopy"]]
     cutover_started = cutover is not None or any(v["cutover_started"] for v in vms)
+    src = ((spec.get("provider") or {}).get("source")) or {}
     return {"name": md.get("name"), "target_namespace": spec.get("targetNamespace") or "",
+            "provider": {"namespace": src.get("namespace") or "", "name": src.get("name") or ""},
             "state": state, "message": message, "migration": ((cur or {}).get("metadata") or {}).get("name"),
             "vms": vms, "cutover": cutover, "cutover_started": cutover_started,
             "next_precopy": min(nexts) if nexts and state in ("copying", "cutover-scheduled") else None}

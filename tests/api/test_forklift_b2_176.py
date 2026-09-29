@@ -472,3 +472,11 @@ def test_the_precopy_interval():
     for bad in (4, 1441, "x", None, True):
         with pytest.raises(ValueError, match="precopy interval"):
             hf.precopy_patch(bad)
+
+
+def test_a_wave_says_which_source_provider_it_reads():
+    """La vue globale montre le vCenter de la vague : wave_state porte le
+    fournisseur source du plan (relevé réel : default/vmwlab)."""
+    st = hf.wave_state(PLANS["vague-2"], [m for m in MIGRATIONS.values()
+                                          if m["spec"]["plan"]["name"] == "vague-2"])
+    assert st["provider"] == {"namespace": "default", "name": "vmwlab"}

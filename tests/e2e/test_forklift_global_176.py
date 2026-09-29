@@ -186,3 +186,23 @@ def test_every_control_has_a_tooltip(context, flask_server):
         '#tab-forkliftglobal button, #tab-forkliftglobal select')]
         .filter(el => !el.getAttribute('data-tip') && !el.getAttribute('title')).map(el => el.outerHTML.slice(0, 60))""")
     assert missing == []
+
+
+def test_a_wave_shows_the_vcenter_of_its_own_source_when_a_cluster_has_several(context, flask_server):
+    """Deux fournisseurs sur le même cluster : chaque vague montre le vCenter
+    du fournisseur que porte son plan, pas la liste des deux."""
+    other = "https://other-vc.home.lo/sdk"
+    wave_a = {**WAVE_COPY, "provider": {"namespace": "forklift", "name": "vmwlab"}}
+    wave_b = {**WAVE_SCHED, "provider": {"namespace": "forklift", "name": "other"}}
+    data = {"clusters": [
+        {"cluster": "harv-fake", "reachable": True, "forklift_ready": True, "cdi_importer_kind": "upstream",
+         "providers": [{"name": "vmwlab", "namespace": "forklift", "url": VCENTER, "ready": True, "message": ""},
+                       {"name": "other", "namespace": "forklift", "url": other, "ready": True, "message": ""}],
+         "waves": [wave_a, wave_b]}]}
+    page = open_global(context, flask_server, data=data)
+    table = page.locator('#tab-forkliftglobal table.data-table')
+    expect(table).to_be_visible(timeout=10000)
+    row_a = table.locator('tr[data-fkg-wave="vague-1"]')
+    expect(row_a).to_contain_text("vmwlab-vc.home.lo")
+    expect(row_a).not_to_contain_text("other-vc.home.lo")
+    expect(table.locator('tr[data-fkg-wave="vague-2"]')).to_contain_text("other-vc.home.lo")

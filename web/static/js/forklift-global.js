@@ -9,12 +9,9 @@
  * bloquer les autres. Un clic sur une vague bascule vers ce cluster et
  * ouvre son onglet Vagues.
  *
- * Le serveur (`GET /api/forklift-global`) ne porte pas le vCenter d'une
- * vague : seul le fournisseur (nom/espace) est su du plan. Cette vue
- * déduit donc le ou les vCenter d'un cluster de la liste de ses
- * fournisseurs vSphere ; avec plusieurs fournisseurs sur un même cluster,
- * la colonne vCenter des VMs de ce cluster les montre tous (aucun moyen
- * de savoir lequel une vague donnée utilise sans lire le Plan lui-même).
+ * Le vCenter d'une vague : celui du fournisseur que porte son plan
+ * (`wave.provider`, espace et nom), retrouvé dans la liste des fournisseurs
+ * du cluster ; à défaut (fournisseur supprimé), tous ceux du cluster.
  */
 const ForkliftGlobal = (() => {
   const tr = (k, p) => (window.i18n ? i18n.t(k, p) : k);
@@ -146,7 +143,10 @@ const ForkliftGlobal = (() => {
     clusters.forEach((c) => {
       const vcenterHosts = uniq((c.providers || []).map((p) => hostOf(p.url)).filter(Boolean));
       (c.waves || []).forEach((w) => {
-        (w.vms || []).forEach((vm) => rows.push({ cluster: c.cluster, wave: w, vm, vcenterHosts }));
+        const own = (c.providers || []).find((p) => w.provider && p.name === w.provider.name
+                                                  && (p.namespace || '') === (w.provider.namespace || ''));
+        const hosts = own && hostOf(own.url) ? [hostOf(own.url)] : vcenterHosts;
+        (w.vms || []).forEach((vm) => rows.push({ cluster: c.cluster, wave: w, vm, vcenterHosts: hosts }));
       });
     });
     return rows;

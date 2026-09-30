@@ -4,6 +4,25 @@ All notable changes to this project will be documented here.
 Format inspired by [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 This file summarises each minor release; per-patch detail lives in `git log`.
 
+## [1.76.0] - 2026-09-30 - Warm VMware migrations in waves, and one view across the clusters
+
+### Added
+- A "Waves" tab in VMware migrations: compose a wave from the VMs ticked in the inventory (target namespace, network and storage maps, raw copy or guest conversion, static IPs), start it, cut over now or at a set time, go back to the source for the wave or one VM, close it (optionally removing the Forklift snapshots left on the sources) and delete it; a follow window per wave shows each VM's step, disk progress, copies, last copy time, next copy and the error with a hint.
+- The Preparation switches CDI to the upstream importer (Harvester's has no VDDK plugin, harvester/harvester#11773) and back to the recorded original, and sets the interval between incremental copies (5 to 1440 minutes).
+- The inventory shows VMware Tools and whether each VM can move warm, and why not.
+- "Migrations (all clusters)", next to Activity: every VM of every wave of every declared cluster in one table, filtered by state and vCenter; an unreachable cluster never blocks the others.
+- `harvester-forklift wave-apply|wave-start|wave-cutover|wave-status|waves|wave-rollback|wave-close|wave-delete|cdi-importer|precopy-interval`.
+
+### Changed
+- A VM already in an open wave, on this cluster or another declared one, is refused when a wave is composed.
+
+### Internal
+- `bin/lib/vsphere_api.py`: vCenter REST for power and SOAP for snapshots, which the 8.0 REST API lacks; a slow power-on is re-checked instead of reported as failed.
+- The vmwlab bench gives ESXi an e1000e NIC: behind QEMU's vmxnet3 the vmkernel ignored the short frames of the local bridge.
+
+### Tests
+- `test_forklift_b2_176.py`, `test_vsphere_api_176.py` (simulated vCenter), `test_forklift_b2_cli_176.py`, `test_forklift_b2_routes_176.py`, `tests/e2e/test_forklift_b2_176.py`, `tests/e2e/test_forklift_global_176.py`; two waves run for real from the console on harvlab2 against the nested vCenter of vmwlab: downtime 6 min 24 s with conversion, 1 min 44 s with a raw copy. The refusal across clusters is tested but not checked for real (only one bench runs Forklift).
+
 ## [1.75.0] - 2026-09-29 - VMware migrations tab: Forklift, VDDK image, vCenter sources
 
 ### Added

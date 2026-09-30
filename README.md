@@ -72,7 +72,9 @@ recorded, whether it was made from the console or somewhere else.
   cluster, builds the VDDK image from VMware's archive and pushes it to
   your registry, connects vCenter servers (reusing those already declared
   for VM imports) and shows their inventory, with the VMs that can move
-  warm. Warm migration waves, switchover and rollback come next.
+  warm. VMs are then migrated warm in waves: disks copied while the
+  sources run, a switchover now or at a set time, rollback to the source,
+  and one view of every migration across the clusters.
 - **Node maintenance, guided**: a pre-check says which VMs will migrate,
   which would stop and what would hold the drain, then the drain is
   followed to the end.

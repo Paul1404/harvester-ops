@@ -80,8 +80,10 @@ ailleurs.
   cluster, construit l'image VDDK depuis l'archive de VMware et la pousse
   dans votre registre, raccorde les serveurs vCenter (en reprenant ceux
   déjà déclarés pour les imports de VM) et montre leur inventaire, avec les
-  VMs qui peuvent partir à chaud. Les vagues de migration à chaud, la
-  bascule et le retour arrière viennent ensuite.
+  VMs qui peuvent partir à chaud. Les VMs migrent ensuite à chaud par
+  vagues : disques copiés pendant que les sources tournent, bascule
+  immédiate ou planifiée, retour à la source, et une vue de toutes les
+  migrations de tous les clusters.
 - **Maintenance des nœuds, guidée** : un pré-contrôle dit quelles VMs
   migreront, lesquelles s'arrêteraient et ce qui bloquerait la vidange,
   puis la vidange est suivie jusqu'au bout.

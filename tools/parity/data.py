@@ -3,8 +3,8 @@
 # Statuts : ok (fait), part (partiel), todo (manquant), plus (console seulement), na (hors périmètre).
 # v : version où c'est arrivé (ok/part) ou prévue (todo).
 
-AS_OF = "1.75.0"
-DATE = "2026-09-29"
+AS_OF = "1.76.0"
+DATE = "2026-09-30"
 
 S = []  # sections
 
@@ -228,7 +228,11 @@ r("ok", "1.71", "Imports de VM (VMware, OpenStack, OVA)", "VM imports (VMware, O
   "OVA imported end to end for real; VMware source checked against vcsim, then against the real vCenter of the vmwlab bench (1.75); a real VM import from VMware is not done yet, nor from OpenStack (no OpenStack on the benches)")
 r("plus", "1.71", "Raison d'un import ou d'une source bloqués, tirée du journal du contrôleur ; noms refusés avant d'écrire", "Reason of a blocked import or source, from the controller's log; names refused before writing",
   "Harvester boucle sans rien dire (image au nom trop long, identifiants refusés)", "Harvester loops silently (image name too long, refused credentials)")
-r("part", "1.75", "Migration par forklift-operator", "Migration through forklift-operator", "onglet Migrations VMware : Forklift installé, image VDDK, sources vCenter, inventaire ; vagues à chaud à venir", "VMware migrations tab: Forklift installed, VDDK image, vCenter sources, inventory; warm waves to come")
+r("ok", "1.76", "Migration par forklift-operator", "Migration through forklift-operator",
+  "onglet Migrations VMware : Forklift installé, importeur CDI amont (harvester#11773), image VDDK, sources vCenter, inventaire ; vagues à chaud (bascule immédiate ou planifiée, retour à la source, clôture) ; l'assistant de Harvester force warm: false",
+  "VMware migrations tab: Forklift installed, upstream CDI importer (harvester#11773), VDDK image, vCenter sources, inventory; warm waves (immediate or scheduled cutover, rollback, close); Harvester's wizard forces warm: false")
+r("plus", "1.76", "Toutes les migrations VMware de tous les clusters dans une vue", "Every VMware migration of every cluster in one view",
+  "une VM déjà prise dans une vague d'un autre cluster est refusée", "a VM already in a wave on another cluster is refused")
 
 sec("console", "Ce que la console ajoute", "What the console adds", "", "")
 r("plus", "1.1", "Plusieurs clusters dans une seule interface, sans Rancher",

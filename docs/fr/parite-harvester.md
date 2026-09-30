@@ -1,8 +1,8 @@
 # Parité avec l'interface de Harvester
 
-État au 2026-09-29, console **v1.75.0**, comparée à l'interface de **Harvester v1.9** (menus relevés dans le code de harvester-ui-extension v1.9.0 et la documentation v1.9).
+État au 2026-09-30, console **v1.76.0**, comparée à l'interface de **Harvester v1.9** (menus relevés dans le code de harvester-ui-extension v1.9.0 et la documentation v1.9).
 
-Sur 136 fonctions de l'interface de Harvester : **132 faites**, **3 partielles**, **1 manquantes** ; 1 hors périmètre. Une fonction manquante porte la version où elle est prévue.
+Sur 136 fonctions de l'interface de Harvester : **133 faites**, **2 partielles**, **1 manquantes** ; 1 hors périmètre. Une fonction manquante porte la version où elle est prévue.
 
 Statuts : Fait, Partiel (ce qui manque est dit), Manquant (version prévue), Console seulement (ce que Harvester n'a pas), Hors périmètre.
 
@@ -260,7 +260,8 @@ Menu Harvester : *VM Imports / VM Migration*
 |---|---|---|---|
 | Imports de VM (VMware, OpenStack, OVA) | Fait | 1.71 | OVA importée de bout en bout en réel ; source VMware vérifiée contre vcsim, puis contre le vrai vCenter du banc vmwlab (1.75) ; l'import réel d'une VM depuis VMware n'est pas encore fait, ni celui depuis OpenStack (pas d'OpenStack sur les bancs) |
 | Raison d'un import ou d'une source bloqués, tirée du journal du contrôleur ; noms refusés avant d'écrire | Console seulement | 1.71 | Harvester boucle sans rien dire (image au nom trop long, identifiants refusés) |
-| Migration par forklift-operator | Partiel | 1.75 | onglet Migrations VMware : Forklift installé, image VDDK, sources vCenter, inventaire ; vagues à chaud à venir |
+| Migration par forklift-operator | Fait | 1.76 | onglet Migrations VMware : Forklift installé, importeur CDI amont (harvester#11773), image VDDK, sources vCenter, inventaire ; vagues à chaud (bascule immédiate ou planifiée, retour à la source, clôture) ; l'assistant de Harvester force warm: false |
+| Toutes les migrations VMware de tous les clusters dans une vue | Console seulement | 1.76 | une VM déjà prise dans une vague d'un autre cluster est refusée |
 
 ## Ce que la console ajoute
 

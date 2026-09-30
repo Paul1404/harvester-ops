@@ -1,8 +1,8 @@
 # Parity with the Harvester UI
 
-Status on 2026-09-29, console **v1.75.0**, compared with the **Harvester v1.9** UI (menus taken from the harvester-ui-extension v1.9.0 source and the v1.9 documentation).
+Status on 2026-09-30, console **v1.76.0**, compared with the **Harvester v1.9** UI (menus taken from the harvester-ui-extension v1.9.0 source and the v1.9 documentation).
 
-Of 136 functions of the Harvester UI: **132 done**, **3 partial**, **1 missing**; 1 out of scope. A missing function shows the version it is planned for.
+Of 136 functions of the Harvester UI: **133 done**, **2 partial**, **1 missing**; 1 out of scope. A missing function shows the version it is planned for.
 
 Statuses: Done, Partial (what is missing is said), Missing (planned version), Console only (what Harvester does not have), Out of scope.
 
@@ -260,7 +260,8 @@ Harvester menu: *VM Imports / VM Migration*
 |---|---|---|---|
 | VM imports (VMware, OpenStack, OVA) | Done | 1.71 | OVA imported end to end for real; VMware source checked against vcsim, then against the real vCenter of the vmwlab bench (1.75); a real VM import from VMware is not done yet, nor from OpenStack (no OpenStack on the benches) |
 | Reason of a blocked import or source, from the controller's log; names refused before writing | Console only | 1.71 | Harvester loops silently (image name too long, refused credentials) |
-| Migration through forklift-operator | Partial | 1.75 | VMware migrations tab: Forklift installed, VDDK image, vCenter sources, inventory; warm waves to come |
+| Migration through forklift-operator | Done | 1.76 | VMware migrations tab: Forklift installed, upstream CDI importer (harvester#11773), VDDK image, vCenter sources, inventory; warm waves (immediate or scheduled cutover, rollback, close); Harvester's wizard forces warm: false |
+| Every VMware migration of every cluster in one view | Console only | 1.76 | a VM already in a wave on another cluster is refused |
 
 ## What the console adds
 

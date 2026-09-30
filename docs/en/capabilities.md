@@ -1339,13 +1339,132 @@ image is pushed to (Advanced > containerd-registry).
 
 Checked for real on the harvlab2 bench, against the nested vCenter of
 vmwlab, from the tab: this was also the first real check of a VM Import
-VMware source against a real vCenter, not only vcsim. Not yet: warm
-migration waves, cutover, rollback, and the global "Migrations (all
-clusters)" view; they come with the next step (B2).
+VMware source against a real vCenter, not only vcsim. Warm migration
+waves, cutover, rollback and the global view came in 1.76.0 (next
+section).
 
 Reading is open to every role; changing is for administrators, and every
 write (Forklift installed, the VDDK image pushed, a source added, changed
 or deleted) is a tracked action, in the dock and in Activity.
+
+### Warm VMware migrations: waves, cutover, rollback, global view (1.76.0)
+
+A **wave** is a batch of VMs from one vCenter source migrated warm
+together: Forklift copies their disks while they run, then takes
+incremental copies (Changed Block Tracking) until the **cutover**, where
+each source is shut down, the last copy made and the VM started on
+Harvester. The downtime is limited to that last step.
+
+**Preparation**, two more steps:
+
+- **Disk importer (CDI)**, as step 2. The CDI importer shipped with
+  Harvester (`registry.suse.com/suse/sles/16.0/cdi-importer:1.65.0`) lacks
+  nbdkit's VDDK plugin: every VMware disk copy fails
+  (harvester/harvester#11773, still there in 1.9.1-rc1 and rc2). The step
+  says which image the cluster uses (SUSE without VDDK, upstream, or
+  other) and offers to switch to the upstream importer of the same
+  version (`quay.io/kubevirt/cdi-importer:v1.65.0`, or its mirror in
+  airgap). The setting lives on the `harvester-system/cdi-operator`
+  deployment (`IMPORTER_IMAGE`, `OVIRT_POPULATOR_IMAGE`); the original
+  image is recorded once, as an annotation, and "Back to the original
+  image" puts it back. A Harvester upgrade may bring its own importer
+  back: check this step again after every upgrade.
+- **Interval between incremental copies**, below the steps: in minutes,
+  from 5 to 1440 (60 by default in Forklift). It applies to the whole
+  cluster and every open wave (`controller_precopy_interval` of the
+  ForkliftController); saving it restarts the Forklift controller, and a
+  copy already scheduled is not rescheduled.
+
+**Inventory**: a VMware Tools column (running or stopped) and a "Warm
+migration" column saying whether the VM is eligible and, if not, why (CBT
+off, VMware Tools stopped: without them the cutover cannot shut the
+source down, VM already in another open wave). Eligible VMs can be
+ticked, then **Compose a wave** opens the compose window.
+
+**Compose a wave**: a name (lowercase, digits and `-`, 40 characters at
+most), the target namespace, for each vCenter network these VMs use a
+Harvester VM network or the pod network, for each datastore a storage
+class, and two options: keep static IPs, and **raw copy** (no guest
+conversion). Conversion is on by default; a raw copy shortens the
+downtime but the guest must already have virtio drivers (most Linux
+guests, not Windows): it is ticked by default when every VM runs Linux,
+and a ticked Windows guest is flagged. A VM already in an open wave, on
+this cluster or on another cluster declared in the console, is refused
+(a VM is identified by its vCenter and its `vm-NN` id); an unreachable
+cluster is named in the answer without blocking the compose.
+
+**Waves**, a new tab: one block per wave, with its state (ready to start,
+validating, refused by Forklift, copying, cutover scheduled, cutting
+over, migrated, failed, back on the source, closed), its target
+namespace, its VMs, the next copy and the scheduled cutover. The
+actions:
+
+- **Start**: a first full copy of the disks, then incremental copies at
+  the set interval.
+- **Cut over now** or **Schedule the cutover** (browser time); copies go
+  on until then, and a scheduled cutover can be brought forward.
+- **Back to the source**, for the whole wave or one VM, only once that
+  VM's cutover has started: the console first checks it can reach the
+  vCenter, stops the Harvester VM (found by its name, or by the `vmID` and
+  `plan` labels Forklift sets), then powers the source on through the
+  vCenter. Run again, it does not redo what is already done.
+- **Close**: ends the wave, so its VMs can join another one; neither the
+  Harvester VMs nor the sources are touched. When ticked, it also removes
+  the `forklift-migration-precopy` snapshots Forklift leaves on the
+  sources after a failed attempt (also possible later on a closed wave).
+- **Delete**: removes the plan, its migrations and its maps; migrated
+  VMs stay.
+- **Follow** opens one window per wave: for each VM, the step
+  (translated), the disk progress, the number of copies, how long the
+  last one took and the time until the next, and the error with a hint
+  when it is known (importer without VDDK, wrong VDDK image, VMware Tools
+  missing).
+
+A wave's objects (NetworkMap, StorageMap, Plan with `warm: true`,
+Migration) live in the `forklift` namespace, labelled
+`harvester-ops.io/managed` and `harvester-ops.io/wave`.
+
+**Migrations (all clusters)**, in the menu next to Activity: every VM of
+every wave of every declared cluster, in one table (VMware VM, vCenter,
+target cluster, wave, step, last copy, cutover), filtered by state and by
+vCenter, with one block per cluster (Forklift installed or not, importer
+image, sources, waves). An unreachable cluster is shown as such without
+blocking the others; the view is read at most every 15 seconds per
+person.
+
+On the command line: `harvester-forklift wave-apply` (the wave as JSON on
+stdin or `--spec`: `name`, `target_namespace`, `provider`, `vms`,
+`networks`, `storages`, `skip_conversion`, `preserve_static_ips`),
+`wave-start`, `wave-cutover [--at <RFC 3339>]`, `wave-status`, `waves`,
+`wave-rollback [--vm vm-NN]`, `wave-close [--clean-snapshots]`,
+`wave-delete`, `cdi-importer [--show|--upstream [--image <mirror>]|--original]`
+and `precopy-interval <minutes>`. Rollback and snapshot removal talk to
+the vCenter with the source's credentials (REST for power, SOAP for
+snapshots, which the vCenter 8.0 REST API does not expose).
+
+**Measured for real** on harvlab2, against the nested vCenter 8.0.1 of
+vmwlab, Debian 11 with a 10 GiB disk: downtime of **6 min 24 s** with
+guest conversion (about 4 min 30 of which is conversion), **1 min 44 s**
+with a raw copy; rollback: 17 s to stop the Harvester VM, then the
+source boot (about 5 min on this nested bench). Two waves run from the
+console: immediate and scheduled cutover, raw copy and conversion, a VM
+without VMware Tools and a VM already taken refused, rollback run again
+with no effect, a close that removed three Forklift snapshots from the
+real vCenter, the importer switched then recorded, the interval changed.
+
+**Limits.**
+
+- Without VMware Tools running in the guest, the cutover cannot shut the
+  source down and fails; the inventory says so beforehand.
+- The upstream CDI importer replaces a SUSE image: mirror it in airgap,
+  and check again after every Harvester upgrade.
+- The inventory reads Forklift at detail level 4 (tools, snapshots,
+  UUID): heavier than before on a large vCenter.
+- Refusing a VM already taken on **another** cluster is tested but not
+  checked for real: only one bench runs Forklift.
+- The cutover depends on the vCenter: on the nested bench a VM power-on
+  took more than a minute to answer, hence a 5 minute wait before
+  concluding it failed.
 
 ### LVM storage and downloading CDI images (1.74.0)
 

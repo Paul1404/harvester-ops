@@ -1495,14 +1495,141 @@ containerd-registry).
 Vérifié en réel sur le banc harvlab2, contre le vCenter imbriqué de
 vmwlab, depuis l'onglet : c'était aussi la première vérification réelle
 d'une source VMware de VM Import contre un vrai vCenter, pas seulement
-vcsim. Pas encore : les vagues de migration à chaud, la bascule, le
-retour arrière et la vue globale « Migrations (tous clusters) » ; elles
-viennent avec l'étape suivante (B2).
+vcsim. Les vagues de migration à chaud, la bascule, le retour arrière et
+la vue globale sont arrivés en 1.76.0 (section suivante).
 
 La lecture est ouverte à tous les rôles ; la modification est réservée
 aux administrateurs, et chaque écriture (Forklift installé, image VDDK
 poussée, source ajoutée, modifiée ou supprimée) est une action suivie,
 dans le dock et dans Activity.
+
+### Migrations VMware à chaud : vagues, bascule, retour arrière, vue globale (1.76.0)
+
+Une **vague** est un lot de VMs d'une même source vCenter migrées à chaud
+ensemble : Forklift copie leurs disques pendant qu'elles tournent, puis
+prend des copies incrémentales (Changed Block Tracking) jusqu'à la
+**bascule**, où chaque source est arrêtée, la dernière copie faite et la
+VM démarrée sur Harvester. La coupure se limite à cette dernière étape.
+
+**Préparation**, deux étapes de plus :
+
+- **Importeur de disques (CDI)**, en étape 2. L'importeur CDI livré avec
+  Harvester (`registry.suse.com/suse/sles/16.0/cdi-importer:1.65.0`) n'a
+  pas le greffon VDDK de nbdkit : toute copie de disque VMware échoue
+  (harvester/harvester#11773, toujours là dans les 1.9.1-rc1 et rc2).
+  L'étape dit quelle image le cluster utilise (SUSE sans VDDK, amont, ou
+  autre) et propose de passer à l'importeur amont de la même version
+  (`quay.io/kubevirt/cdi-importer:v1.65.0`, ou son miroir en airgap). Le
+  réglage se fait sur le déploiement `harvester-system/cdi-operator`
+  (`IMPORTER_IMAGE`, `OVIRT_POPULATOR_IMAGE`) ; l'image d'origine est notée
+  une fois, en annotation, et « Revenir à l'image d'origine » la remet.
+  Une mise à jour de Harvester peut remettre son propre importeur :
+  revérifier cette étape après chaque mise à jour.
+- **Intervalle entre les copies incrémentales**, sous les étapes : en
+  minutes, de 5 à 1440 (60 par défaut dans Forklift). Il vaut pour tout le
+  cluster et toutes les vagues ouvertes (`controller_precopy_interval` du
+  ForkliftController) ; l'enregistrer redémarre le contrôleur Forklift, et
+  une copie déjà prévue n'est pas replanifiée.
+
+**Inventaire** : une colonne VMware Tools (en marche ou arrêtés) et une
+colonne « Migration à chaud » qui dit si la VM est éligible et, sinon,
+pourquoi (CBT inactif, VMware Tools arrêtés : sans eux la bascule ne peut
+pas arrêter la source, VM déjà prise par une autre vague ouverte). Les VMs
+éligibles se cochent, puis **Composer une vague** ouvre la fenêtre de
+composition.
+
+**Composer une vague** : un nom (minuscules, chiffres et `-`, 40
+caractères au plus), le namespace cible, pour chaque réseau vCenter
+utilisé par ces VMs un réseau de VM de Harvester ou le réseau des pods,
+pour chaque datastore une classe de stockage, et deux options :
+conserver les IP statiques, et la **copie brute** (sans conversion de
+l'invité). La conversion est faite par défaut ; la copie brute raccourcit
+la coupure mais l'invité doit déjà avoir les pilotes virtio (la plupart
+des Linux, pas Windows) : elle est cochée d'office quand toutes les VMs
+sont sous Linux, et un invité Windows coché le signale. Une VM déjà prise
+par une vague ouverte, sur ce cluster ou sur un autre cluster déclaré
+dans la console, est refusée (une même VM est reconnue par son vCenter et
+son identifiant `vm-NN`) ; un cluster injoignable est nommé dans la
+réponse, sans bloquer la composition.
+
+**Vagues**, nouvel onglet : un bloc par vague, avec son état (prête à
+lancer, en validation, refusée par Forklift, copie en cours, bascule
+prévue, bascule en cours, migrée, en échec, revenue à la source, close),
+son namespace cible, ses VMs, la prochaine copie et la bascule prévue.
+Les gestes :
+
+- **Lancer** : une première copie complète des disques, puis des copies
+  incrémentales à l'intervalle réglé.
+- **Basculer maintenant** ou **Planifier la bascule** (heure du
+  navigateur) ; les copies continuent jusque-là, une bascule planifiée
+  peut être avancée.
+- **Revenir à la source**, pour toute la vague ou une VM, seulement une
+  fois la bascule de cette VM amorcée : la console vérifie d'abord qu'elle
+  joint le vCenter, arrête la VM Harvester (retrouvée par son nom, ou par
+  les étiquettes `vmID` et `plan` que pose Forklift), puis rallume la
+  source par le vCenter. Relancé, il ne refait rien de ce qui est déjà
+  fait.
+- **Clore** : termine la vague, pour que ses VMs puissent entrer dans une
+  autre ; ni les VMs Harvester ni les sources ne sont touchées. Coché, il
+  retire aussi les instantanés `forklift-migration-precopy` que Forklift
+  laisse sur les sources après une tentative en échec (possible aussi plus
+  tard sur une vague close).
+- **Supprimer** : retire le plan, ses migrations et ses correspondances ;
+  les VMs migrées restent.
+- **Suivre** ouvre une fenêtre par vague : pour chaque VM, l'étape
+  (traduite), la progression du disque, le nombre de copies, la durée de
+  la dernière et le temps jusqu'à la prochaine, et l'erreur avec une
+  piste quand elle est connue (importeur sans VDDK, image VDDK erronée,
+  VMware Tools absents).
+
+Les objets d'une vague (NetworkMap, StorageMap, Plan avec `warm: true`,
+Migration) vivent dans le namespace `forklift`, étiquetés
+`harvester-ops.io/managed` et `harvester-ops.io/wave`.
+
+**Migrations (tous clusters)**, dans le menu à côté d'Activity : toutes
+les VMs de toutes les vagues de tous les clusters déclarés, dans un seul
+tableau (VM VMware, vCenter, cluster cible, vague, étape, dernière copie,
+bascule), filtrable par état et par vCenter, avec un bloc par cluster
+(Forklift installé ou non, image d'importeur, sources, vagues). Un
+cluster injoignable est montré tel quel, sans bloquer les autres ; la vue
+est relue au plus toutes les 15 secondes par personne.
+
+En ligne de commande : `harvester-forklift wave-apply` (la vague en JSON
+sur l'entrée standard ou `--spec` : `name`, `target_namespace`,
+`provider`, `vms`, `networks`, `storages`, `skip_conversion`,
+`preserve_static_ips`), `wave-start`, `wave-cutover [--at <RFC 3339>]`,
+`wave-status`, `waves`, `wave-rollback [--vm vm-NN]`,
+`wave-close [--clean-snapshots]`, `wave-delete`,
+`cdi-importer [--show|--upstream [--image <miroir>]|--original]` et
+`precopy-interval <minutes>`. Le retour arrière et le retrait des
+instantanés parlent au vCenter avec les identifiants de la source
+(REST pour l'alimentation, SOAP pour les instantanés, que l'API REST de
+vCenter 8.0 n'expose pas).
+
+**Mesuré en réel** sur harvlab2, contre le vCenter 8.0.1 imbriqué de
+vmwlab, Debian 11 avec un disque de 10 Gio : coupure de **6 min 24 s**
+avec conversion de l'invité (dont environ 4 min 30 de conversion),
+**1 min 44 s** en copie brute ; retour arrière : 17 s pour arrêter la VM
+Harvester, puis le démarrage de la source (environ 5 min sur ce banc
+imbriqué). Deux vagues menées depuis la console : bascule immédiate et
+planifiée, copie brute et conversion, refus d'une VM sans VMware Tools et
+d'une VM déjà prise, retour arrière relancé sans effet, clôture qui a
+retiré trois instantanés Forklift du vrai vCenter, importeur changé puis
+noté, intervalle modifié.
+
+**Limites.**
+
+- Sans les VMware Tools en marche dans l'invité, la bascule ne peut pas
+  arrêter la source et échoue ; l'inventaire le dit avant.
+- L'importeur CDI amont remplace une image SUSE : en airgap, le mettre en
+  miroir, et revérifier après chaque mise à jour de Harvester.
+- L'inventaire lit Forklift au niveau de détail 4 (outils, instantanés,
+  UUID) : plus lourd qu'avant sur un gros vCenter.
+- Le refus d'une VM déjà prise sur un **autre** cluster est testé, mais
+  pas vérifié en réel : un seul banc fait tourner Forklift.
+- La bascule dépend du vCenter : sur le banc imbriqué, un démarrage de VM
+  a mis plus d'une minute à répondre, d'où une attente de 5 minutes avant
+  de conclure à un échec.
 
 ### Stockage LVM et téléchargement des images CDI (1.74.0)
 

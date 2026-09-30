@@ -27,6 +27,7 @@ l'opération. Bibliothèque standard seulement.
 import base64
 import json
 import re
+import socket
 import ssl
 import time
 import urllib.error
@@ -36,6 +37,12 @@ import xml.etree.ElementTree as ET
 from xml.sax.saxutils import escape
 
 FORKLIFT_SNAPSHOT = "forklift-migration-precopy"
+
+# Vu sur vCenter 8.0.1 (banc vmwlab) : l'appel qui allume la VM peut mettre
+# plus de 60 s a repondre alors que l'alimentation a deja eu lieu cote
+# hyperviseur. Un delai propre, plus long que le delai REST habituel, pour
+# ne pas confondre "lent" et "en panne".
+POWER_ON_TIMEOUT = 300
 
 NS_VIM = "urn:vim25"
 NS_SOAP = "http://schemas.xmlsoap.org/soap/envelope/"
@@ -50,6 +57,11 @@ TASK_DONE = ("success", "error")
 
 
 class VSphereError(Exception):
+    pass
+
+
+class _TimedOut(Exception):
+    """Marqueur interne : le delai a expire, distinct d'une vraie panne."""
     pass
 
 
@@ -99,7 +111,8 @@ class VSphere:
     instantanés. `url` peut être celle du fournisseur Forklift
     (`https://vcenter/sdk`) : seuls le schéma et l'hôte comptent."""
 
-    def __init__(self, url, user, password, cacert=None, insecure=False, timeout=60):
+    def __init__(self, url, user, password, cacert=None, insecure=False, timeout=60,
+                 power_on_timeout=POWER_ON_TIMEOUT):
         u = urllib.parse.urlparse(str(url or "").strip())
         if u.scheme not in ("http", "https") or not u.netloc:
             raise VSphereError("vCenter URL must be http(s)://host")
@@ -108,6 +121,7 @@ class VSphere:
         self.user = user or ""
         self.password = password or ""
         self.timeout = timeout
+        self.power_on_timeout = power_on_timeout
         self.opener = urllib.request.build_opener(
             urllib.request.HTTPSHandler(context=_ssl_context(cacert, insecure)))
         self.token = None
@@ -132,11 +146,14 @@ class VSphere:
     def _err(self, what, detail):
         return VSphereError(f"vCenter {self.host}: {what}: {self._scrub(detail)}")
 
-    def _open(self, req, what):
+    def _open(self, req, what, timeout=None, raise_timeout=False):
         """(code, corps). Une erreur HTTP rend son code et son corps ; une
-        panne réseau ou TLS devient une VSphereError sans URL."""
+        panne réseau ou TLS devient une VSphereError sans URL. Si
+        `raise_timeout`, un délai dépassé lève `_TimedOut` au lieu d'une
+        VSphereError, pour permettre à l'appelant de vérifier l'état réel
+        avant de conclure à un échec."""
         try:
-            with self.opener.open(req, timeout=self.timeout) as r:
+            with self.opener.open(req, timeout=timeout if timeout is not None else self.timeout) as r:
                 return r.status, r.read()
         except urllib.error.HTTPError as e:
             try:
@@ -145,9 +162,15 @@ class VSphere:
                 e.close()
         except urllib.error.URLError as e:
             reason = e.reason
+            if raise_timeout and isinstance(reason, (TimeoutError, socket.timeout)):
+                raise _TimedOut() from None
             if isinstance(reason, ssl.SSLCertVerificationError):
                 reason = "certificate not trusted"
             raise self._err(what, f"unreachable ({reason})") from None
+        except TimeoutError:
+            if raise_timeout:
+                raise _TimedOut() from None
+            raise self._err(what, "unreachable (TimeoutError)") from None
         except (OSError, ValueError) as e:
             raise self._err(what, f"unreachable ({type(e).__name__})") from None
 
@@ -172,7 +195,7 @@ class VSphere:
         self.token = token
         return True
 
-    def _rest(self, method, path, what):
+    def _rest(self, method, path, what, timeout=None, raise_timeout=False):
         """Appel REST authentifié ; un jeton expiré (401) fait rouvrir la
         session une fois. Rend (code, JSON ou None)."""
         for attempt in (0, 1):
@@ -182,7 +205,7 @@ class VSphere:
                                          data=b"" if method == "POST" else None,
                                          headers={"vmware-api-session-id": self.token,
                                                   "Accept": "application/json"})
-            code, body = self._open(req, what)
+            code, body = self._open(req, what, timeout=timeout, raise_timeout=raise_timeout)
             if code == 401 and attempt == 0:
                 self.token = None
                 continue
@@ -222,10 +245,27 @@ class VSphere:
     def power_on(self, vm_id):
         """Allume la VM. Déjà allumée : rien à faire, pas une erreur (le
         retour arrière doit pouvoir être rejoué). Rend True si la VM a été
-        allumée par cet appel, False si elle l'était déjà."""
+        allumée par cet appel, False si elle l'était déjà.
+
+        Vu sur vCenter 8.0.1 : l'appel peut dépasser le délai REST habituel
+        (60 s) alors que l'alimentation a bien eu lieu. On lui donne son
+        propre délai, plus long (`POWER_ON_TIMEOUT`), et si même celui-là est
+        dépassé on relit l'état réel par un appel court avant d'échouer :
+        POWERED_ON veut dire que l'action a réussi malgré la réponse
+        manquante, sans quoi le retour arrière se croirait à tort en échec."""
         vm = _check_moref(vm_id, "VM")
         what = f"power on {vm}"
-        code, data = self._rest("POST", f"/api/vcenter/vm/{vm}/power?action=start", what)
+        try:
+            code, data = self._rest("POST", f"/api/vcenter/vm/{vm}/power?action=start", what,
+                                    timeout=self.power_on_timeout, raise_timeout=True)
+        except _TimedOut:
+            try:
+                state = self.power_state(vm)
+            except VSphereError:
+                raise self._err(what, "unreachable (TimeoutError)") from None
+            if state == "POWERED_ON":
+                return True
+            raise self._err(what, "unreachable (TimeoutError)")
         if code in (200, 204):
             return True
         if code == 400 and self._rest_error_type(data).upper() == "ALREADY_IN_DESIRED_STATE":

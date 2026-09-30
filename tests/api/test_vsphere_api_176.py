@@ -11,6 +11,7 @@ import re
 import socket
 import sys
 import threading
+import time
 import xml.etree.ElementTree as ET
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -39,6 +40,7 @@ class FakeVCenter:
     def __init__(self):
         self.tokens = set()
         self.power = {"vm-16": "POWERED_ON", "vm-18": "POWERED_OFF"}
+        self.slow_power = {}       # vm -> secondes de retard avant de repondre
         self.snapshots = {"vm-16": "snapshots_forklift_chain.xml", "vm-18": "snapshots_none.xml"}
         self.cookies = set()
         self.removed = []          # (snapshot, removeChildren, consolidate)
@@ -108,6 +110,11 @@ class FakeVCenter:
                     return self._send(200, json.dumps({"state": fake.power[vm]}).encode())
                 if query != "action=start":
                     return self._send(400, b"{}")
+                delay = fake.slow_power.get(vm)
+                if delay:
+                    fake.power[vm] = "POWERED_ON"
+                    time.sleep(delay)
+                    return self._send(204)
                 if fake.power[vm] == "POWERED_ON":
                     return self._send(400, json.dumps({"error_type": "ALREADY_IN_DESIRED_STATE", "messages": [
                         {"default_message": "Virtual machine is already powered on."}]}).encode())
@@ -236,6 +243,33 @@ def test_expired_token_reopens_session_once(vc):
     vc.tokens.clear()          # le vCenter a oublié la session
     assert c.power_state("vm-16") == "POWERED_ON"
     assert sum(1 for m, p, _ in vc.rest_calls if p == "/api/session" and m == "POST") == 2
+
+
+def test_power_on_survives_a_slow_answer(vc):
+    """vCenter met plus longtemps que le delai REST habituel a repondre,
+    mais a bien allume la VM : power_on relit l'etat au lieu d'echouer."""
+    vc.slow_power["vm-18"] = 0.3
+    c = client(vc)
+    c.timeout = 0.05           # delai REST court : dépassé sans le délai dédié
+    c.power_on_timeout = 2
+    assert c.power_on("vm-18") is True
+    assert vc.power["vm-18"] == "POWERED_ON"
+
+
+def test_power_on_slow_answer_still_off_is_an_error(vc):
+    """Le délai dédié expire aussi, et l'état relu montre que rien n'a eu
+    lieu : un vrai échec, pas un succès muet."""
+    vc.slow_power["vm-16"] = 0.3
+    vc.power["vm-16"] = "POWERED_OFF"
+    c = client(vc)
+    c.power_on_timeout = 0.05
+    real_power_state = c.power_state
+    c.power_state = lambda vm: "POWERED_OFF"
+    with pytest.raises(vs.VSphereError) as e:
+        c.power_on("vm-16")
+    assert "unreachable (TimeoutError)" in str(e.value)
+    assert_clean(str(e.value))
+    c.power_state = real_power_state
 
 
 def test_power_unknown_vm(vc):

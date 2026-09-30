@@ -176,6 +176,14 @@ const ForkliftGlobal = (() => {
       </div>`;
   }
 
+  // Même lecture que l'onglet Vagues : entre deux copies incrémentales
+  // (`CopyingPaused`), l'étape brute affichée par Forklift se lit comme une
+  // bascule commencée ; on le dit, avec le prochain moment de copie connu.
+  function stepText(vm) {
+    if (vm.step_name !== 'CopyingPaused') return esc(vm.step || '–');
+    return `${esc(tr('fk.w.copyingPaused'))}${vm.next_precopy ? ` (${whenWithCountdown(vm.next_precopy)})` : ''}`;
+  }
+
   function vmRow(row) {
     const { cluster, wave, vm, vcenterHosts } = row;
     const vcenter = vcenterHosts.length ? vcenterHosts.join(', ') : '–';
@@ -183,8 +191,8 @@ const ForkliftGlobal = (() => {
     const cutover = wave.cutover ? whenWithCountdown(wave.cutover)
       : vm.rolled_back ? esc(tr('fk.w.st.rolledBack')) : '–';
     const step = vm.error
-      ? `<span class="tip" data-tip="${esc(vm.error)}">${icon('warn', 12)} ${esc(vm.step || '')}</span>`
-      : esc(vm.step || '–');
+      ? `<span class="tip" data-tip="${esc(vm.error)}">${icon('warn', 12)} ${stepText(vm)}</span>`
+      : stepText(vm);
     return `<tr class="tip" data-fkg-cluster="${esc(cluster)}" data-fkg-wave="${esc(wave.name)}"
           data-tip="${esc(tr('fkg.rowTip', { cluster }))}">
         <td>${esc(vm.name || vm.id)}</td>

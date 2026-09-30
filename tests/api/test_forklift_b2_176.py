@@ -216,6 +216,40 @@ def test_a_wave_being_copied_and_its_next_precopy():
     assert vm["next_precopy"] == "2026-09-29T19:37:04Z" == st["next_precopy"]
 
 
+def copying_paused_objects():
+    """vague-1-m4 entre deux copies incrémentales : Initialize et DiskTransfer
+    sont `Completed` (le tour de copie est fini), Cutover reste `Pending`
+    sans avoir commencé : `_current_step` retombe alors sur Cutover (son
+    seul repli quand rien n'est en cours), ce qui affiche « final copy
+    0/10240 » et se lit comme une bascule commencée alors qu'il n'y a rien
+    de tel. `phase: CopyingPaused` est le seul signal qui le dit vraiment."""
+    plan, m = copying_objects()
+    vm = plan["status"]["migration"]["vms"][0]
+    vm["phase"] = "CopyingPaused"
+    pipe = vm["pipeline"]
+    pipe[1]["phase"] = "Completed"
+    pipe[1]["completed"] = "2026-09-29T19:37:00Z"
+    pipe[1]["progress"] = {"completed": 10240, "total": 10240}
+    pipe[2]["progress"] = {"completed": 0, "total": 10240}
+    return plan, m
+
+
+def test_copying_paused_reads_as_waiting_not_as_a_switchover():
+    plan, m = copying_paused_objects()
+    now = datetime(2026, 9, 29, 19, 38, tzinfo=timezone.utc)
+    st = hf.wave_state(plan, [m], now=now)
+    assert st["state"] == "copying"
+    (vm,) = st["vms"]
+    assert vm["phase"] == "CopyingPaused"
+    # sans le correctif : step_name "Cutover", progress 0/10240 (une fausse
+    # bascule) ; avec : la progression vient de DiskTransfer (la copie faite)
+    assert vm["step_name"] == "CopyingPaused"
+    assert vm["step"] == "waiting for the next copy"
+    assert vm["progress"] == {"done": 10240, "total": 10240}
+    assert vm["cutover_started"] is False
+    assert vm["next_precopy"] == "2026-09-29T19:37:04Z" == st["next_precopy"]
+
+
 def failed_before_cutover_objects():
     """vague-1-m4 en échec pendant DiskTransfer (VDDK), avant toute bascule :
     ni `spec.cutover` ni l'étape Cutover n'ont jamais commencé."""

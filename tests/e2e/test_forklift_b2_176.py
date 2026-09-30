@@ -540,6 +540,25 @@ def test_the_follow_window_shows_each_vm_step_progress_and_copies(context, flask
     expect(done.locator("[data-fk-vm-rollback]")).to_be_visible()
 
 
+def copying_paused(name="w-paused"):
+    """Vu en réel : entre deux copies incrémentales, `phase: CopyingPaused`
+    doit se lire comme une attente, jamais comme une bascule commencée."""
+    nxt = iso(6)
+    w = variant(name, "copying", phase="CopyingPaused", step="waiting for the next copy",
+                step_name="CopyingPaused", progress={"done": 10240, "total": 10240}, next_precopy=nxt)
+    w.update(next_precopy=nxt, cutover=None)
+    return w
+
+
+def test_the_follow_window_shows_copying_paused_as_waiting_not_as_a_switchover(context, flask_server):
+    page, _, _ = open_waves(context, flask_server, [copying_paused()])
+    wave_box(page, "w-paused").locator('[data-fk="wave-follow"]').click()
+    row = page.locator('#fp-fk-wave-follow-harv-fake-w-paused [data-fk-vm="vm-16"]')
+    expect(row).to_contain_text("Waiting for the next copy")
+    expect(row).not_to_contain_text("final copy")
+    expect(row.locator('[data-fk="vm-next"] [data-fk-at]')).to_contain_text("in ")
+
+
 def test_the_follow_window_counts_down_to_a_scheduled_switchover(context, flask_server):
     page, _, _ = open_waves(context, flask_server, [scheduled(minutes=3)])
     wave_box(page, "w-sched").locator('[data-fk="wave-follow"]').click()

@@ -675,6 +675,16 @@ const Forklift = (() => {
     return `<progress class="tip" max="${esc(p.total || 1)}" value="${esc(p.done)}" data-tip="${esc(`${p.done} / ${p.total}`)}"></progress> <span data-fk="vm-pct">${pct} %</span>`;
   }
 
+  // Entre deux copies incrémentales (`CopyingPaused`), le pipeline garde
+  // souvent son étape courante affichée telle quelle (« final copy 0/... »),
+  // ce qui se lit comme une bascule commencée alors que Forklift attend
+  // simplement son prochain tour : on le dit avec le prochain moment de
+  // copie quand il est connu.
+  function stepText(v) {
+    if (v.step_name !== 'CopyingPaused') return esc(v.step || v.phase || '–');
+    return `${esc(tr('fk.w.copyingPaused'))}${v.next_precopy ? ` ${countdown(v.next_precopy)}` : ''}`;
+  }
+
   function followBody(w) {
     if (!w) return `<p class="form-hint" data-fk-gone>${esc(tr('fk.w.gone'))}</p>`;
     // un rollback ne se propose qu'une fois la bascule de CETTE VM amorcée
@@ -683,7 +693,7 @@ const Forklift = (() => {
       const last = v.last_precopy && v.last_precopy.seconds != null ? fmtDur(v.last_precopy.seconds) : '–';
       return `<tr data-fk-vm="${esc(v.id)}">
         <td class="tip" data-tip="${esc(v.id)}">${esc(v.name || v.id)}${v.rolled_back ? ` ${badge('warn', tr('fk.w.rolledBack'))}` : ''}</td>
-        <td class="tip" data-tip="${esc(v.step_name || '')}">${esc(v.step || v.phase || '–')}</td>
+        <td class="tip" data-tip="${esc(v.step_name || '')}">${stepText(v)}</td>
         <td>${progressCell(v)}</td>
         <td data-fk="vm-copies">${esc(v.precopies)}</td>
         <td data-fk="vm-last">${esc(last)}</td>

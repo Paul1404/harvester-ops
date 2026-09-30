@@ -188,6 +188,25 @@ def test_every_control_has_a_tooltip(context, flask_server):
     assert missing == []
 
 
+def test_a_paused_copy_is_shown_as_waiting_not_as_a_switchover(context, flask_server):
+    """Vu en réel : entre deux copies incrémentales, la vue globale ne doit
+    pas non plus afficher « final copy », qui se lit comme une bascule."""
+    vm_paused = {**VM_COPY, "phase": "CopyingPaused", "step": "waiting for the next copy",
+                 "step_name": "CopyingPaused", "next_precopy": "2099-01-01T00:15:00Z"}
+    wave_paused = {**WAVE_COPY, "vms": [vm_paused]}
+    data = {"clusters": [{"cluster": "harv-fake", "reachable": True, "forklift_ready": True,
+                          "cdi_importer_kind": "upstream",
+                          "providers": [{"name": "vmwlab", "namespace": "forklift", "url": VCENTER,
+                                        "ready": True, "message": ""}],
+                          "waves": [wave_paused]}]}
+    page = open_global(context, flask_server, data=data)
+    table = page.locator('#tab-forkliftglobal table.data-table')
+    expect(table).to_be_visible(timeout=10000)
+    row = table.locator('tr[data-fkg-wave="vague-1"]')
+    expect(row).to_contain_text("Waiting for the next copy")
+    expect(row).not_to_contain_text("final copy")
+
+
 def test_a_wave_shows_the_vcenter_of_its_own_source_when_a_cluster_has_several(context, flask_server):
     """Deux fournisseurs sur le même cluster : chaque vague montre le vCenter
     du fournisseur que porte son plan, pas la liste des deux."""

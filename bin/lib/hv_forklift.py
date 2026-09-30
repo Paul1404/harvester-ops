@@ -752,8 +752,24 @@ def _vm_row(vm_id, vm, rolled, cutover_set=False):
     cutover_started = cutover_set or cutover_step_started
     copying = not vm.get("completed") and not vm.get("error") and not cutover_step_started
     name = (step or {}).get("name") or ""
-    return {"id": vm_id, "name": vm.get("name") or "", "phase": _vm_phase(vm),
-            "step": STEP_LABELS.get(name, name), "step_name": name,
+    step_label = STEP_LABELS.get(name, name)
+    phase = _vm_phase(vm)
+    if phase == "CopyingPaused":
+        # Vu en réel (vague chaude) : entre deux copies incrémentales,
+        # Forklift laisse le pipeline sur son étape courante (souvent
+        # Cutover en Pending), ce qui affiche "final copy 0/10240" et se lit
+        # comme une bascule commencée. `status.migration.vms[].phase:
+        # CopyingPaused` dit le contraire : la copie attend simplement son
+        # prochain tour. On le montre comme tel, avec la progression de
+        # l'étape DiskTransfer (la dernière copie faite), pas celle de
+        # Cutover.
+        name = "CopyingPaused"
+        step_label = "waiting for the next copy"
+        disk = next((s for s in vm.get("pipeline") or [] if s.get("name") == "DiskTransfer"), None)
+        dprog = (disk or {}).get("progress") or {}
+        done, total = int(dprog.get("completed") or 0), int(dprog.get("total") or 0)
+    return {"id": vm_id, "name": vm.get("name") or "", "phase": phase,
+            "step": step_label, "step_name": name,
             "progress": {"done": done, "total": total}, "precopies": len(pre), "last_precopy": last,
             "next_precopy": (warm.get("nextPrecopyAt") or None) if copying else None,
             "error": _vm_error(vm), "rolled_back": vm_id in rolled,

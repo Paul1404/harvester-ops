@@ -207,6 +207,33 @@ def test_a_paused_copy_is_shown_as_waiting_not_as_a_switchover(context, flask_se
     expect(row).not_to_contain_text("final copy")
 
 
+def test_an_immediate_switchover_reads_immediate_once_past_not_now(context, flask_server):
+    """Une bascule immédiate pose aussi `spec.cutover`, à l'instant du clic :
+    vue un peu plus tard, cette date est déjà passée et restait montrée
+    « due now » indéfiniment. Passé l'instant, il ne s'agissait pas d'une
+    bascule programmée encore à échoir mais d'une bascule sans délai."""
+    vm_now = {**VM_SCHED, "id": "vm-30", "name": "vmwlab-src-4"}
+    wave_now = {**WAVE_SCHED, "name": "vague-4", "cutover": "2020-01-01T00:05:00Z", "vms": [vm_now]}
+    data = {"clusters": [{**GLOBAL_DATA["clusters"][0], "waves": [wave_now]}]}
+    page = open_global(context, flask_server, data=data)
+    table = page.locator('#tab-forkliftglobal table.data-table')
+    expect(table).to_be_visible(timeout=10000)
+    row = table.locator('tr[data-fkg-wave="vague-4"]')
+    expect(row).to_contain_text("immediate")
+    expect(row).not_to_contain_text("due now")
+
+
+def test_a_future_scheduled_switchover_still_counts_down(context, flask_server):
+    """Sans régression : une bascule encore à venir garde son compte à
+    rebours, seule une date déjà passée devient « immediate »."""
+    page = open_global(context, flask_server)
+    table = page.locator('#tab-forkliftglobal table.data-table')
+    expect(table).to_be_visible(timeout=10000)
+    row = table.locator('tr[data-fkg-wave="vague-2"]')
+    expect(row).to_contain_text("in ")
+    expect(row).not_to_contain_text("immediate")
+
+
 def test_a_wave_shows_the_vcenter_of_its_own_source_when_a_cluster_has_several(context, flask_server):
     """Deux fournisseurs sur le même cluster : chaque vague montre le vCenter
     du fournisseur que porte son plan, pas la liste des deux."""

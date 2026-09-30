@@ -75,9 +75,14 @@ const ForkliftGlobal = (() => {
     if (m) return `${m} min ${String(r).padStart(2, '0')} s`;
     return `${r} s`;
   };
+  // Une bascule immédiate pose aussi `spec.cutover` (à l'instant du clic) :
+  // vue un peu plus tard, cette date est déjà passée, et restait montrée
+  // « (due now) » indéfiniment. Passé l'instant, ce n'était pas « prévu à
+  // maintenant » mais une bascule sans délai : on le dit ainsi ; seule une
+  // bascule programmée encore à venir garde le compte à rebours.
   const whenWithCountdown = (iso) => {
     const ms = Date.parse(iso || '') - Date.now();
-    const left = ms > 0 ? tr('fk.w.in', { left: fmtDur(ms / 1000) }) : tr('fk.w.due');
+    const left = ms > 0 ? tr('fk.w.in', { left: fmtDur(ms / 1000) }) : tr('fkg.cutoverImmediate');
     return `${esc(fmtWhen(iso))} (${esc(left)})`;
   };
   const hostOf = (url) => {
@@ -176,12 +181,31 @@ const ForkliftGlobal = (() => {
       </div>`;
   }
 
+  // Mêmes clés que l'onglet Vagues (Forklift.js) : les noms d'étape du
+  // pipeline Forklift sont en anglais quelle que soit la langue de la
+  // console, traduits ici plutôt que montrés tels quels. Une étape inconnue
+  // retombe sur le texte brut envoyé par le serveur.
+  const STEP_NAME_I18N = {
+    Initialize: 'fk.stepName.initialize', DiskTransfer: 'fk.stepName.diskTransfer',
+    DiskAllocation: 'fk.stepName.diskAllocation', Cutover: 'fk.stepName.cutover',
+    ImageConversion: 'fk.stepName.imageConversion', VirtualMachineCreation: 'fk.stepName.virtualMachineCreation',
+  };
+
   // Même lecture que l'onglet Vagues : entre deux copies incrémentales
   // (`CopyingPaused`), l'étape brute affichée par Forklift se lit comme une
   // bascule commencée ; on le dit, avec le prochain moment de copie connu.
   function stepText(vm) {
-    if (vm.step_name !== 'CopyingPaused') return esc(vm.step || '–');
-    return `${esc(tr('fk.w.copyingPaused'))}${vm.next_precopy ? ` (${whenWithCountdown(vm.next_precopy)})` : ''}`;
+    if (vm.step_name === 'CopyingPaused') return `${esc(tr('fk.w.copyingPaused'))}${vm.next_precopy ? ` (${whenWithCountdown(vm.next_precopy)})` : ''}`;
+    const key = STEP_NAME_I18N[vm.step_name];
+    return key ? esc(tr(key)) : esc(vm.step || '–');
+  }
+
+  /** Une vague close ou revenue à la source : la VM qu'on y a fait revenir
+   *  ne montre plus sa dernière étape Forklift, mais qu'elle est repartie
+   *  sur son hôte d'origine. */
+  function vmStepText(wave, vm) {
+    if ((wave.state === 'closed' || wave.state === 'rolled-back') && vm.rolled_back) return esc(tr('fk.stepName.rolledBack'));
+    return stepText(vm);
   }
 
   function vmRow(row) {
@@ -191,8 +215,8 @@ const ForkliftGlobal = (() => {
     const cutover = wave.cutover ? whenWithCountdown(wave.cutover)
       : vm.rolled_back ? esc(tr('fk.w.st.rolledBack')) : '–';
     const step = vm.error
-      ? `<span class="tip" data-tip="${esc(vm.error)}">${icon('warn', 12)} ${stepText(vm)}</span>`
-      : stepText(vm);
+      ? `<span class="tip" data-tip="${esc(vm.error)}">${icon('warn', 12)} ${vmStepText(wave, vm)}</span>`
+      : vmStepText(wave, vm);
     return `<tr class="tip" data-fkg-cluster="${esc(cluster)}" data-fkg-wave="${esc(wave.name)}"
           data-tip="${esc(tr('fkg.rowTip', { cluster }))}">
         <td>${esc(vm.name || vm.id)}</td>

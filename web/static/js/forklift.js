@@ -179,6 +179,22 @@ const Forklift = (() => {
   const CDI_BADGE = { 'suse-no-vddk': ['fail', () => tr('fk.cdi.suse')], upstream: ['ok', () => tr('fk.cdi.upstream')],
                       other: ['warn', () => tr('fk.cdi.other')] };
 
+  // L'image amont que l'outil poserait vraiment : `quay.io/.../cdi-importer:v<version>`.
+  // La page ne porte pas la version de CDI (elle vient d'une sous-commande à
+  // part, `cdi-importer` côté CLI) : on la devine dans le tag de l'image en
+  // place quand l'importeur courant est déjà l'un des deux connus (upstream,
+  // ou SUSE sans VDDK, ex. `v1.65.0`) ; sinon un exemple neutre, sans version.
+  const UPSTREAM_CDI_IMAGE = 'quay.io/kubevirt/cdi-importer';
+  function upstreamCdiExample(d) {
+    if (d.cdi_version) return `${UPSTREAM_CDI_IMAGE}:v${String(d.cdi_version).replace(/^v/, '')}`;
+    const c = d.cdi_importer || {};
+    if (c.kind === 'upstream' || c.kind === 'suse-no-vddk') {
+      const m = /:v?(\d+\.\d+\.\d+)$/.exec(c.image || '');
+      if (m) return `${UPSTREAM_CDI_IMAGE}:v${m[1]}`;
+    }
+    return UPSTREAM_CDI_IMAGE;
+  }
+
   function cdiStep(d) {
     const c = d.cdi_importer || { image: '', kind: 'other', original: '' };
     const [cls, label] = CDI_BADGE[c.kind] || CDI_BADGE.other;
@@ -188,7 +204,7 @@ const Forklift = (() => {
        ${c.kind === 'suse-no-vddk' ? `<div class="sto-finding sev-critical"><div class="sto-finding-title">${icon('warn')} ${esc(tr('fk.cdi.warnSuse'))}</div></div>` : ''}
        <p class="form-hint">${esc(tr('fk.cdi.upgradeWarn'))}</p>
        <div class="fk-form">
-         ${field('cdi_image', tr('fk.f.cdiImage'), '<input name="cdi_image" placeholder="quay.io/kubevirt/cdi-importer:v1.60.0">', tr('fk.t.cdiImage'))}
+         ${field('cdi_image', tr('fk.f.cdiImage'), `<input name="cdi_image" placeholder="${esc(upstreamCdiExample(d))}">`, tr('fk.t.cdiImage'))}
          <div class="fk-source-actions">
            <button type="button" class="btn btn-sm btn-primary tip needs-admin" data-fk="cdi-upstream" ${c.kind === 'upstream' ? 'disabled' : ''}
              data-tip="${esc(tr('fk.t.cdiUpstream'))}">${icon('download')} ${esc(tr('fk.cdi.useUpstream'))}</button>
@@ -483,7 +499,7 @@ const Forklift = (() => {
             data-tip="${esc(blockers.length ? tr('fk.t.eligibleNo', { reasons: blockers.join('; ') }) : tr('fk.t.select'))}"></td>
           <td class="tip" data-tip="${esc(r.path || '')}">${esc(r.name)}</td>
           <td>${esc(r.power === 'poweredOn' ? tr('fk.inv.on') : r.power === 'poweredOff' ? tr('fk.inv.off') : r.power || '')}</td>
-          <td>${esc(r.guest || '')}</td><td>${esc(`${r.cpus || '?'} / ${size((r.memory_mib || 0) * 1048576)}`)}</td>
+          <td class="fk-guest">${esc(r.guest || '')}</td><td>${esc(`${r.cpus || '?'} / ${size((r.memory_mib || 0) * 1048576)}`)}</td>
           <td>${esc(`${(r.disks || []).length} · ${size(total)}`)}</td>
           <td>${r.cbt ? `<span class="tip" data-fk-warm="yes" data-tip="${esc(tr('fk.t.cbtOn'))}">${icon('ok')} ${esc(tr('fk.inv.cbtOn'))}</span>`
                       : `<span class="tip" data-fk-warm="no" data-tip="${esc(tr('fk.t.cbtOff'))}">${icon('fail')} ${esc(tr('fk.inv.cbtOff'))}</span>`}</td>
@@ -675,14 +691,33 @@ const Forklift = (() => {
     return `<progress class="tip" max="${esc(p.total || 1)}" value="${esc(p.done)}" data-tip="${esc(`${p.done} / ${p.total}`)}"></progress> <span data-fk="vm-pct">${pct} %</span>`;
   }
 
+  // Les noms d'étape (`step_name`) sont ceux du pipeline Forklift, en
+  // anglais quel que soit la langue de la console : traduits ici plutôt que
+  // montrés tels quels (bibliothèque tierce). Une étape inconnue retombe sur
+  // le texte brut envoyé par le serveur.
+  const STEP_NAME_I18N = {
+    Initialize: 'fk.stepName.initialize', DiskTransfer: 'fk.stepName.diskTransfer',
+    DiskAllocation: 'fk.stepName.diskAllocation', Cutover: 'fk.stepName.cutover',
+    ImageConversion: 'fk.stepName.imageConversion', VirtualMachineCreation: 'fk.stepName.virtualMachineCreation',
+  };
+
   // Entre deux copies incrémentales (`CopyingPaused`), le pipeline garde
   // souvent son étape courante affichée telle quelle (« final copy 0/... »),
   // ce qui se lit comme une bascule commencée alors que Forklift attend
   // simplement son prochain tour : on le dit avec le prochain moment de
   // copie quand il est connu.
   function stepText(v) {
-    if (v.step_name !== 'CopyingPaused') return esc(v.step || v.phase || '–');
-    return `${esc(tr('fk.w.copyingPaused'))}${v.next_precopy ? ` ${countdown(v.next_precopy)}` : ''}`;
+    if (v.step_name === 'CopyingPaused') return `${esc(tr('fk.w.copyingPaused'))}${v.next_precopy ? ` ${countdown(v.next_precopy)}` : ''}`;
+    const key = STEP_NAME_I18N[v.step_name];
+    return key ? esc(tr(key)) : esc(v.step || v.phase || '–');
+  }
+
+  /** Une vague close ou revenue à la source : la VM qu'on y a fait revenir
+   *  ne montre plus la dernière étape Forklift (une copie ou une bascule qui
+   *  n'a plus cours), mais qu'elle est repartie sur son hôte d'origine. */
+  function vmStepText(w, v) {
+    if ((w.state === 'closed' || w.state === 'rolled-back') && v.rolled_back) return esc(tr('fk.stepName.rolledBack'));
+    return stepText(v);
   }
 
   function followBody(w) {
@@ -693,7 +728,7 @@ const Forklift = (() => {
       const last = v.last_precopy && v.last_precopy.seconds != null ? fmtDur(v.last_precopy.seconds) : '–';
       return `<tr data-fk-vm="${esc(v.id)}">
         <td class="tip" data-tip="${esc(v.id)}">${esc(v.name || v.id)}${v.rolled_back ? ` ${badge('warn', tr('fk.w.rolledBack'))}` : ''}</td>
-        <td class="tip" data-tip="${esc(v.step_name || '')}">${stepText(v)}</td>
+        <td class="tip" data-tip="${esc(v.step_name || '')}">${vmStepText(w, v)}</td>
         <td>${progressCell(v)}</td>
         <td data-fk="vm-copies">${esc(v.precopies)}</td>
         <td data-fk="vm-last">${esc(last)}</td>

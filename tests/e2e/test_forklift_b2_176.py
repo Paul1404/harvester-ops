@@ -52,9 +52,9 @@ def fulfill(route, body, status=200):
     route.fulfill(status=status, content_type="application/json", body=json.dumps(body))
 
 
-def open_tab(context, flask_server, data, section="prep"):
+def open_tab(context, flask_server, data, section="prep", lang="en"):
     context.add_init_script(
-        "localStorage.setItem('harvester_ops_language','en');"
+        f"localStorage.setItem('harvester_ops_language','{lang}');"
         "localStorage.setItem('harvester_ops_current_cluster','harv-fake');"
         f"localStorage.setItem('harvester_ops_section_forklift','{section}');"
         "localStorage.setItem('harvester_ops_current_tab','forklift');")
@@ -343,8 +343,8 @@ WINDOWS_VM = {**VMS_ROWS[3], "id": "vm-20", "name": "win-ok", "tools": True, "ne
               "disks": [{"datastore": "datastore-12", "capacity": 10 ** 10}]}
 
 
-def open_waves(context, flask_server, waves, section="waves"):
-    page, sent = open_tab(context, flask_server, {**DATA_T, "waves": waves}, section=section)
+def open_waves(context, flask_server, waves, section="waves", lang="en"):
+    page, sent = open_tab(context, flask_server, {**DATA_T, "waves": waves}, section=section, lang=lang)
     page.route("**/api/forklift/harv-fake/inventory/vmwlab/networks*", lambda r, q: fulfill(r, {"rows": NETS}))
     page.route("**/api/forklift/harv-fake/inventory/vmwlab/datastores*", lambda r, q: fulfill(r, {"rows": STORES}))
     dialogs = []
@@ -638,3 +638,81 @@ def test_the_compose_window_still_asks_for_the_targets(context, flask_server):
     page.evaluate("vms => Forklift.composeWave(vms)", [{**VMS_ROWS[0], "namespace": "forklift", "source": "vmwlab"}])
     page.wait_for_timeout(300)
     assert any(u.endswith("/api/forklift/harv-fake?targets=1") for u in urls)
+
+
+# --- Display fixes (v1.76.0) : étapes traduites, miroir CDI, inventaire ------
+
+def test_step_names_are_translated_in_the_follow_window(context, flask_server):
+    """La bibliothèque Forklift ne connaît que l'anglais (`step_name`) : la
+    console traduit elle-même, plutôt que de montrer son texte brut dans une
+    console en français."""
+    page, _, _ = open_waves(context, flask_server, [copying(), SUCCEEDED], lang="fr")
+    wave_box(page, "w-copy").locator('[data-fk="wave-follow"]').click()
+    copying_row = page.locator('#fp-fk-wave-follow-harv-fake-w-copy [data-fk-vm="vm-16"]')
+    expect(copying_row).to_contain_text("copie des disques")
+    expect(copying_row).not_to_contain_text("copying disks")
+    page.locator('#fp-fk-wave-follow-harv-fake-w-copy [data-action="close"]').click()
+    wave_box(page, "vague-1").locator('[data-fk="wave-follow"]').click()
+    done_row = page.locator('#fp-fk-wave-follow-harv-fake-vague-1 [data-fk-vm="vm-16"]')
+    expect(done_row).to_contain_text("création de la VM")
+    expect(done_row).not_to_contain_text("creating VM")
+
+
+def test_an_unknown_step_name_falls_back_to_the_raw_text(context, flask_server):
+    w = variant("w-unknown", "copying", phase="Running", step="doing something new", step_name="SomethingNew",
+                progress={"done": 0, "total": 0})
+    w.update(cutover=None, next_precopy=None)
+    page, _, _ = open_waves(context, flask_server, [w], lang="fr")
+    wave_box(page, "w-unknown").locator('[data-fk="wave-follow"]').click()
+    row = page.locator('#fp-fk-wave-follow-harv-fake-w-unknown [data-fk-vm="vm-16"]')
+    expect(row).to_contain_text("doing something new")
+
+
+def test_a_vm_rolled_back_reads_back_on_the_source_not_its_last_step(context, flask_server):
+    """Une vague revenue à la source : la VM qu'on y a fait revenir ne
+    montre plus sa dernière étape Forklift (une bascule qui n'a plus cours)
+    mais qu'elle est repartie sur son hôte d'origine."""
+    w = variant("w-back", "rolled-back", rolled_back=True)
+    page, _, _ = open_waves(context, flask_server, [w])
+    wave_box(page, "w-back").locator('[data-fk="wave-follow"]').click()
+    row = page.locator('#fp-fk-wave-follow-harv-fake-w-back [data-fk-vm="vm-16"]')
+    expect(row).to_contain_text("back on the source")
+    expect(row).not_to_contain_text("creating VM")
+
+
+def test_the_cdi_mirror_placeholder_uses_the_current_importer_version(context, flask_server):
+    """Le miroir proposé était toujours `v1.60.0`, quelle que soit la version
+    de CDI en place : deviné dans le tag de l'importeur SUSE courant."""
+    page, _ = open_tab(context, flask_server, DATA)   # cdi_importer image ...:v1.65.0, kind suse-no-vddk
+    cdi = page.locator('#tab-forklift [data-fk-step="cdi"]')
+    expect(cdi.locator('[name="cdi_image"]')).to_have_attribute("placeholder", "quay.io/kubevirt/cdi-importer:v1.65.0")
+
+
+def test_the_cdi_mirror_placeholder_follows_the_upstream_tag_already_in_place(context, flask_server):
+    upstream = {**DATA, "cdi_importer": {"image": "quay.io/kubevirt/cdi-importer:v1.60.0", "kind": "upstream",
+                                          "original": "registry.suse.com/harvester/cdi-importer:v1.65.0"}}
+    page, _ = open_tab(context, flask_server, upstream)
+    cdi = page.locator('#tab-forklift [data-fk-step="cdi"]')
+    expect(cdi.locator('[name="cdi_image"]')).to_have_attribute("placeholder", "quay.io/kubevirt/cdi-importer:v1.60.0")
+
+
+def test_the_cdi_mirror_placeholder_is_neutral_for_an_unknown_importer(context, flask_server):
+    other = {**DATA, "cdi_importer": {"image": "myregistry.lan/cdi-importer:latest", "kind": "other", "original": ""}}
+    page, _ = open_tab(context, flask_server, other)
+    cdi = page.locator('#tab-forklift [data-fk-step="cdi"]')
+    expect(cdi.locator('[name="cdi_image"]')).to_have_attribute("placeholder", "quay.io/kubevirt/cdi-importer")
+
+
+def test_the_inventory_table_fits_inside_the_card_at_1440(context, flask_server):
+    """La colonne « raison du refus à chaud » débordait à droite, coupée par
+    `.card { overflow: hidden }` : le texte long doit se replier plutôt que
+    forcer la table plus large que sa carte."""
+    page, _ = open_tab(context, flask_server, DATA, section="inventory")
+    page.set_viewport_size({"width": 1440, "height": 900})
+    page.evaluate("Forklift.openInventory('vmwlab')")
+    table = page.locator('#tab-forklift [data-fk="inv-table"]')
+    expect(table).to_be_visible()
+    card = page.locator('#tab-forklift .fk-card')
+    t_box = table.bounding_box()
+    c_box = card.bounding_box()
+    assert t_box["x"] + t_box["width"] <= c_box["x"] + c_box["width"] + 1
